@@ -1,0 +1,40 @@
+# Build outputs
+build/
+out/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+CMakeUserPresets.json
+
+# vcpkg generated state
+vcpkg_installed/
+packages/
+downloads/
+
+# Visual Studio / MSBuild
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+*.opensdf
+*.sdf
+*.ipch
+*.tlog
+*.lastbuildstate
+
+# Editor and OS local files
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Runtime logs and crash dumps
+*.log
+*.dmp
+*.pdb
