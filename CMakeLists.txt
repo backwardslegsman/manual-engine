@@ -8,13 +8,23 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(SDL3 CONFIG REQUIRED)
 find_package(bgfx CONFIG REQUIRED)
+find_package(glm CONFIG REQUIRED)
 
 add_executable(manual_engine
-    src/main.cpp
+    src/App/main.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Renderer/core.cpp
+    src/Renderer/VertexLayouts.cpp
+)
+
+target_include_directories(manual_engine
+    PRIVATE
+        src
 )
 
 target_link_libraries(manual_engine
     PRIVATE
         SDL3::SDL3
         bgfx::bgfx
+        glm::glm
 )
