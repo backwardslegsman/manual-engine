@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(SDL3 CONFIG REQUIRED)
+find_package(assimp CONFIG REQUIRED)
 find_package(bgfx CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 
@@ -25,6 +26,7 @@ target_include_directories(manual_engine
 target_link_libraries(manual_engine
     PRIVATE
         SDL3::SDL3
+        assimp::assimp
         bgfx::bgfx
         glm::glm
 )

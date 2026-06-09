@@ -1,3 +1,5 @@
+#include <chrono>
+
 #include <SDL3/SDL.h>
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
@@ -48,9 +50,14 @@ static const uint16_t cubeTriList[] =
 };
 
 /*Test data end*/
+using gameClock = std::chrono::steady_clock;
 
 int main(int, char**)
 {
+    /* Initalize Clock */
+    auto startTime = gameClock::now();
+
+    /* Initialize the application */
     SDL_Window* window = nullptr;
     if (Renderer::initWindow(window) != 0) {
         return 1;
@@ -61,6 +68,7 @@ int main(int, char**)
     }
 
     Renderer::configureVertexLayouts();
+    
 
     // Set view clear state and viewport for the 0th view
     bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x443355FF, 1.0f, 0);
@@ -76,15 +84,24 @@ int main(int, char**)
         return 1;
     }
 
+    // Create shader program
     bgfx::ProgramHandle program = bgfx::createProgram(vsh, fsh, true);
 
     // Create handles
     bgfx::VertexBufferHandle vbh = bgfx::createVertexBuffer(bgfx::makeRef(cubeVertices, sizeof(cubeVertices)), Renderer::PosColorVertex::layout);
     bgfx::IndexBufferHandle ibh = bgfx::createIndexBuffer(bgfx::makeRef(cubeTriList, sizeof(cubeTriList)));
+    /* End initialization */
 
     // Main loop
     bool running = true;
+    auto previousTime = gameClock::now();
     while (running) {
+        /* Clock update and delta time calculation */
+        auto currentTime = gameClock::now();
+        std::chrono::duration<float> delta = currentTime - previousTime;
+        previousTime = currentTime;
+
+        /* Event polling loop */
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) {
@@ -92,6 +109,7 @@ int main(int, char**)
             }
         }
         
+        /* Start viewport setup */
         // Clear viewport to a solid color and submit an empty primitive for rendering
         bgfx::setViewClear(
             0,
@@ -104,7 +122,7 @@ int main(int, char**)
         // Set view rectangle for 0th viewport
         bgfx::setViewRect(0, 0, 0, 1280, 720);
         
-        // Define vectors for render
+        // Define vectors for look at
         const glm::vec3 at = {0.0f, 0.0f,  0.0f};
         const glm::vec3 eye = {0.0f, 0.0f, -5.0f};
 
@@ -112,6 +130,7 @@ int main(int, char**)
         glm::mat4 view = glm::lookAt(eye, at, {0.0f, 1.0f, 0.0f});
         glm::mat4 proj = glm::perspective(glm::radians(60.0f), 1280.0f / 720.0f, 0.1f, 100.0f);
         bgfx::setViewTransform(0, &view, &proj);
+        /* End viewport setup */
         
         // Set model matrix for rendering
         float time = static_cast<float>(SDL_GetTicks()) / 1000.0f;

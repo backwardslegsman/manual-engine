@@ -2,6 +2,7 @@
   "name": "manual-engine",
   "version-string": "0.1.0",
   "dependencies": [
+    "assimp",
     {
       "name": "bgfx",
       "features": [
