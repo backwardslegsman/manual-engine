@@ -17,6 +17,7 @@ namespace Engine {
 
     struct SpatialQueryResult {
         WorldObjectHandle object;
+        ObjectId objectId;
         glm::vec3 position{};
         ChunkCoord cell;
     };

@@ -43,21 +43,23 @@ namespace Engine {
         }
     }
 
-    WorldObjectHandle World::createObject()
+    WorldObjectHandle World::createObject(ObjectId objectId)
     {
         for (uint32_t index = 0; index < objects_.size(); ++index) {
             if (!objects_[index].alive) {
                 objects_[index] = {};
                 objects_[index].alive = true;
+                objects_[index].id = std::move(objectId);
                 return {index};
             }
         }
 
-        const uint32_t id = static_cast<uint32_t>(objects_.size());
+        const uint32_t handleId = static_cast<uint32_t>(objects_.size());
         WorldObject object;
         object.alive = true;
+        object.id = std::move(objectId);
         objects_.push_back(object);
-        return {id};
+        return {handleId};
     }
 
     void World::destroyObject(WorldObjectHandle object)
@@ -81,6 +83,15 @@ namespace Engine {
             Renderer::destroyInstance(objects_[object.id].rendererInstance);
         }
         destroyObject(object);
+    }
+
+    void World::setObjectId(WorldObjectHandle object, ObjectId id)
+    {
+        if (!isAlive(object)) {
+            return;
+        }
+
+        objects_[object.id].id = std::move(id);
     }
 
     void World::setPosition(WorldObjectHandle object, const glm::vec3& position)
@@ -148,6 +159,15 @@ namespace Engine {
         objects_[object.id].hasLocalBounds = false;
     }
 
+    void World::setCollisionEnabled(WorldObjectHandle object, bool enabled)
+    {
+        if (!isAlive(object)) {
+            return;
+        }
+
+        objects_[object.id].collisionEnabled = enabled;
+    }
+
     void World::attachRendererInstance(WorldObjectHandle object, Renderer::MeshInstanceHandle instance)
     {
         if (!isAlive(object)) {
@@ -161,6 +181,30 @@ namespace Engine {
     bool World::isValid(WorldObjectHandle object) const
     {
         return isAlive(object);
+    }
+
+    std::optional<ObjectId> World::objectId(WorldObjectHandle object) const
+    {
+        if (!isAlive(object) || !objects_[object.id].id.isValid()) {
+            return std::nullopt;
+        }
+
+        return objects_[object.id].id;
+    }
+
+    std::optional<WorldObjectHandle> World::findObject(ObjectId id) const
+    {
+        if (!id.isValid()) {
+            return std::nullopt;
+        }
+
+        std::optional<WorldObjectHandle> found;
+        for (uint32_t index = 0; index < objects_.size(); ++index) {
+            if (objects_[index].alive && objects_[index].id == id) {
+                found = WorldObjectHandle{index};
+            }
+        }
+        return found;
     }
 
     std::optional<Transform> World::transform(WorldObjectHandle object) const
@@ -188,6 +232,11 @@ namespace Engine {
         }
 
         return transformAabb(objects_[object.id].localBounds, objects_[object.id].transform);
+    }
+
+    bool World::collisionEnabled(WorldObjectHandle object) const
+    {
+        return isAlive(object) && objects_[object.id].collisionEnabled;
     }
 
     Renderer::MeshInstanceHandle World::rendererInstance(WorldObjectHandle object) const

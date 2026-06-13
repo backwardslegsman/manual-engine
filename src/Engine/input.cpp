@@ -18,6 +18,21 @@ namespace {
             case SDLK_D:
                 key = Engine::Key::D;
                 return true;
+            case SDLK_E:
+                key = Engine::Key::E;
+                return true;
+            case SDLK_F:
+                key = Engine::Key::F;
+                return true;
+            case SDLK_P:
+                key = Engine::Key::P;
+                return true;
+            case SDLK_DELETE:
+                key = Engine::Key::Delete;
+                return true;
+            case SDLK_HOME:
+                key = Engine::Key::Home;
+                return true;
             case SDLK_UP:
                 key = Engine::Key::Up;
                 return true;

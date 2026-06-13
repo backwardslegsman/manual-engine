@@ -57,6 +57,7 @@ namespace Engine {
         terrain.size = settings_.chunkSize;
         terrain.resolution = settings_.resolution;
         terrain.material = material;
+        terrain.biome = sampleChunkBiome(coord);
         terrain.heights.resize(static_cast<size_t>(settings_.resolution) * settings_.resolution);
 
         const float spacing = settings_.chunkSize / static_cast<float>(settings_.resolution - 1);
@@ -227,9 +228,33 @@ namespace Engine {
 
     float TerrainSystem::generatedHeight(float worldX, float worldZ) const
     {
-        const float rolling = std::sin(worldX * 0.18f) * 0.65f + std::cos(worldZ * 0.15f) * 0.55f;
-        const float detail = std::sin((worldX + worldZ) * 0.07f) * 0.35f;
-        return (rolling + detail) * settings_.heightScale;
+        const BiomeSample sample = sampleBiome(worldX, worldZ);
+        const BiomeDescriptor* biome = settings_.biomes ? settings_.biomes->descriptor(sample.id) : nullptr;
+        const float heightScale = biome ? biome->heightScale : 1.0f;
+        const float rollingScale = biome ? biome->rollingScale : 1.0f;
+        const float detailScale = biome ? biome->detailScale : 1.0f;
+        const float rolling = (std::sin(worldX * 0.18f) * 0.65f + std::cos(worldZ * 0.15f) * 0.55f) * rollingScale;
+        const float detail = std::sin((worldX + worldZ) * 0.07f) * 0.35f * detailScale;
+        return (rolling + detail) * settings_.heightScale * heightScale;
+    }
+
+    BiomeSample TerrainSystem::sampleBiome(float worldX, float worldZ) const
+    {
+        return settings_.biomes ? settings_.biomes->sample(worldX, worldZ) : BiomeSystem::sampleDefaults().sample(worldX, worldZ);
+    }
+
+    BiomeSample TerrainSystem::sampleChunkBiome(ChunkCoord coord) const
+    {
+        return settings_.biomes ? settings_.biomes->sampleChunk(coord, settings_.chunkSize) : BiomeSystem::sampleDefaults().sampleChunk(coord, settings_.chunkSize);
+    }
+
+    std::optional<BiomeSample> TerrainSystem::tileBiome(TerrainTileHandle handle) const
+    {
+        const TerrainTile* terrain = tile(handle);
+        if (!terrain) {
+            return std::nullopt;
+        }
+        return terrain->biome;
     }
 
     ChunkCoord TerrainSystem::coordForWorldPosition(float worldX, float worldZ) const

@@ -6,6 +6,7 @@
 
 #include <glm/glm.hpp>
 
+#include "Engine/ObjectId.hpp"
 #include "Renderer/Scene.hpp"
 
 namespace Engine {
@@ -31,10 +32,11 @@ namespace Engine {
     // explicit synchronization to renderer instances.
     class World {
     public:
-        WorldObjectHandle createObject();
+        WorldObjectHandle createObject(ObjectId id = {});
         void destroyObject(WorldObjectHandle object);
         void destroyObjectAndRendererInstance(WorldObjectHandle object);
 
+        void setObjectId(WorldObjectHandle object, ObjectId id);
         void setPosition(WorldObjectHandle object, const glm::vec3& position);
         void setRotation(WorldObjectHandle object, const glm::vec3& eulerRadians);
         void setScale(WorldObjectHandle object, const glm::vec3& scale);
@@ -42,11 +44,15 @@ namespace Engine {
         void setAngularVelocity(WorldObjectHandle object, const glm::vec3& radiansPerSecond);
         void setLocalBounds(WorldObjectHandle object, const Renderer::Aabb& bounds);
         void clearLocalBounds(WorldObjectHandle object);
+        void setCollisionEnabled(WorldObjectHandle object, bool enabled);
         void attachRendererInstance(WorldObjectHandle object, Renderer::MeshInstanceHandle instance);
         bool isValid(WorldObjectHandle object) const;
+        std::optional<ObjectId> objectId(WorldObjectHandle object) const;
+        std::optional<WorldObjectHandle> findObject(ObjectId id) const;
         std::optional<Transform> transform(WorldObjectHandle object) const;
         std::optional<glm::vec3> position(WorldObjectHandle object) const;
         std::optional<Renderer::Aabb> worldBounds(WorldObjectHandle object) const;
+        bool collisionEnabled(WorldObjectHandle object) const;
         Renderer::MeshInstanceHandle rendererInstance(WorldObjectHandle object) const;
 
         void fixedUpdate(float dt);
@@ -55,12 +61,14 @@ namespace Engine {
     private:
         struct WorldObject {
             bool alive = false;
+            ObjectId id;
             Transform transform;
             glm::vec3 angularVelocity{};
             Renderer::MeshInstanceHandle rendererInstance;
             bool hasRendererInstance = false;
             Renderer::Aabb localBounds;
             bool hasLocalBounds = false;
+            bool collisionEnabled = false;
         };
 
         bool isAlive(WorldObjectHandle object) const;

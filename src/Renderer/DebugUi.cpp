@@ -153,13 +153,27 @@ namespace Renderer::DebugUi {
         ImGui::NewFrame();
     }
 
+    bool wantsMouseCapture()
+    {
+        return g_initialized && ImGui::GetIO().WantCaptureMouse;
+    }
+
+    bool wantsKeyboardCapture()
+    {
+        return g_initialized && ImGui::GetIO().WantCaptureKeyboard;
+    }
+
     void showRendererDebug(
         const SceneDrawStats& stats,
         RendererDebugSettings& settings,
         AtmosphereSettings& atmosphere,
         const TerrainLodDebugStats& terrainLods,
         const SpatialRegistryDebugStats& spatial,
+        const CameraDebugStats& camera,
+        CameraDebugControls* cameraControls,
+        const BiomeDebugStats& biome,
         const DebugPickingStats& picking,
+        const InteractionDebugStats& interaction,
         WorldSaveDebugControls* worldSave,
         const PlayerActorDebugStats& player)
     {
@@ -229,6 +243,57 @@ namespace Renderer::DebugUi {
             if (ImGui::Button("Load World")) {
                 worldSave->loadRequested = true;
             }
+            if (ImGui::Button("Remove Selected")) {
+                worldSave->removeSelectedRequested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Persist Selected Transform")) {
+                worldSave->persistSelectedRequested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset Selected Override")) {
+                worldSave->resetSelectedOverrideRequested = true;
+            }
+            ImGui::SliderFloat("Move step", &worldSave->editMoveStep, 0.05f, 16.0f);
+            ImGui::SliderFloat("Yaw step degrees", &worldSave->editRotateStepDegrees, 1.0f, 90.0f);
+            if (ImGui::Button("-X")) {
+                worldSave->nudgeSelectedNegativeXRequested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("+X")) {
+                worldSave->nudgeSelectedPositiveXRequested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("-Y")) {
+                worldSave->nudgeSelectedNegativeYRequested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("+Y")) {
+                worldSave->nudgeSelectedPositiveYRequested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("-Z")) {
+                worldSave->nudgeSelectedNegativeZRequested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("+Z")) {
+                worldSave->nudgeSelectedPositiveZRequested = true;
+            }
+            if (ImGui::Button("Yaw -")) {
+                worldSave->rotateSelectedNegativeYawRequested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Yaw +")) {
+                worldSave->rotateSelectedPositiveYawRequested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Move Selected To Terrain Hit")) {
+                worldSave->moveSelectedToTerrainRequested = true;
+            }
+            ImGui::InputText("Place archetype", worldSave->placeArchetypeId.data(), worldSave->placeArchetypeId.size());
+            if (ImGui::Button("Place Archetype")) {
+                worldSave->placeArchetypeRequested = true;
+            }
             if (!worldSave->status.empty()) {
                 ImGui::TextWrapped("%s", worldSave->status.c_str());
             }
@@ -237,9 +302,19 @@ namespace Renderer::DebugUi {
         ImGui::Text("Player Actor");
         if (player.valid) {
             ImGui::Text("World object: %u", player.worldObjectId);
+            ImGui::Text("Stable id: %s", player.stableId.empty() ? "<none>" : player.stableId.c_str());
             ImGui::Text("Position: %.2f, %.2f, %.2f", player.position.x, player.position.y, player.position.z);
             ImGui::Text("Velocity: %.2f, %.2f, %.2f", player.velocity.x, player.velocity.y, player.velocity.z);
             ImGui::Text("Facing radians: %.2f", player.facingRadians);
+            ImGui::Text("Collision: %s", player.collisionEnabled ? "enabled" : "disabled");
+            ImGui::Text("Collision radius/height: %.2f / %.2f", player.collisionRadius, player.collisionHeight);
+            ImGui::Text("Blocked X/Z: %s / %s", player.blockedX ? "yes" : "no", player.blockedZ ? "yes" : "no");
+            ImGui::Text("Collision hits: %u", player.collisionHitCount);
+            if (player.firstBlockingObjectId != UINT32_MAX) {
+                ImGui::Text("First blocker: %u", player.firstBlockingObjectId);
+                ImGui::Text("First blocker stable id: %s",
+                    player.firstBlockingStableId.empty() ? "<none>" : player.firstBlockingStableId.c_str());
+            }
             if (player.hasGroundHeight) {
                 ImGui::Text("Ground height: %.2f", player.groundHeight);
             } else {
@@ -261,12 +336,81 @@ namespace Renderer::DebugUi {
         ImGui::Text("Objects in camera cell: %u", spatial.objectsInCurrentCell);
         ImGui::Text("Objects within %.1f: %u", spatial.nearQueryRadius, spatial.objectsNearCamera);
         ImGui::Separator();
+        ImGui::Text("Camera");
+        if (cameraControls) {
+            int cameraMode = camera.followMode ? 1 : 0;
+            if (ImGui::Combo("Mode", &cameraMode, "Free\0Follow Player\0")) {
+                cameraControls->setFreeModeRequested = cameraMode == 0;
+                cameraControls->setFollowModeRequested = cameraMode == 1;
+            }
+            if (ImGui::Button("Recenter Camera")) {
+                cameraControls->recenterRequested = true;
+            }
+            ImGui::SliderFloat("Follow smoothing", &cameraControls->followSmoothing, 0.0f, 30.0f);
+            ImGui::SliderFloat("Max follow lag", &cameraControls->maxFollowLag, 0.0f, 30.0f);
+        } else {
+            ImGui::Text("Mode: %s", camera.followMode ? "Follow Player" : "Free");
+        }
+        ImGui::Text("Pivot: %.2f, %.2f, %.2f", camera.pivot.x, camera.pivot.y, camera.pivot.z);
+        ImGui::Text("Follow target: %s", camera.hasTarget ? "available" : "missing");
+        if (camera.hasTarget) {
+            ImGui::Text("Target: %.2f, %.2f, %.2f",
+                camera.targetPosition.x,
+                camera.targetPosition.y,
+                camera.targetPosition.z);
+        }
+        ImGui::Text("Follow offset: %.2f, %.2f, %.2f",
+            camera.followOffset.x,
+            camera.followOffset.y,
+            camera.followOffset.z);
+        ImGui::Text("Smoothing / max lag: %.2f / %.2f", camera.followSmoothing, camera.maxFollowLag);
+        ImGui::Separator();
+        ImGui::Text("Biome");
+        if (biome.valid) {
+            ImGui::Text("Camera chunk: %d, %d", biome.cameraChunkX, biome.cameraChunkZ);
+            ImGui::Text("Camera biome: %s",
+                biome.cameraBiomeDisplayName.empty() ? biome.cameraBiomeId.c_str() : biome.cameraBiomeDisplayName.c_str());
+            ImGui::Text("Terrain material: %s%s",
+                biome.cameraTerrainMaterialBiomeId.empty() ? "<unknown>" : biome.cameraTerrainMaterialBiomeId.c_str(),
+                biome.cameraTerrainUsesFallback ? " (fallback)" : "");
+            ImGui::Text("Terrain color RGBA: %u, %u, %u, %u",
+                static_cast<uint32_t>(biome.cameraTerrainColor[0]),
+                static_cast<uint32_t>(biome.cameraTerrainColor[1]),
+                static_cast<uint32_t>(biome.cameraTerrainColor[2]),
+                static_cast<uint32_t>(biome.cameraTerrainColor[3]));
+            if (biome.hasPlayerBiome) {
+                ImGui::Text("Player biome: %s (%d, %d)",
+                    biome.playerBiomeId.c_str(),
+                    biome.playerChunkX,
+                    biome.playerChunkZ);
+            }
+            if (biome.hasHoveredBiome) {
+                ImGui::Text("Hovered biome: %s (%d, %d)",
+                    biome.hoveredBiomeId.c_str(),
+                    biome.hoveredChunkX,
+                    biome.hoveredChunkZ);
+            }
+            if (biome.hasTerrainHitBiome) {
+                ImGui::Text("Terrain hit biome: %s (%d, %d)",
+                    biome.terrainHitBiomeId.c_str(),
+                    biome.terrainHitChunkX,
+                    biome.terrainHitChunkZ);
+                ImGui::Text("Moisture/roughness/elevation: %.2f / %.2f / %.2f",
+                    biome.moisture,
+                    biome.roughness,
+                    biome.elevation);
+            }
+        } else {
+            ImGui::Text("No biome system");
+        }
+        ImGui::Separator();
         ImGui::Text("Debug Picking");
         ImGui::Text("Mouse: %.1f, %.1f", picking.mousePosition.x, picking.mousePosition.y);
         ImGui::Text("Ray origin: %.2f, %.2f, %.2f", picking.rayOrigin.x, picking.rayOrigin.y, picking.rayOrigin.z);
         ImGui::Text("Ray direction: %.3f, %.3f, %.3f", picking.rayDirection.x, picking.rayDirection.y, picking.rayDirection.z);
         if (picking.hasHoveredObject) {
             ImGui::Text("Hovered object: %u", picking.hoveredObjectId);
+            ImGui::Text("Hovered stable id: %s", picking.hoveredStableId.empty() ? "<none>" : picking.hoveredStableId.c_str());
             ImGui::Text("Hovered cell: %d, %d", picking.hoveredObjectCellX, picking.hoveredObjectCellZ);
             ImGui::Text("Hovered hit: %.2f, %.2f, %.2f",
                 picking.hoveredObjectPosition.x,
@@ -278,10 +422,32 @@ namespace Renderer::DebugUi {
         }
         if (picking.hasSelectedObject) {
             ImGui::Text("Selected object: %u", picking.selectedObjectId);
+            ImGui::Text("Selected stable id: %s", picking.selectedStableId.empty() ? "<none>" : picking.selectedStableId.c_str());
+            if (!picking.selectedArchetypeId.empty()) {
+                ImGui::Text("Selected archetype: %s", picking.selectedArchetypeId.c_str());
+                ImGui::Text("Selected display: %s", picking.selectedArchetypeDisplayName.empty() ? "<unknown>" : picking.selectedArchetypeDisplayName.c_str());
+                ImGui::Text("Selected tags: %s", picking.selectedArchetypeTags.empty() ? "<none>" : picking.selectedArchetypeTags.c_str());
+            }
+            if (picking.selectedIsProcedural) {
+                ImGui::Text("Selected local slot: %u", picking.selectedLocalSlot);
+            }
             ImGui::Text("Selected position: %.2f, %.2f, %.2f",
                 picking.selectedObjectPosition.x,
                 picking.selectedObjectPosition.y,
                 picking.selectedObjectPosition.z);
+            ImGui::Text("Selected rotation: %.2f, %.2f, %.2f",
+                picking.selectedObjectRotation.x,
+                picking.selectedObjectRotation.y,
+                picking.selectedObjectRotation.z);
+            ImGui::Text("Selected scale: %.2f, %.2f, %.2f",
+                picking.selectedObjectScale.x,
+                picking.selectedObjectScale.y,
+                picking.selectedObjectScale.z);
+            ImGui::Text("Owner chunk: %d, %d", picking.selectedOwnerChunkX, picking.selectedOwnerChunkZ);
+            ImGui::Text("Editable: %s", picking.selectedEditable ? "yes" : "no");
+            ImGui::Text("Custom persistent: %s", picking.selectedIsCustom ? "yes" : "no");
+            ImGui::Text("Persistent override: %s", picking.selectedHasPersistentOverride ? "yes" : "no");
+            ImGui::Text("Can reset: %s", picking.selectedCanReset ? "yes" : "no");
         } else {
             ImGui::Text("Selected object: none");
         }
@@ -294,6 +460,35 @@ namespace Renderer::DebugUi {
             ImGui::Text("Terrain distance: %.2f", picking.terrainHitDistance);
         } else {
             ImGui::Text("Terrain hit: none");
+        }
+        ImGui::Separator();
+        ImGui::Text("Interactions");
+        if (interaction.hasLastInteraction) {
+            ImGui::Text("Last action: %s", interaction.action.c_str());
+            ImGui::Text("Target: %s", interaction.target.c_str());
+            ImGui::Text("Outcome: %s", interaction.outcome.empty() ? "<none>" : interaction.outcome.c_str());
+            if (!interaction.stableId.empty()) {
+                ImGui::Text("Stable id: %s", interaction.stableId.c_str());
+            }
+            if (!interaction.archetypeId.empty()) {
+                ImGui::Text("Archetype: %s", interaction.archetypeId.c_str());
+                ImGui::Text("Display: %s", interaction.archetypeDisplayName.empty() ? "<unknown>" : interaction.archetypeDisplayName.c_str());
+                ImGui::Text("Tags: %s", interaction.archetypeTags.empty() ? "<none>" : interaction.archetypeTags.c_str());
+            }
+            if (!interaction.resourceId.empty()) {
+                ImGui::Text("Resource: %s x%u", interaction.resourceId.c_str(), interaction.resourceAmount);
+            }
+            ImGui::Text("Chunk: %d, %d", interaction.chunkX, interaction.chunkZ);
+            ImGui::Text("Position: %.2f, %.2f, %.2f",
+                interaction.position.x,
+                interaction.position.y,
+                interaction.position.z);
+            ImGui::Text("Distance: %.2f", interaction.distance);
+        } else {
+            ImGui::Text("Last action: none");
+        }
+        if (!interaction.status.empty()) {
+            ImGui::TextWrapped("%s", interaction.status.c_str());
         }
         ImGui::Separator();
         if (ImGui::CollapsingHeader("Render Groups")) {

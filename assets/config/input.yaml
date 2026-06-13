@@ -14,6 +14,12 @@ input:
     camera.zoom:
       scalar:
         mouse_wheel_y: -1.0
+    camera.toggle_follow:
+      digital:
+        keys: [F]
+    camera.recenter:
+      digital:
+        keys: [Home]
     player.move:
       axis2:
         keys:
@@ -21,3 +27,15 @@ input:
           negative_y: [S]
           positive_x: [D]
           negative_x: [A]
+    interaction.select:
+      digital:
+        mouse_buttons: [Left]
+    interaction.interact:
+      digital:
+        keys: [E]
+    interaction.remove_object:
+      digital:
+        keys: [Delete]
+    interaction.place_marker:
+      digital:
+        keys: [P]

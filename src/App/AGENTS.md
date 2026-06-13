@@ -6,3 +6,5 @@
 - Do not add reusable renderer, world, input, asset, or gameplay behavior here.
 - It is acceptable for sample code to use fallbacks so the executable starts without local assets, but document each fallback.
 - Prefer calling public subsystem interfaces over reaching into implementation details.
+- Debug UI control plumbing may live here, but the behavior it triggers should be implemented through public Engine/Renderer interfaces.
+- If a helper in `main.cpp` becomes broadly useful or owns state beyond sample composition, move it behind an Engine service before adding more call sites.

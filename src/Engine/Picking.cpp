@@ -96,6 +96,7 @@ namespace Engine {
             nearestDistance = *hitDistance;
             nearestHit = ObjectPickHit{
                 candidate.object,
+                world.objectId(candidate.object).value_or(ObjectId{}),
                 ray.origin + ray.direction * *hitDistance,
                 *hitDistance,
                 candidate.cell,

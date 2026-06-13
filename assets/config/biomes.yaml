@@ -1,0 +1,50 @@
+biome_settings:
+  seed: 0
+  region_scale: 0.035
+
+biomes:
+  grassland:
+    display_name: Grassland
+    height_scale: 0.85
+    rolling_scale: 0.75
+    detail_scale: 0.55
+    prop_density: 1.0
+    terrain_color: [80, 180, 110, 255]
+    archetypes:
+      tree_cluster: 4.0
+      rock: 1.0
+      field_marker: 0.8
+      camp_marker: 0.4
+  rocky:
+    display_name: Rocky
+    height_scale: 1.35
+    rolling_scale: 1.25
+    detail_scale: 1.4
+    prop_density: 0.9
+    terrain_color: [140, 130, 105, 255]
+    archetypes:
+      rock: 5.0
+      tree_cluster: 0.8
+      field_marker: 0.6
+  sparse:
+    display_name: Sparse
+    height_scale: 0.6
+    rolling_scale: 0.55
+    detail_scale: 0.45
+    prop_density: 0.45
+    terrain_color: [165, 155, 105, 255]
+    archetypes:
+      rock: 1.0
+      field_marker: 0.8
+  camp_region:
+    display_name: Camp Region
+    height_scale: 0.8
+    rolling_scale: 0.7
+    detail_scale: 0.65
+    prop_density: 1.15
+    terrain_color: [105, 165, 175, 255]
+    archetypes:
+      camp_marker: 3.0
+      field_marker: 2.0
+      tree_cluster: 1.2
+      rock: 1.0

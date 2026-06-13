@@ -10,6 +10,8 @@ ManualEngine is intended to grow into a simple open world game engine. Keep chan
 - Keep `src/App` as composition/sample code only. Engine behavior belongs under `src/Engine`, rendering under `src/Renderer`, and import/asset decoding under `src/Assets`.
 - Use Dear ImGui for debug display and runtime debug knobs. Keep debug UI wiring in renderer/app composition code, not buried inside engine simulation systems.
 - Do not introduce an ECS, task graph, scripting layer, editor layer, or streaming system until a simpler interface proves insufficient.
+- Keep `docs/engine_overview.md` current when subsystem ownership or data flow changes.
+- After each feature/refactor pass, append a short dated entry to `docs/work_log.md` describing what changed and why.
 
 ## Open World Direction
 
@@ -30,6 +32,7 @@ Add systems in this order unless a task says otherwise:
 - Keep comments focused on non-obvious ownership, lifetime, coordinate-system, or API behavior.
 - Return clear failure states instead of silently falling back, except in sample/demo code where fallback behavior is documented.
 - Do not hide expensive work behind setters; loading, allocation, and streaming should be explicit API calls.
+- When `src/App/main.cpp` starts accumulating reusable behavior, extract that behavior into a narrow Engine or Renderer API before extending it further.
 
 ## Testing And Verification
 

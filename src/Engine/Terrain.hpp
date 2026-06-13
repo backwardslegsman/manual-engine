@@ -8,6 +8,7 @@
 #include <glm/glm.hpp>
 
 #include "Engine/ChunkTypes.hpp"
+#include "Engine/Biome.hpp"
 #include "Engine/Picking.hpp"
 #include "Renderer/Scene.hpp"
 
@@ -28,6 +29,9 @@ namespace Engine {
         uint32_t resolution = 33;
         float heightScale = 2.0f;
         float skirtDepth = 2.0f;
+        // Optional external biome rules. The caller owns this system and must
+        // keep it alive for the TerrainSystem lifetime.
+        const BiomeSystem* biomes = nullptr;
         std::array<TerrainLodLevel, TerrainLodLevelCount> lodLevels{{
             {0.0f, 33},
             {32.0f, 17},
@@ -48,9 +52,12 @@ namespace Engine {
         Renderer::TerrainHandle rendererTerrain;
         Renderer::MaterialHandle material;
         uint32_t currentLod = 0;
+        BiomeSample biome;
     };
 
-    // Owns loaded CPU heightfield tiles and their matching renderer terrain tiles.
+    // Owns loaded CPU heightfield tiles and their matching renderer terrain
+    // tiles. Gameplay height queries always use CPU tile data; renderer LOD is
+    // only a draw-mesh detail.
     class TerrainSystem {
     public:
         explicit TerrainSystem(TerrainSettings settings = {});
@@ -69,6 +76,9 @@ namespace Engine {
             uint32_t refinementIterations = 8
         ) const;
         float generatedHeight(float worldX, float worldZ) const;
+        BiomeSample sampleBiome(float worldX, float worldZ) const;
+        BiomeSample sampleChunkBiome(ChunkCoord coord) const;
+        std::optional<BiomeSample> tileBiome(TerrainTileHandle handle) const;
         ChunkCoord coordForWorldPosition(float worldX, float worldZ) const;
 
         const TerrainSettings& settings() const;

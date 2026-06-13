@@ -1,0 +1,49 @@
+object_archetypes:
+  tree_cluster:
+    display_name: Tree Cluster
+    mesh: ""
+    solid_color: [64, 190, 110, 255]
+    scale: [0.55, 1.15, 0.55]
+    bounds:
+      min: [-1.0, -1.0, -1.0]
+      max: [1.0, 1.0, 1.0]
+    terrain_y_offset: 1.15
+    angular_velocity: [0.0, 0.10, 0.0]
+    tags: [procedural, removable, inspectable, resource_node, blocking, vegetation]
+    resource_id: wood
+    resource_amount: 2
+  rock:
+    display_name: Rock
+    mesh: ""
+    solid_color: [220, 190, 70, 255]
+    scale: [0.75, 0.45, 0.70]
+    bounds:
+      min: [-1.0, -1.0, -1.0]
+      max: [1.0, 1.0, 1.0]
+    terrain_y_offset: 0.45
+    angular_velocity: [0.0, 0.05, 0.0]
+    tags: [procedural, removable, inspectable, resource_node, blocking, stone]
+    resource_id: stone
+    resource_amount: 1
+  camp_marker:
+    display_name: Camp Marker
+    mesh: ""
+    solid_color: [70, 120, 230, 255]
+    scale: [0.85, 0.85, 0.85]
+    bounds:
+      min: [-1.0, -1.0, -1.0]
+      max: [1.0, 1.0, 1.0]
+    terrain_y_offset: 0.85
+    angular_velocity: [0.0, 0.25, 0.0]
+    tags: [procedural, placeable, inspectable, blocking, marker]
+  field_marker:
+    display_name: Field Marker
+    mesh: ""
+    solid_color: [220, 64, 64, 255]
+    scale: [0.65, 0.65, 0.65]
+    bounds:
+      min: [-1.0, -1.0, -1.0]
+      max: [1.0, 1.0, 1.0]
+    terrain_y_offset: 0.65
+    angular_velocity: [0.0, 0.15, 0.0]
+    tags: [procedural, removable, inspectable, blocking, marker]

@@ -32,6 +32,16 @@ namespace {
             key = Engine::Key::S;
         } else if (normalized == "d") {
             key = Engine::Key::D;
+        } else if (normalized == "e") {
+            key = Engine::Key::E;
+        } else if (normalized == "f") {
+            key = Engine::Key::F;
+        } else if (normalized == "p") {
+            key = Engine::Key::P;
+        } else if (normalized == "delete" || normalized == "del") {
+            key = Engine::Key::Delete;
+        } else if (normalized == "home") {
+            key = Engine::Key::Home;
         } else if (normalized == "up") {
             key = Engine::Key::Up;
         } else if (normalized == "down") {
@@ -132,6 +142,12 @@ namespace Engine {
         mapping.axis2Actions_.push_back(rotate);
 
         mapping.scalarActions_.push_back({"camera.zoom", -1.0f});
+        mapping.digitalActions_.push_back({"camera.toggle_follow", {Key::F}, {}});
+        mapping.digitalActions_.push_back({"camera.recenter", {Key::Home}, {}});
+        mapping.digitalActions_.push_back({"interaction.select", {}, {MouseButton::Left}});
+        mapping.digitalActions_.push_back({"interaction.interact", {Key::E}, {}});
+        mapping.digitalActions_.push_back({"interaction.remove_object", {Key::Delete}, {}});
+        mapping.digitalActions_.push_back({"interaction.place_marker", {Key::P}, {}});
         return mapping;
     }
 
@@ -320,14 +336,27 @@ namespace Engine {
                     return input.isMouseButtonDown(button);
                 });
 
+            const bool mousePressed = std::any_of(action.mouseButtons.begin(), action.mouseButtons.end(), [&](MouseButton button) {
+                return input.wasMouseButtonPressed(button);
+            });
+            const bool mouseHeld = std::any_of(action.mouseButtons.begin(), action.mouseButtons.end(), [&](MouseButton button) {
+                return input.isMouseButtonDown(button);
+            });
+            const bool mouseReleased = std::any_of(action.mouseButtons.begin(), action.mouseButtons.end(), [&](MouseButton button) {
+                return input.wasMouseButtonReleased(button);
+            });
+            const InputActionSource source = mousePressed || mouseHeld || mouseReleased
+                ? InputActionSource::MouseButton
+                : InputActionSource::Keyboard;
+
             if (pressed) {
-                events.publish({action.action, InputActionPhase::Pressed, InputActionPayloadType::Digital, InputActionSource::Keyboard, true});
+                events.publish({action.action, InputActionPhase::Pressed, InputActionPayloadType::Digital, source, true});
             }
             if (held) {
-                events.publish({action.action, InputActionPhase::Held, InputActionPayloadType::Digital, InputActionSource::Keyboard, true});
+                events.publish({action.action, InputActionPhase::Held, InputActionPayloadType::Digital, source, true});
             }
             if (released) {
-                events.publish({action.action, InputActionPhase::Released, InputActionPayloadType::Digital, InputActionSource::Keyboard, false});
+                events.publish({action.action, InputActionPhase::Released, InputActionPayloadType::Digital, source, false});
             }
         }
     }

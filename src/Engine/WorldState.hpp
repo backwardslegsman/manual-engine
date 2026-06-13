@@ -8,6 +8,7 @@
 #include <glm/glm.hpp>
 
 #include "Engine/ChunkTypes.hpp"
+#include "Engine/ObjectId.hpp"
 #include "Engine/OrbitCamera.hpp"
 
 namespace Engine {
@@ -23,15 +24,17 @@ namespace Engine {
     };
 
     struct SavedPersistentObject {
-        std::string id;
+        ObjectId id;
         std::string archetypeId;
+        ChunkCoord chunk;
+        bool hasChunk = false;
         glm::vec3 position{};
         glm::vec3 rotation{};
         glm::vec3 scale{1.0f};
     };
 
     struct SavedRemovedObject {
-        std::string id;
+        ObjectId id;
         std::string archetypeId;
         ChunkCoord chunk;
     };
@@ -43,6 +46,7 @@ namespace Engine {
         CameraState camera;
         std::vector<SavedPersistentObject> persistentObjects;
         std::vector<SavedRemovedObject> removedObjects;
+        uint64_t nextCustomObjectSerial = 1;
     };
 
     struct WorldStateIoResult {

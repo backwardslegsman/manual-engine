@@ -11,6 +11,9 @@
 #include "Engine/World.hpp"
 
 namespace Engine {
+    class BlockingCollisionSystem;
+    class SpatialRegistry;
+
     struct ActorHandle {
         uint32_t id = UINT32_MAX;
     };
@@ -19,12 +22,23 @@ namespace Engine {
         float movementSpeed = 6.0f;
         float groundOffset = 0.65f;
         float facingTurnSpeed = 20.0f;
+        bool collisionEnabled = true;
+        float collisionRadius = 0.45f;
+        float collisionHeight = 1.8f;
     };
 
     struct ActorState {
         WorldObjectHandle object;
         glm::vec3 velocity{};
         float facingRadians = 0.0f;
+        bool collisionEnabled = false;
+        float collisionRadius = 0.0f;
+        float collisionHeight = 0.0f;
+        bool blockedX = false;
+        bool blockedZ = false;
+        WorldObjectHandle firstBlockingObject;
+        ObjectId firstBlockingObjectId;
+        uint32_t collisionHitCount = 0;
     };
 
     class ActorController {
@@ -37,6 +51,14 @@ namespace Engine {
         std::optional<ActorState> state(ActorHandle actor) const;
 
         void fixedUpdate(ActorHandle actor, const EventQueue& events, const TerrainSystem& terrain, World& world, float dt);
+        void fixedUpdate(
+            ActorHandle actor,
+            const EventQueue& events,
+            const TerrainSystem& terrain,
+            World& world,
+            const SpatialRegistry& spatialRegistry,
+            const BlockingCollisionSystem& collision,
+            float dt);
 
     private:
         struct ActorRecord {
@@ -47,6 +69,14 @@ namespace Engine {
 
         ActorRecord* record(ActorHandle actor);
         const ActorRecord* record(ActorHandle actor) const;
+        void fixedUpdateInternal(
+            ActorHandle actor,
+            const EventQueue& events,
+            const TerrainSystem& terrain,
+            World& world,
+            const SpatialRegistry* spatialRegistry,
+            const BlockingCollisionSystem* collision,
+            float dt);
 
         std::vector<ActorRecord> actors_;
     };

@@ -211,6 +211,6 @@ namespace Engine {
 
     SpatialQueryResult SpatialRegistry::makeResult(WorldObjectHandle object, const ObjectRecord& record) const
     {
-        return {object, record.position, record.cell};
+        return {object, {}, record.position, record.cell};
     }
 }

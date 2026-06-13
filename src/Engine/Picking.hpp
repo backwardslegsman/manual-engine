@@ -16,6 +16,7 @@ namespace Engine {
 
     struct ObjectPickHit {
         WorldObjectHandle object;
+        ObjectId objectId;
         glm::vec3 position{};
         float distance = 0.0f;
         ChunkCoord cell;
