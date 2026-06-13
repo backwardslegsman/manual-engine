@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
@@ -81,8 +82,10 @@ namespace {
     std::vector<StaticMeshResource> g_meshes;
     std::vector<MeshInstanceResource> g_instances;
     std::vector<TerrainTileResource> g_terrainTiles;
+    std::vector<Renderer::PosColorVertex> g_debugLineVertices;
 
     bgfx::ProgramHandle g_meshProgram = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle g_debugLineProgram = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle g_baseColorSampler = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle g_normalSampler = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle g_metallicSampler = BGFX_INVALID_HANDLE;
@@ -100,6 +103,7 @@ namespace {
     Renderer::TextureHandle g_flatNormalTexture;
     Renderer::TextureHandle g_blackTexture;
     Renderer::AtmosphereSettings g_atmosphere;
+    Renderer::DebugDrawSettings g_debugDrawSettings;
 
     bool isValidStaticMesh(Renderer::StaticMeshHandle handle)
     {
@@ -419,6 +423,16 @@ namespace {
             lhs.submeshIndex == rhs.submeshIndex &&
             lhs.material.id == rhs.material.id;
     }
+
+    void pushDebugVertex(const glm::vec3& position, uint32_t abgr)
+    {
+        g_debugLineVertices.push_back({
+            position.x,
+            position.y,
+            position.z,
+            abgr,
+        });
+    }
 }
 
 namespace Renderer {
@@ -436,6 +450,22 @@ namespace Renderer {
 
         g_meshProgram = bgfx::createProgram(vsh, fsh, true);
         if (!bgfx::isValid(g_meshProgram)) {
+            return false;
+        }
+
+        bgfx::ShaderHandle debugVsh = loadShader("vs_debug_line.bin");
+        bgfx::ShaderHandle debugFsh = loadShader("fs_debug_line.bin");
+        if (!bgfx::isValid(debugVsh) || !bgfx::isValid(debugFsh)) {
+            if (bgfx::isValid(debugVsh)) {
+                bgfx::destroy(debugVsh);
+            }
+            if (bgfx::isValid(debugFsh)) {
+                bgfx::destroy(debugFsh);
+            }
+            return false;
+        }
+        g_debugLineProgram = bgfx::createProgram(debugVsh, debugFsh, true);
+        if (!bgfx::isValid(g_debugLineProgram)) {
             return false;
         }
 
@@ -603,6 +633,7 @@ namespace Renderer {
             }
         }
         g_terrainTiles.clear();
+        g_debugLineVertices.clear();
 
         const std::array uniforms = {
             g_baseColorSampler,
@@ -628,8 +659,22 @@ namespace Renderer {
             bgfx::destroy(g_meshProgram);
             g_meshProgram = BGFX_INVALID_HANDLE;
         }
+        if (bgfx::isValid(g_debugLineProgram)) {
+            bgfx::destroy(g_debugLineProgram);
+            g_debugLineProgram = BGFX_INVALID_HANDLE;
+        }
 
         destroyTextures();
+    }
+
+    void setDebugDrawSettings(const DebugDrawSettings& settings)
+    {
+        g_debugDrawSettings = settings;
+    }
+
+    const DebugDrawSettings& debugDrawSettings()
+    {
+        return g_debugDrawSettings;
     }
 
     StaticMeshHandle loadStaticMesh(const std::filesystem::path& path)
@@ -1207,5 +1252,127 @@ namespace Renderer {
         }
 
         return stats;
+    }
+
+    void clearDebugPrimitives()
+    {
+        g_debugLineVertices.clear();
+    }
+
+    void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32_t abgr)
+    {
+        if (!isFiniteVec3(a) || !isFiniteVec3(b)) {
+            return;
+        }
+        pushDebugVertex(a, abgr);
+        pushDebugVertex(b, abgr);
+    }
+
+    void addDebugAabb(const Aabb& bounds, uint32_t abgr)
+    {
+        if (!isValidAabb(bounds)) {
+            return;
+        }
+
+        const glm::vec3 corners[] = {
+            {bounds.min.x, bounds.min.y, bounds.min.z},
+            {bounds.max.x, bounds.min.y, bounds.min.z},
+            {bounds.max.x, bounds.min.y, bounds.max.z},
+            {bounds.min.x, bounds.min.y, bounds.max.z},
+            {bounds.min.x, bounds.max.y, bounds.min.z},
+            {bounds.max.x, bounds.max.y, bounds.min.z},
+            {bounds.max.x, bounds.max.y, bounds.max.z},
+            {bounds.min.x, bounds.max.y, bounds.max.z},
+        };
+        const uint32_t edges[][2] = {
+            {0, 1}, {1, 2}, {2, 3}, {3, 0},
+            {4, 5}, {5, 6}, {6, 7}, {7, 4},
+            {0, 4}, {1, 5}, {2, 6}, {3, 7},
+        };
+        for (const auto& edge : edges) {
+            addDebugLine(corners[edge[0]], corners[edge[1]], abgr);
+        }
+    }
+
+    void addDebugXZRect(float minX, float minZ, float maxX, float maxZ, float y, uint32_t abgr)
+    {
+        if (!std::isfinite(minX) || !std::isfinite(minZ) ||
+            !std::isfinite(maxX) || !std::isfinite(maxZ) || !std::isfinite(y) ||
+            minX > maxX || minZ > maxZ) {
+            return;
+        }
+
+        const glm::vec3 a{minX, y, minZ};
+        const glm::vec3 b{maxX, y, minZ};
+        const glm::vec3 c{maxX, y, maxZ};
+        const glm::vec3 d{minX, y, maxZ};
+        addDebugLine(a, b, abgr);
+        addDebugLine(b, c, abgr);
+        addDebugLine(c, d, abgr);
+        addDebugLine(d, a, abgr);
+    }
+
+    void addDebugFrustum(const glm::mat4& inverseViewProjection, uint32_t abgr)
+    {
+        const float nearZ = bgfx::getCaps()->homogeneousDepth ? -1.0f : 0.0f;
+        const glm::vec4 ndcCorners[] = {
+            {-1.0f, -1.0f, nearZ, 1.0f},
+            { 1.0f, -1.0f, nearZ, 1.0f},
+            { 1.0f,  1.0f, nearZ, 1.0f},
+            {-1.0f,  1.0f, nearZ, 1.0f},
+            {-1.0f, -1.0f, 1.0f, 1.0f},
+            { 1.0f, -1.0f, 1.0f, 1.0f},
+            { 1.0f,  1.0f, 1.0f, 1.0f},
+            {-1.0f,  1.0f, 1.0f, 1.0f},
+        };
+
+        glm::vec3 corners[8]{};
+        for (uint32_t index = 0; index < 8; ++index) {
+            const glm::vec4 world = inverseViewProjection * ndcCorners[index];
+            if (std::abs(world.w) <= 0.00001f || !std::isfinite(world.w)) {
+                return;
+            }
+            corners[index] = glm::vec3{world} / world.w;
+            if (!isFiniteVec3(corners[index])) {
+                return;
+            }
+        }
+
+        const uint32_t edges[][2] = {
+            {0, 1}, {1, 2}, {2, 3}, {3, 0},
+            {4, 5}, {5, 6}, {6, 7}, {7, 4},
+            {0, 4}, {1, 5}, {2, 6}, {3, 7},
+        };
+        for (const auto& edge : edges) {
+            addDebugLine(corners[edge[0]], corners[edge[1]], abgr);
+        }
+    }
+
+    void drawDebugPrimitives(const RenderView& view)
+    {
+        if (!g_debugDrawSettings.enabled ||
+            (view.layerMask & static_cast<uint32_t>(RenderLayer::Debug)) == 0 ||
+            g_debugLineVertices.empty() ||
+            !bgfx::isValid(g_debugLineProgram)) {
+            return;
+        }
+
+        const uint32_t vertexCount = static_cast<uint32_t>(g_debugLineVertices.size());
+        if (!bgfx::getAvailTransientVertexBuffer(vertexCount, PosColorVertex::layout)) {
+            return;
+        }
+
+        bgfx::TransientVertexBuffer vertexBuffer;
+        bgfx::allocTransientVertexBuffer(&vertexBuffer, vertexCount, PosColorVertex::layout);
+        std::memcpy(vertexBuffer.data, g_debugLineVertices.data(), vertexCount * sizeof(PosColorVertex));
+
+        bgfx::setVertexBuffer(0, &vertexBuffer, 0, vertexCount);
+        bgfx::setState(
+            BGFX_STATE_WRITE_RGB |
+            BGFX_STATE_WRITE_A |
+            BGFX_STATE_DEPTH_TEST_LESS |
+            BGFX_STATE_PT_LINES
+        );
+        bgfx::submit(view.viewId, g_debugLineProgram);
     }
 }

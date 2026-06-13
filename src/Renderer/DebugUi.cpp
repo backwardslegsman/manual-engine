@@ -167,6 +167,7 @@ namespace Renderer::DebugUi {
         const SceneDrawStats& stats,
         RendererDebugSettings& settings,
         AtmosphereSettings& atmosphere,
+        DebugDrawSettings& debugDraw,
         const TerrainLodDebugStats& terrainLods,
         const SpatialRegistryDebugStats& spatial,
         const CameraDebugStats& camera,
@@ -203,6 +204,15 @@ namespace Renderer::DebugUi {
         ImGui::Checkbox("Distance culling", &settings.enableDistanceCulling);
         ImGui::SliderFloat("Prop max distance", &settings.propMaxDrawDistance, 0.0f, 200.0f);
         ImGui::SliderFloat("Terrain max distance", &settings.terrainMaxDrawDistance, 0.0f, 300.0f);
+        ImGui::Separator();
+        ImGui::Text("Debug Draw");
+        ImGui::Checkbox("Debug draw enabled", &debugDraw.enabled);
+        ImGui::Checkbox("Selected bounds", &debugDraw.selectedBounds);
+        ImGui::Checkbox("Collision bounds", &debugDraw.collisionBounds);
+        ImGui::Checkbox("Chunk borders", &debugDraw.chunkBorders);
+        ImGui::Checkbox("Terrain tile bounds", &debugDraw.terrainTileBounds);
+        ImGui::Checkbox("Camera frustum", &debugDraw.cameraFrustum);
+        ImGui::Checkbox("Actor destination", &debugDraw.actorDestination);
         ImGui::Separator();
         ImGui::Text("Atmosphere");
         ImGui::ColorEdit3("Sky color", &atmosphere.skyColor[0]);

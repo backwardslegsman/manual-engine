@@ -11,6 +11,7 @@ find_package(assimp CONFIG REQUIRED)
 find_package(bgfx CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(recastnavigation CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(yaml-cpp CONFIG REQUIRED)
 
@@ -60,6 +61,11 @@ target_link_libraries(manual_engine
         bgfx::bgfx
         glm::glm
         imgui::imgui
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        RecastNavigation::DetourTileCache
+        RecastNavigation::DetourCrowd
+        RecastNavigation::DebugUtils
         yaml-cpp::yaml-cpp
 )
 
@@ -76,6 +82,8 @@ add_custom_command(
         "${SHADER_OUTPUT_DIR}/fs_mesh.bin"
         "${SHADER_OUTPUT_DIR}/vs_imgui.bin"
         "${SHADER_OUTPUT_DIR}/fs_imgui.bin"
+        "${SHADER_OUTPUT_DIR}/vs_debug_line.bin"
+        "${SHADER_OUTPUT_DIR}/fs_debug_line.bin"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_OUTPUT_DIR}"
     COMMAND "${BGFX_SHADERC}"
         -f "${SHADER_SOURCE_DIR}/vs_mesh.vs"
@@ -113,11 +121,31 @@ add_custom_command(
         --varyingdef "${SHADER_SOURCE_DIR}/varying.def.sc"
         -i "${SHADER_SOURCE_DIR}"
         -i "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/bgfx"
+    COMMAND "${BGFX_SHADERC}"
+        -f "${SHADER_SOURCE_DIR}/vs_debug_line.vs"
+        -o "${SHADER_OUTPUT_DIR}/vs_debug_line.bin"
+        --type vertex
+        --platform windows
+        -p s_5_0
+        --varyingdef "${SHADER_SOURCE_DIR}/varying.def.sc"
+        -i "${SHADER_SOURCE_DIR}"
+        -i "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/bgfx"
+    COMMAND "${BGFX_SHADERC}"
+        -f "${SHADER_SOURCE_DIR}/fs_debug_line.fs"
+        -o "${SHADER_OUTPUT_DIR}/fs_debug_line.bin"
+        --type fragment
+        --platform windows
+        -p s_5_0
+        --varyingdef "${SHADER_SOURCE_DIR}/varying.def.sc"
+        -i "${SHADER_SOURCE_DIR}"
+        -i "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/bgfx"
     DEPENDS
         "${SHADER_SOURCE_DIR}/vs_mesh.vs"
         "${SHADER_SOURCE_DIR}/fs_mesh.fs"
         "${SHADER_SOURCE_DIR}/vs_imgui.vs"
         "${SHADER_SOURCE_DIR}/fs_imgui.fs"
+        "${SHADER_SOURCE_DIR}/vs_debug_line.vs"
+        "${SHADER_SOURCE_DIR}/fs_debug_line.fs"
         "${SHADER_SOURCE_DIR}/varying.def.sc"
     VERBATIM
 )
@@ -128,6 +156,8 @@ add_custom_target(manual_engine_shaders
         "${SHADER_OUTPUT_DIR}/fs_mesh.bin"
         "${SHADER_OUTPUT_DIR}/vs_imgui.bin"
         "${SHADER_OUTPUT_DIR}/fs_imgui.bin"
+        "${SHADER_OUTPUT_DIR}/vs_debug_line.bin"
+        "${SHADER_OUTPUT_DIR}/fs_debug_line.bin"
 )
 
 add_dependencies(manual_engine manual_engine_shaders)

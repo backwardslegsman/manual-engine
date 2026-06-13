@@ -30,6 +30,7 @@ Keep this document current whenever subsystem ownership, data flow, or save-faci
 - Renderer material handles with base color, normal, metallic, and roughness factors.
 - Renderer scene submission through `RenderView`, with CPU frustum culling, distance culling, render layers, render groups, draw stats, and conservative CPU batching by mesh/material.
 - Renderer atmosphere state: sky clear color, exponential fog, and directional sun settings.
+- Renderer debug draw primitives are transient per-frame submission aids for bounds, chunk borders, frustums, and actor movement diagnostics.
 - Dear ImGui debug panel for renderer stats, world save/edit controls, camera, biomes, picking, interactions, terrain LOD, spatial registry, and player actor status.
 - Fixed-step engine loop, world object ownership, kinematic player actor, simple blocking collision, and terrain grounding.
 - Sim/orbit camera with free and player-follow modes.

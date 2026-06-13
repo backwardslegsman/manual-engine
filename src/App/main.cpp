@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
 
 #include "Engine/ActorController.hpp"
 #include "Engine/AssetCache.hpp"
@@ -106,6 +107,14 @@ namespace {
             return material.biomeId == biomeId;
         });
         return materialIt == materials.end() ? nullptr : &*materialIt;
+    }
+
+    constexpr uint32_t debugColorAbgr(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255)
+    {
+        return (static_cast<uint32_t>(a) << 24) |
+            (static_cast<uint32_t>(b) << 16) |
+            (static_cast<uint32_t>(g) << 8) |
+            static_cast<uint32_t>(r);
     }
 
     std::string joinTags(const std::vector<std::string>& tags)
@@ -417,6 +426,99 @@ namespace {
         }
         return stats;
     }
+
+    void enqueueDebugPrimitives(
+        const Renderer::RenderView& renderView,
+        const Renderer::DebugDrawSettings& settings,
+        const Engine::DebugSelectionState& selection,
+        const Engine::World& world,
+        const Engine::ChunkStreamer& chunkStreamer,
+        const Engine::TerrainSystem& terrain,
+        Engine::WorldObjectHandle playerObject,
+        const Engine::ActorController& actors,
+        Engine::ActorHandle playerActor)
+    {
+        Renderer::clearDebugPrimitives();
+        if (!settings.enabled) {
+            return;
+        }
+
+        constexpr uint32_t SelectedColor = debugColorAbgr(255, 220, 40);
+        constexpr uint32_t CollisionColor = debugColorAbgr(255, 64, 64);
+        constexpr uint32_t ChunkColor = debugColorAbgr(70, 120, 255);
+        constexpr uint32_t TerrainColor = debugColorAbgr(80, 220, 240);
+        constexpr uint32_t FrustumColor = debugColorAbgr(255, 80, 255);
+        constexpr uint32_t ActorColor = debugColorAbgr(80, 255, 120);
+
+        if (settings.selectedBounds && selection.selectedObject && world.isValid(selection.selectedObject->object)) {
+            if (const std::optional<Renderer::Aabb> bounds = world.worldBounds(selection.selectedObject->object)) {
+                Renderer::addDebugAabb(*bounds, SelectedColor);
+            }
+        }
+
+        const auto addCollisionBounds = [&](Engine::WorldObjectHandle object) {
+            if (!world.isValid(object) || !world.collisionEnabled(object)) {
+                return;
+            }
+            if (const std::optional<Renderer::Aabb> bounds = world.worldBounds(object)) {
+                Renderer::addDebugAabb(*bounds, CollisionColor);
+            }
+        };
+
+        chunkStreamer.forEachLoadedChunkContent(
+            [&](Engine::TerrainTileHandle terrainTile, const std::vector<Engine::WorldObjectHandle>& objects, Renderer::RenderGroupHandle) {
+                if (settings.chunkBorders) {
+                    if (const std::optional<Engine::ChunkCoord> coord = terrain.tileCoord(terrainTile)) {
+                        const float chunkSize = terrain.settings().chunkSize;
+                        const float minX = static_cast<float>(coord->x) * chunkSize;
+                        const float minZ = static_cast<float>(coord->z) * chunkSize;
+                        float y = 0.0f;
+                        if (const std::optional<Renderer::Aabb> bounds = terrain.tileWorldBounds(terrainTile)) {
+                            y = bounds->max.y + 0.05f;
+                        }
+                        Renderer::addDebugXZRect(minX, minZ, minX + chunkSize, minZ + chunkSize, y, ChunkColor);
+                    }
+                }
+
+                if (settings.terrainTileBounds) {
+                    if (const std::optional<Renderer::Aabb> bounds = terrain.tileWorldBounds(terrainTile)) {
+                        Renderer::addDebugAabb(*bounds, TerrainColor);
+                    }
+                }
+
+                if (settings.collisionBounds) {
+                    for (Engine::WorldObjectHandle object : objects) {
+                        addCollisionBounds(object);
+                    }
+                }
+            }
+        );
+
+        if (settings.collisionBounds) {
+            addCollisionBounds(playerObject);
+        }
+
+        if (settings.cameraFrustum) {
+            Renderer::addDebugFrustum(glm::inverse(renderView.viewProjection), FrustumColor);
+        }
+
+        if (settings.actorDestination) {
+            const std::optional<Engine::ActorState> actorState = actors.state(playerActor);
+            if (actorState && actorState->hasMovementDebug) {
+                const glm::vec3 currentPosition = world.position(actorState->object).value_or(actorState->resolvedPosition);
+                Renderer::addDebugLine(currentPosition, actorState->desiredPosition, ActorColor);
+                const float markerSize = 0.25f;
+                Renderer::addDebugXZRect(
+                    actorState->resolvedPosition.x - markerSize,
+                    actorState->resolvedPosition.z - markerSize,
+                    actorState->resolvedPosition.x + markerSize,
+                    actorState->resolvedPosition.z + markerSize,
+                    actorState->resolvedPosition.y + 0.05f,
+                    ActorColor
+                );
+            }
+        }
+    }
 }
 
 int main(int, char**)
@@ -521,6 +623,7 @@ int main(int, char**)
     Engine::CachedStaticMesh playerMesh = assetCache.acquireFallbackCubeMesh();
     const Renderer::StaticMeshHandle playerStaticMesh = playerMesh.handle;
     Renderer::DebugUi::RendererDebugSettings debugSettings;
+    Renderer::DebugDrawSettings debugDrawSettings;
     Renderer::DebugUi::WorldSaveDebugControls worldSaveControls;
 
     Engine::World world;
@@ -888,6 +991,7 @@ int main(int, char**)
         terrain.updateLods(camera.position());
         applyDebugVisibilitySettings();
         Renderer::setAtmosphereSettings(atmosphere);
+        Renderer::setDebugDrawSettings(debugDrawSettings);
 
         bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, clearColorFromLinearRgba(atmosphere.skyColor), 1.0f, 0);
         bgfx::setViewRect(0, 0, 0, viewportExtent(width), viewportExtent(height));
@@ -976,7 +1080,19 @@ int main(int, char**)
             interactionStats = makeInteractionDebugStats(outcome);
         }
 
+        enqueueDebugPrimitives(
+            renderView,
+            debugDrawSettings,
+            debugSelection,
+            world,
+            chunkStreamer,
+            terrain,
+            playerObject,
+            actors,
+            playerActor
+        );
         const Renderer::SceneDrawStats drawStats = Renderer::drawScene(renderView);
+        Renderer::drawDebugPrimitives(renderView);
         if (debugUiEnabled) {
             Renderer::DebugUi::TerrainLodDebugStats terrainLods;
             terrainLods.counts = terrain.lodCounts();
@@ -1010,6 +1126,7 @@ int main(int, char**)
                 drawStats,
                 debugSettings,
                 atmosphere,
+                debugDrawSettings,
                 terrainLods,
                 spatialStats,
                 cameraStats,

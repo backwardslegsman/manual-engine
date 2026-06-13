@@ -183,6 +183,7 @@ namespace Renderer::DebugUi {
         const SceneDrawStats& stats,
         RendererDebugSettings& settings,
         AtmosphereSettings& atmosphere,
+        DebugDrawSettings& debugDraw,
         const TerrainLodDebugStats& terrainLods = {},
         const SpatialRegistryDebugStats& spatial = {},
         const CameraDebugStats& camera = {},

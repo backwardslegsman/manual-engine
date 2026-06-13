@@ -36,6 +36,16 @@ namespace Renderer {
         float maxDrawDistance = 0.0f;
     };
 
+    struct DebugDrawSettings {
+        bool enabled = true;
+        bool selectedBounds = true;
+        bool collisionBounds = true;
+        bool chunkBorders = true;
+        bool terrainTileBounds = true;
+        bool cameraFrustum = false;
+        bool actorDestination = true;
+    };
+
     struct RenderGroupHandle {
         uint32_t id = UINT32_MAX;
     };
@@ -150,6 +160,8 @@ namespace Renderer {
     void setMaterialDescriptor(MaterialHandle material, const MaterialDescriptor& descriptor);
     void setAtmosphereSettings(const AtmosphereSettings& settings);
     const AtmosphereSettings& atmosphereSettings();
+    void setDebugDrawSettings(const DebugDrawSettings& settings);
+    const DebugDrawSettings& debugDrawSettings();
     StaticMeshHandle loadStaticMesh(const std::filesystem::path& path);
     StaticMeshHandle createTexturedCubeMesh();
     void destroyStaticMesh(StaticMeshHandle mesh);
@@ -181,4 +193,10 @@ namespace Renderer {
     void clearTerrainRenderGroup(TerrainHandle terrain);
 
     SceneDrawStats drawScene(const RenderView& view);
+    void clearDebugPrimitives();
+    void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32_t abgr);
+    void addDebugAabb(const Aabb& bounds, uint32_t abgr);
+    void addDebugXZRect(float minX, float minZ, float maxX, float maxZ, float y, uint32_t abgr);
+    void addDebugFrustum(const glm::mat4& inverseViewProjection, uint32_t abgr);
+    void drawDebugPrimitives(const RenderView& view);
 }

@@ -48,3 +48,23 @@ Changed:
 Rationale:
 - Biomes need visible terrain identity before heavier material blending or splat maps are justified.
 - Keeping assignment one material per tile preserves deterministic chunk regeneration and keeps renderer/material lifetime explicit.
+
+## 2026-06-13 - Debug Draw Primitives
+
+Changed:
+- Added a renderer-owned transient debug line queue with wire boxes, XZ rectangles, camera frustum lines, and Dear ImGui toggles.
+- Enqueued selected bounds, collision bounds, chunk borders, terrain tile bounds, camera frustum, and actor movement diagnostics from App debug state.
+
+Rationale:
+- Terrain, picking, collision, and streaming need immediate visual diagnostics without changing simulation or renderer resource ownership.
+- Keeping primitives transient preserves the existing frame-driven debug model and avoids persistent debug object lifetime.
+
+## 2026-06-13 - Navigation Roadmap And Recast Dependency
+
+Changed:
+- Added `docs/navigation_roadmap.md` outlining the Recast + Detour path to Kenshi-like near movement.
+- Added the `recastnavigation` vcpkg dependency as the planned navigation backend.
+
+Rationale:
+- Near movement needs a real navmesh backend, but the integration should stay hidden behind Engine navigation APIs.
+- Capturing the phased plan keeps long-distance navigation, crowd behavior, and dynamic obstacle work intentionally deferred.

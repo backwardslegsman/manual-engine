@@ -16,6 +16,7 @@
         "sdl3-binding"
       ]
     },
+    "recastnavigation",
     "sdl3",
     "stb",
     "yaml-cpp"

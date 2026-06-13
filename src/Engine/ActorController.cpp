@@ -167,6 +167,7 @@ namespace Engine {
         actorRecord->state.collisionEnabled = actorRecord->settings.collisionEnabled;
         actorRecord->state.collisionRadius = actorRecord->settings.collisionRadius;
         actorRecord->state.collisionHeight = actorRecord->settings.collisionHeight;
+        actorRecord->state.hasMovementDebug = false;
 
         const glm::vec2 axis = playerMoveAxis(events);
         glm::vec3 velocity{};
@@ -183,6 +184,10 @@ namespace Engine {
         actorRecord->state.velocity = velocity;
         const glm::vec3 currentPosition = world.position(actorRecord->state.object).value_or(glm::vec3{});
         glm::vec3 position = currentPosition + velocity * dt;
+        if (glm::dot(axis, axis) > 0.0f) {
+            actorRecord->state.desiredPosition = position;
+            actorRecord->state.hasMovementDebug = true;
+        }
 
         if (actorRecord->settings.collisionEnabled &&
             spatialRegistry &&
@@ -213,6 +218,9 @@ namespace Engine {
         }
 
         actorRecord->state.velocity = (position - currentPosition) / dt;
+        if (actorRecord->state.hasMovementDebug) {
+            actorRecord->state.resolvedPosition = position;
+        }
         world.setPosition(actorRecord->state.object, position);
         world.setRotation(actorRecord->state.object, {0.0f, actorRecord->state.facingRadians, 0.0f});
     }

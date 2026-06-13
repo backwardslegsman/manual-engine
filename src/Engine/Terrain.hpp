@@ -79,6 +79,8 @@ namespace Engine {
         BiomeSample sampleBiome(float worldX, float worldZ) const;
         BiomeSample sampleChunkBiome(ChunkCoord coord) const;
         std::optional<BiomeSample> tileBiome(TerrainTileHandle handle) const;
+        std::optional<ChunkCoord> tileCoord(TerrainTileHandle handle) const;
+        std::optional<Renderer::Aabb> tileWorldBounds(TerrainTileHandle handle) const;
         ChunkCoord coordForWorldPosition(float worldX, float worldZ) const;
 
         const TerrainSettings& settings() const;

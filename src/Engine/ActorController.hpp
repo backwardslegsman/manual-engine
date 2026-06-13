@@ -39,6 +39,9 @@ namespace Engine {
         WorldObjectHandle firstBlockingObject;
         ObjectId firstBlockingObjectId;
         uint32_t collisionHitCount = 0;
+        glm::vec3 desiredPosition{};
+        glm::vec3 resolvedPosition{};
+        bool hasMovementDebug = false;
     };
 
     class ActorController {

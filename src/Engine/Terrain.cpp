@@ -257,6 +257,29 @@ namespace Engine {
         return terrain->biome;
     }
 
+    std::optional<ChunkCoord> TerrainSystem::tileCoord(TerrainTileHandle handle) const
+    {
+        const TerrainTile* terrain = tile(handle);
+        if (!terrain) {
+            return std::nullopt;
+        }
+        return terrain->coord;
+    }
+
+    std::optional<Renderer::Aabb> TerrainSystem::tileWorldBounds(TerrainTileHandle handle) const
+    {
+        const TerrainTile* terrain = tile(handle);
+        if (!terrain || terrain->heights.empty()) {
+            return std::nullopt;
+        }
+
+        const auto [minIt, maxIt] = std::minmax_element(terrain->heights.begin(), terrain->heights.end());
+        return Renderer::Aabb{
+            {terrain->origin.x, *minIt, terrain->origin.z},
+            {terrain->origin.x + terrain->size, *maxIt, terrain->origin.z + terrain->size},
+        };
+    }
+
     ChunkCoord TerrainSystem::coordForWorldPosition(float worldX, float worldZ) const
     {
         return {
