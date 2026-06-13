@@ -10,6 +10,21 @@ namespace {
     {
         return glm::normalize(glm::vec3{left - right, 2.0f * spacing, down - up});
     }
+
+    void pushQuad(
+        std::vector<uint32_t>& indices,
+        uint32_t topLeft,
+        uint32_t topRight,
+        uint32_t bottomLeft,
+        uint32_t bottomRight)
+    {
+        indices.push_back(topLeft);
+        indices.push_back(bottomLeft);
+        indices.push_back(topRight);
+        indices.push_back(topRight);
+        indices.push_back(bottomLeft);
+        indices.push_back(bottomRight);
+    }
 }
 
 namespace Engine {
@@ -18,9 +33,18 @@ namespace Engine {
     {
         settings_.chunkSize = std::max(settings_.chunkSize, 1.0f);
         settings_.resolution = std::max(settings_.resolution, 2u);
+        settings_.skirtDepth = std::max(settings_.skirtDepth, 0.0f);
+        for (uint32_t index = 0; index < settings_.lodLevels.size(); ++index) {
+            TerrainLodLevel& level = settings_.lodLevels[index];
+            level.resolution = std::max(level.resolution, 2u);
+            level.startDistance = std::max(level.startDistance, 0.0f);
+            if (index > 0) {
+                level.startDistance = std::max(level.startDistance, settings_.lodLevels[index - 1].startDistance);
+            }
+        }
     }
 
-    TerrainTileHandle TerrainSystem::createTile(ChunkCoord coord, Renderer::TextureHandle baseColorTexture)
+    TerrainTileHandle TerrainSystem::createTile(ChunkCoord coord, Renderer::MaterialHandle material)
     {
         TerrainTile terrain;
         terrain.alive = true;
@@ -32,6 +56,7 @@ namespace Engine {
         };
         terrain.size = settings_.chunkSize;
         terrain.resolution = settings_.resolution;
+        terrain.material = material;
         terrain.heights.resize(static_cast<size_t>(settings_.resolution) * settings_.resolution);
 
         const float spacing = settings_.chunkSize / static_cast<float>(settings_.resolution - 1);
@@ -43,53 +68,8 @@ namespace Engine {
             }
         }
 
-        std::vector<Renderer::MeshVertex> vertices;
-        vertices.reserve(terrain.heights.size());
-        for (uint32_t z = 0; z < settings_.resolution; ++z) {
-            for (uint32_t x = 0; x < settings_.resolution; ++x) {
-                const float worldX = terrain.origin.x + static_cast<float>(x) * spacing;
-                const float worldZ = terrain.origin.z + static_cast<float>(z) * spacing;
-                const float height = tileHeightAt(terrain, x, z);
-                const float left = x > 0 ? tileHeightAt(terrain, x - 1, z) : generatedHeight(worldX - spacing, worldZ);
-                const float right = x + 1 < settings_.resolution ? tileHeightAt(terrain, x + 1, z) : generatedHeight(worldX + spacing, worldZ);
-                const float down = z > 0 ? tileHeightAt(terrain, x, z - 1) : generatedHeight(worldX, worldZ - spacing);
-                const float up = z + 1 < settings_.resolution ? tileHeightAt(terrain, x, z + 1) : generatedHeight(worldX, worldZ + spacing);
-                const glm::vec3 normal = terrainNormalFromHeights(left, right, down, up, spacing);
-
-                vertices.push_back({
-                    worldX,
-                    height,
-                    worldZ,
-                    normal.x,
-                    normal.y,
-                    normal.z,
-                    1.0f,
-                    0.0f,
-                    0.0f,
-                    static_cast<float>(x) / static_cast<float>(settings_.resolution - 1),
-                    static_cast<float>(z) / static_cast<float>(settings_.resolution - 1),
-                });
-            }
-        }
-
-        std::vector<uint32_t> indices;
-        indices.reserve(static_cast<size_t>(settings_.resolution - 1) * (settings_.resolution - 1) * 6);
-        for (uint32_t z = 0; z + 1 < settings_.resolution; ++z) {
-            for (uint32_t x = 0; x + 1 < settings_.resolution; ++x) {
-                const uint32_t topLeft = z * settings_.resolution + x;
-                const uint32_t topRight = topLeft + 1;
-                const uint32_t bottomLeft = (z + 1) * settings_.resolution + x;
-                const uint32_t bottomRight = bottomLeft + 1;
-                indices.push_back(topLeft);
-                indices.push_back(bottomLeft);
-                indices.push_back(topRight);
-                indices.push_back(topRight);
-                indices.push_back(bottomLeft);
-                indices.push_back(bottomRight);
-            }
-        }
-
-        terrain.rendererTerrain = Renderer::createTerrainTile(vertices, indices, baseColorTexture);
+        terrain.currentLod = 0;
+        terrain.rendererTerrain = createRendererTerrain(terrain, terrain.currentLod);
 
         for (uint32_t index = 0; index < tiles_.size(); ++index) {
             if (!tiles_[index].alive) {
@@ -112,6 +92,41 @@ namespace Engine {
 
         Renderer::destroyTerrainTile(terrain->rendererTerrain);
         *terrain = {};
+    }
+
+    Renderer::TerrainHandle TerrainSystem::rendererTerrain(TerrainTileHandle handle) const
+    {
+        const TerrainTile* terrain = tile(handle);
+        return terrain ? terrain->rendererTerrain : Renderer::TerrainHandle{};
+    }
+
+    void TerrainSystem::updateLods(const glm::vec3& cameraPosition)
+    {
+        for (TerrainTile& terrain : tiles_) {
+            if (!terrain.alive) {
+                continue;
+            }
+
+            const uint32_t desiredLod = chooseLod(terrain, cameraPosition);
+            if (desiredLod == terrain.currentLod) {
+                continue;
+            }
+
+            Renderer::destroyTerrainTile(terrain.rendererTerrain);
+            terrain.currentLod = desiredLod;
+            terrain.rendererTerrain = createRendererTerrain(terrain, terrain.currentLod);
+        }
+    }
+
+    std::array<uint32_t, TerrainLodLevelCount> TerrainSystem::lodCounts() const
+    {
+        std::array<uint32_t, TerrainLodLevelCount> counts{};
+        for (const TerrainTile& terrain : tiles_) {
+            if (terrain.alive && terrain.currentLod < counts.size()) {
+                ++counts[terrain.currentLod];
+            }
+        }
+        return counts;
     }
 
     std::optional<float> TerrainSystem::sampleHeight(float worldX, float worldZ) const
@@ -139,6 +154,75 @@ namespace Engine {
         const float hx0 = h00 + (h10 - h00) * tx;
         const float hx1 = h01 + (h11 - h01) * tx;
         return hx0 + (hx1 - hx0) * tz;
+    }
+
+    std::optional<TerrainPickHit> TerrainSystem::raycast(
+        const Ray& ray,
+        float maxDistance,
+        float stepDistance,
+        uint32_t refinementIterations) const
+    {
+        if (maxDistance <= 0.0f || stepDistance <= 0.0f || glm::length(ray.direction) <= 0.0f) {
+            return std::nullopt;
+        }
+
+        const glm::vec3 direction = glm::normalize(ray.direction);
+        bool hasPreviousSample = false;
+        float previousDistance = 0.0f;
+        float previousSignedHeight = 0.0f;
+
+        for (float distance = 0.0f; distance <= maxDistance; distance += stepDistance) {
+            const glm::vec3 point = ray.origin + direction * distance;
+            const std::optional<float> terrainHeight = sampleHeight(point.x, point.z);
+            if (!terrainHeight) {
+                hasPreviousSample = false;
+                continue;
+            }
+
+            const float signedHeight = point.y - *terrainHeight;
+            if (hasPreviousSample &&
+                ((previousSignedHeight >= 0.0f && signedHeight <= 0.0f) ||
+                    (previousSignedHeight <= 0.0f && signedHeight >= 0.0f))) {
+                float low = previousDistance;
+                float high = distance;
+                for (uint32_t iteration = 0; iteration < refinementIterations; ++iteration) {
+                    const float mid = (low + high) * 0.5f;
+                    const glm::vec3 midPoint = ray.origin + direction * mid;
+                    const std::optional<float> midHeight = sampleHeight(midPoint.x, midPoint.z);
+                    if (!midHeight) {
+                        low = mid;
+                        continue;
+                    }
+
+                    const float midSignedHeight = midPoint.y - *midHeight;
+                    if ((previousSignedHeight >= 0.0f && midSignedHeight >= 0.0f) ||
+                        (previousSignedHeight <= 0.0f && midSignedHeight <= 0.0f)) {
+                        low = mid;
+                    } else {
+                        high = mid;
+                    }
+                }
+
+                const float hitDistance = (low + high) * 0.5f;
+                glm::vec3 hitPoint = ray.origin + direction * hitDistance;
+                const std::optional<float> hitHeight = sampleHeight(hitPoint.x, hitPoint.z);
+                if (!hitHeight) {
+                    return std::nullopt;
+                }
+                hitPoint.y = *hitHeight;
+                return TerrainPickHit{
+                    hitPoint,
+                    hitDistance,
+                    coordForWorldPosition(hitPoint.x, hitPoint.z),
+                };
+            }
+
+            hasPreviousSample = true;
+            previousDistance = distance;
+            previousSignedHeight = signedHeight;
+        }
+
+        return std::nullopt;
     }
 
     float TerrainSystem::generatedHeight(float worldX, float worldZ) const
@@ -190,5 +274,111 @@ namespace Engine {
     float TerrainSystem::tileHeightAt(const TerrainTile& tile, uint32_t x, uint32_t z) const
     {
         return tile.heights[static_cast<size_t>(z) * tile.resolution + x];
+    }
+
+    uint32_t TerrainSystem::chooseLod(const TerrainTile& terrain, const glm::vec3& cameraPosition) const
+    {
+        const glm::vec3 tileCenter{
+            terrain.origin.x + terrain.size * 0.5f,
+            0.0f,
+            terrain.origin.z + terrain.size * 0.5f,
+        };
+        const glm::vec3 offset = cameraPosition - tileCenter;
+        const float distance = std::sqrt(glm::dot(offset, offset));
+
+        uint32_t chosenLod = 0;
+        for (uint32_t index = 0; index < settings_.lodLevels.size(); ++index) {
+            if (distance >= settings_.lodLevels[index].startDistance) {
+                chosenLod = index;
+            }
+        }
+        return chosenLod;
+    }
+
+    Renderer::TerrainHandle TerrainSystem::createRendererTerrain(const TerrainTile& tile, uint32_t lodIndex) const
+    {
+        const uint32_t lod = std::min<uint32_t>(lodIndex, static_cast<uint32_t>(settings_.lodLevels.size() - 1));
+        const uint32_t resolution = std::max(settings_.lodLevels[lod].resolution, 2u);
+        const float spacing = tile.size / static_cast<float>(resolution - 1);
+
+        std::vector<Renderer::MeshVertex> vertices;
+        vertices.reserve(static_cast<size_t>(resolution) * resolution + static_cast<size_t>(resolution) * 8);
+        for (uint32_t z = 0; z < resolution; ++z) {
+            for (uint32_t x = 0; x < resolution; ++x) {
+                const float worldX = tile.origin.x + static_cast<float>(x) * spacing;
+                const float worldZ = tile.origin.z + static_cast<float>(z) * spacing;
+                const float height = generatedHeight(worldX, worldZ);
+                const float left = generatedHeight(worldX - spacing, worldZ);
+                const float right = generatedHeight(worldX + spacing, worldZ);
+                const float down = generatedHeight(worldX, worldZ - spacing);
+                const float up = generatedHeight(worldX, worldZ + spacing);
+                const glm::vec3 normal = terrainNormalFromHeights(left, right, down, up, spacing);
+
+                vertices.push_back({
+                    worldX,
+                    height,
+                    worldZ,
+                    normal.x,
+                    normal.y,
+                    normal.z,
+                    1.0f,
+                    0.0f,
+                    0.0f,
+                    static_cast<float>(x) / static_cast<float>(resolution - 1),
+                    static_cast<float>(z) / static_cast<float>(resolution - 1),
+                });
+            }
+        }
+
+        std::vector<uint32_t> indices;
+        indices.reserve(static_cast<size_t>(resolution - 1) * (resolution - 1) * 6 + static_cast<size_t>(resolution - 1) * 24);
+        for (uint32_t z = 0; z + 1 < resolution; ++z) {
+            for (uint32_t x = 0; x + 1 < resolution; ++x) {
+                const uint32_t topLeft = z * resolution + x;
+                const uint32_t topRight = topLeft + 1;
+                const uint32_t bottomLeft = (z + 1) * resolution + x;
+                const uint32_t bottomRight = bottomLeft + 1;
+                pushQuad(indices, topLeft, topRight, bottomLeft, bottomRight);
+            }
+        }
+
+        const auto addSkirtVertex = [&](uint32_t sourceIndex) {
+            Renderer::MeshVertex vertex = vertices[sourceIndex];
+            vertex.py -= settings_.skirtDepth;
+            vertices.push_back(vertex);
+            return static_cast<uint32_t>(vertices.size() - 1);
+        };
+
+        if (settings_.skirtDepth > 0.0f) {
+            for (uint32_t x = 0; x + 1 < resolution; ++x) {
+                const uint32_t topA = x;
+                const uint32_t topB = x + 1;
+                const uint32_t topSkirtA = addSkirtVertex(topA);
+                const uint32_t topSkirtB = addSkirtVertex(topB);
+                pushQuad(indices, topA, topB, topSkirtA, topSkirtB);
+
+                const uint32_t bottomA = (resolution - 1) * resolution + x;
+                const uint32_t bottomB = bottomA + 1;
+                const uint32_t bottomSkirtB = addSkirtVertex(bottomB);
+                const uint32_t bottomSkirtA = addSkirtVertex(bottomA);
+                pushQuad(indices, bottomB, bottomA, bottomSkirtB, bottomSkirtA);
+            }
+
+            for (uint32_t z = 0; z + 1 < resolution; ++z) {
+                const uint32_t leftA = z * resolution;
+                const uint32_t leftB = (z + 1) * resolution;
+                const uint32_t leftSkirtB = addSkirtVertex(leftB);
+                const uint32_t leftSkirtA = addSkirtVertex(leftA);
+                pushQuad(indices, leftB, leftA, leftSkirtB, leftSkirtA);
+
+                const uint32_t rightA = z * resolution + (resolution - 1);
+                const uint32_t rightB = (z + 1) * resolution + (resolution - 1);
+                const uint32_t rightSkirtA = addSkirtVertex(rightA);
+                const uint32_t rightSkirtB = addSkirtVertex(rightB);
+                pushQuad(indices, rightA, rightB, rightSkirtA, rightSkirtB);
+            }
+        }
+
+        return Renderer::createTerrainTile(vertices, indices, tile.material);
     }
 }

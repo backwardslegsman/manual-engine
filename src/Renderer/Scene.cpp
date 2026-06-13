@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <string>
 #include <vector>
 
 #include <SDL3/SDL.h>
@@ -15,7 +16,17 @@
 #include "Renderer/core.hpp"
 
 namespace {
+    struct RenderGroupResource {
+        bool alive = false;
+        std::string name;
+        bool hasChunkCoord = false;
+        int32_t chunkX = 0;
+        int32_t chunkZ = 0;
+    };
+
     struct MaterialResource {
+        bool alive = false;
+        std::string name;
         glm::vec4 baseColorFactor{1.0f};
         float metallicFactor = 0.0f;
         float roughnessFactor = 1.0f;
@@ -42,12 +53,15 @@ namespace {
     struct MeshInstanceResource {
         bool alive = false;
         Renderer::StaticMeshHandle mesh;
+        Renderer::RenderVisibility visibility;
         glm::vec3 position{};
         glm::vec3 rotation{};
         glm::vec3 scale{1.0f};
         glm::mat4 explicitTransform{1.0f};
         bool usesExplicitTransform = false;
-        Renderer::TextureHandle baseColorOverride;
+        Renderer::MaterialHandle materialOverride;
+        bool hasMaterialOverride = false;
+        Renderer::RenderGroupHandle renderGroup;
     };
 
     struct TerrainTileResource {
@@ -55,11 +69,14 @@ namespace {
         bgfx::VertexBufferHandle vertexBuffer = BGFX_INVALID_HANDLE;
         bgfx::IndexBufferHandle indexBuffer = BGFX_INVALID_HANDLE;
         uint32_t indexCount = 0;
-        Renderer::TextureHandle baseColorTexture;
+        Renderer::MaterialHandle material;
+        Renderer::RenderVisibility visibility{Renderer::RenderLayer::Terrain, Renderer::VisibilityFlags::Visible, 0.0f};
         Renderer::Aabb worldBounds;
         bool hasBounds = false;
+        Renderer::RenderGroupHandle renderGroup;
     };
 
+    std::vector<RenderGroupResource> g_renderGroups;
     std::vector<MaterialResource> g_materials;
     std::vector<StaticMeshResource> g_meshes;
     std::vector<MeshInstanceResource> g_instances;
@@ -74,10 +91,15 @@ namespace {
     bgfx::UniformHandle g_materialParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle g_textureFlags = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle g_lightDirection = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle g_sunColorIntensity = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle g_cameraPosition = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle g_fogColor = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle g_fogParams = BGFX_INVALID_HANDLE;
 
     Renderer::TextureHandle g_whiteTexture;
     Renderer::TextureHandle g_flatNormalTexture;
     Renderer::TextureHandle g_blackTexture;
+    Renderer::AtmosphereSettings g_atmosphere;
 
     bool isValidStaticMesh(Renderer::StaticMeshHandle handle)
     {
@@ -86,7 +108,7 @@ namespace {
 
     bool isValidMaterial(Renderer::MaterialHandle handle)
     {
-        return handle.id < g_materials.size();
+        return handle.id < g_materials.size() && g_materials[handle.id].alive;
     }
 
     bool isValidMeshInstance(Renderer::MeshInstanceHandle handle)
@@ -97,6 +119,57 @@ namespace {
     bool isValidTerrain(Renderer::TerrainHandle handle)
     {
         return handle.id < g_terrainTiles.size() && g_terrainTiles[handle.id].alive;
+    }
+
+    bool isValidRenderGroup(Renderer::RenderGroupHandle handle)
+    {
+        return handle.id < g_renderGroups.size() && g_renderGroups[handle.id].alive;
+    }
+
+    uint32_t layerBits(Renderer::RenderLayer layer)
+    {
+        return static_cast<uint32_t>(layer);
+    }
+
+    uint32_t visibilityBits(Renderer::VisibilityFlags flags)
+    {
+        return static_cast<uint32_t>(flags);
+    }
+
+    bool passesLayerAndFlags(const Renderer::RenderVisibility& visibility, uint32_t layerMask)
+    {
+        return (visibilityBits(visibility.flags) & visibilityBits(Renderer::VisibilityFlags::Visible)) != 0 &&
+            (layerBits(visibility.layer) & layerMask) != 0;
+    }
+
+    Renderer::RenderGroupDrawStats* findGroupStats(
+        Renderer::SceneDrawStats& stats,
+        Renderer::RenderGroupHandle group)
+    {
+        if (!isValidRenderGroup(group)) {
+            return nullptr;
+        }
+
+        const auto existing = std::find_if(
+            stats.renderGroups.begin(),
+            stats.renderGroups.end(),
+            [group](const Renderer::RenderGroupDrawStats& entry) {
+                return entry.group.id == group.id;
+            }
+        );
+        if (existing != stats.renderGroups.end()) {
+            return &(*existing);
+        }
+
+        const RenderGroupResource& resource = g_renderGroups[group.id];
+        Renderer::RenderGroupDrawStats entry;
+        entry.group = group;
+        entry.name = resource.name;
+        entry.hasChunkCoord = resource.hasChunkCoord;
+        entry.chunkX = resource.chunkX;
+        entry.chunkZ = resource.chunkZ;
+        stats.renderGroups.push_back(std::move(entry));
+        return &stats.renderGroups.back();
     }
 
     bool isFiniteVec3(const glm::vec3& value)
@@ -129,6 +202,26 @@ namespace {
     {
         includePoint(bounds, other.min);
         includePoint(bounds, other.max);
+    }
+
+    glm::vec3 centerOf(const Renderer::Aabb& bounds)
+    {
+        return (bounds.min + bounds.max) * 0.5f;
+    }
+
+    bool exceedsMaxDrawDistance(
+        const Renderer::RenderVisibility& visibility,
+        const Renderer::Aabb& worldBounds,
+        const glm::vec3& cameraPosition,
+        bool enabled)
+    {
+        if (!enabled || visibility.maxDrawDistance <= 0.0f || !isValidAabb(worldBounds)) {
+            return false;
+        }
+
+        const float maxDistanceSquared = visibility.maxDrawDistance * visibility.maxDrawDistance;
+        const glm::vec3 offset = cameraPosition - centerOf(worldBounds);
+        return glm::dot(offset, offset) > maxDistanceSquared;
     }
 
     Renderer::Aabb transformAabb(const Renderer::Aabb& bounds, const glm::mat4& transform)
@@ -214,9 +307,31 @@ namespace {
 
     Renderer::MaterialHandle addMaterial(MaterialResource material)
     {
+        material.alive = true;
+        for (uint32_t index = 0; index < g_materials.size(); ++index) {
+            if (!g_materials[index].alive) {
+                g_materials[index] = std::move(material);
+                return {index};
+            }
+        }
+
         const uint32_t id = static_cast<uint32_t>(g_materials.size());
-        g_materials.push_back(material);
+        g_materials.push_back(std::move(material));
         return {id};
+    }
+
+    MaterialResource makeMaterialResource(const Renderer::MaterialDescriptor& descriptor)
+    {
+        MaterialResource material;
+        material.name = descriptor.name;
+        material.baseColorFactor = descriptor.baseColorFactor;
+        material.metallicFactor = descriptor.metallicFactor;
+        material.roughnessFactor = descriptor.roughnessFactor;
+        material.baseColorTexture = Renderer::isValid(descriptor.baseColorTexture) ? descriptor.baseColorTexture : g_whiteTexture;
+        material.normalTexture = Renderer::isValid(descriptor.normalTexture) ? descriptor.normalTexture : g_flatNormalTexture;
+        material.metallicTexture = g_blackTexture;
+        material.roughnessTexture = g_whiteTexture;
+        return material;
     }
 
     Renderer::StaticMeshHandle addMesh(StaticMeshResource mesh)
@@ -248,6 +363,62 @@ namespace {
         const Renderer::TextureHandle texture = Renderer::loadTexture(resolvedTexturePath);
         return Renderer::isValid(texture) ? texture : fallback;
     }
+
+    struct SceneUniforms {
+        glm::vec4 lightDirection{};
+        glm::vec4 sunColorIntensity{};
+        glm::vec4 cameraPosition{};
+        glm::vec4 fogParams{};
+    };
+
+    struct VisibleMeshDrawItem {
+        Renderer::MeshInstanceHandle instance;
+        Renderer::StaticMeshHandle mesh;
+        uint32_t submeshIndex = 0;
+        Renderer::MaterialHandle material;
+        Renderer::RenderGroupHandle renderGroup;
+        glm::mat4 transform{1.0f};
+    };
+
+    void setMaterialAndSceneUniforms(const MaterialResource& material, const SceneUniforms& uniforms)
+    {
+        const Renderer::TextureHandle baseColorTexture = Renderer::isValid(material.baseColorTexture) ? material.baseColorTexture : g_whiteTexture;
+        const Renderer::TextureHandle normalTexture = Renderer::isValid(material.normalTexture) ? material.normalTexture : g_flatNormalTexture;
+        const Renderer::TextureHandle metallicTexture = Renderer::isValid(material.metallicTexture) ? material.metallicTexture : g_blackTexture;
+        const Renderer::TextureHandle roughnessTexture = Renderer::isValid(material.roughnessTexture) ? material.roughnessTexture : g_whiteTexture;
+        const glm::vec4 materialParams{
+            material.metallicFactor,
+            material.roughnessFactor,
+            metallicTexture.id != g_blackTexture.id ? 1.0f : 0.0f,
+            roughnessTexture.id != g_whiteTexture.id ? 1.0f : 0.0f,
+        };
+        const glm::vec4 textureFlags{
+            normalTexture.id != g_flatNormalTexture.id ? 1.0f : 0.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+        };
+
+        bgfx::setUniform(g_baseColorFactor, &material.baseColorFactor[0]);
+        bgfx::setUniform(g_materialParams, &materialParams[0]);
+        bgfx::setUniform(g_textureFlags, &textureFlags[0]);
+        bgfx::setUniform(g_lightDirection, &uniforms.lightDirection[0]);
+        bgfx::setUniform(g_sunColorIntensity, &uniforms.sunColorIntensity[0]);
+        bgfx::setUniform(g_cameraPosition, &uniforms.cameraPosition[0]);
+        bgfx::setUniform(g_fogColor, &g_atmosphere.fogColor[0]);
+        bgfx::setUniform(g_fogParams, &uniforms.fogParams[0]);
+        bgfx::setTexture(0, g_baseColorSampler, getNativeTexture(baseColorTexture));
+        bgfx::setTexture(1, g_normalSampler, getNativeTexture(normalTexture));
+        bgfx::setTexture(2, g_metallicSampler, getNativeTexture(metallicTexture));
+        bgfx::setTexture(3, g_roughnessSampler, getNativeTexture(roughnessTexture));
+    }
+
+    bool sameBatch(const VisibleMeshDrawItem& lhs, const VisibleMeshDrawItem& rhs)
+    {
+        return lhs.mesh.id == rhs.mesh.id &&
+            lhs.submeshIndex == rhs.submeshIndex &&
+            lhs.material.id == rhs.material.id;
+    }
 }
 
 namespace Renderer {
@@ -276,8 +447,13 @@ namespace Renderer {
         g_materialParams = bgfx::createUniform("u_materialParams", bgfx::UniformType::Vec4);
         g_textureFlags = bgfx::createUniform("u_textureFlags", bgfx::UniformType::Vec4);
         g_lightDirection = bgfx::createUniform("u_lightDirection", bgfx::UniformType::Vec4);
+        g_sunColorIntensity = bgfx::createUniform("u_sunColorIntensity", bgfx::UniformType::Vec4);
+        g_cameraPosition = bgfx::createUniform("u_cameraPosition", bgfx::UniformType::Vec4);
+        g_fogColor = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
+        g_fogParams = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
 
         MaterialResource defaultMaterial;
+        defaultMaterial.name = "default";
         defaultMaterial.baseColorTexture = g_whiteTexture;
         defaultMaterial.normalTexture = g_flatNormalTexture;
         defaultMaterial.metallicTexture = g_blackTexture;
@@ -285,6 +461,112 @@ namespace Renderer {
         addMaterial(defaultMaterial);
 
         return true;
+    }
+
+    MaterialHandle createMaterial(const MaterialDescriptor& descriptor)
+    {
+        return addMaterial(makeMaterialResource(descriptor));
+    }
+
+    void destroyMaterial(MaterialHandle material)
+    {
+        if (!isValidMaterial(material) || material.id == 0) {
+            return;
+        }
+
+        for (MeshInstanceResource& instance : g_instances) {
+            if (instance.alive && instance.hasMaterialOverride && instance.materialOverride.id == material.id) {
+                instance.materialOverride = {};
+                instance.hasMaterialOverride = false;
+            }
+        }
+
+        for (TerrainTileResource& terrain : g_terrainTiles) {
+            if (terrain.alive && terrain.material.id == material.id) {
+                terrain.material = MaterialHandle{0};
+            }
+        }
+
+        for (StaticMeshResource& mesh : g_meshes) {
+            if (!mesh.alive) {
+                continue;
+            }
+            for (SubmeshResource& submesh : mesh.submeshes) {
+                if (submesh.material.id == material.id) {
+                    submesh.material = MaterialHandle{0};
+                }
+            }
+        }
+
+        g_materials[material.id] = {};
+    }
+
+    void setMaterialDescriptor(MaterialHandle material, const MaterialDescriptor& descriptor)
+    {
+        if (!isValidMaterial(material)) {
+            return;
+        }
+
+        MaterialResource resource = makeMaterialResource(descriptor);
+        resource.alive = true;
+        g_materials[material.id] = std::move(resource);
+    }
+
+    void setAtmosphereSettings(const AtmosphereSettings& settings)
+    {
+        g_atmosphere = settings;
+        if (glm::length(g_atmosphere.sunDirection) <= 0.0f) {
+            g_atmosphere.sunDirection = {-0.35f, -0.85f, -0.25f};
+        }
+        g_atmosphere.fogDensity = std::max(g_atmosphere.fogDensity, 0.0f);
+        g_atmosphere.sunIntensity = std::max(g_atmosphere.sunIntensity, 0.0f);
+    }
+
+    const AtmosphereSettings& atmosphereSettings()
+    {
+        return g_atmosphere;
+    }
+
+    RenderGroupHandle createRenderGroup(const RenderGroupDescriptor& descriptor)
+    {
+        RenderGroupResource group;
+        group.alive = true;
+        group.name = descriptor.name;
+        group.hasChunkCoord = descriptor.hasChunkCoord;
+        group.chunkX = descriptor.chunkX;
+        group.chunkZ = descriptor.chunkZ;
+
+        for (uint32_t index = 0; index < g_renderGroups.size(); ++index) {
+            if (!g_renderGroups[index].alive) {
+                g_renderGroups[index] = std::move(group);
+                return {index};
+            }
+        }
+
+        const uint32_t id = static_cast<uint32_t>(g_renderGroups.size());
+        g_renderGroups.push_back(std::move(group));
+        return {id};
+    }
+
+    void destroyRenderGroup(RenderGroupHandle group)
+    {
+        if (!isValidRenderGroup(group)) {
+            return;
+        }
+
+        for (MeshInstanceResource& instance : g_instances) {
+            if (instance.alive && instance.renderGroup.id == group.id) {
+                instance.renderGroup = {};
+            }
+        }
+
+        for (TerrainTileResource& terrain : g_terrainTiles) {
+            if (terrain.alive && terrain.renderGroup.id == group.id) {
+                terrain.renderGroup = {};
+            }
+        }
+
+        g_renderGroups[group.id] = {};
     }
 
     void shutdownSceneRenderer()
@@ -308,6 +590,7 @@ namespace Renderer {
         g_meshes.clear();
         g_materials.clear();
         g_instances.clear();
+        g_renderGroups.clear();
 
         for (TerrainTileResource& terrain : g_terrainTiles) {
             if (bgfx::isValid(terrain.vertexBuffer)) {
@@ -330,6 +613,10 @@ namespace Renderer {
             g_materialParams,
             g_textureFlags,
             g_lightDirection,
+            g_sunColorIntensity,
+            g_cameraPosition,
+            g_fogColor,
+            g_fogParams,
         };
         for (bgfx::UniformHandle uniform : uniforms) {
             if (bgfx::isValid(uniform)) {
@@ -507,7 +794,7 @@ namespace Renderer {
     TerrainHandle createTerrainTile(
         const std::vector<MeshVertex>& vertices,
         const std::vector<uint32_t>& indices,
-        TextureHandle baseColorTexture)
+        MaterialHandle material)
     {
         if (vertices.empty() || indices.empty()) {
             return {};
@@ -529,7 +816,7 @@ namespace Renderer {
             BGFX_BUFFER_INDEX32
         );
         terrain.indexCount = static_cast<uint32_t>(indices.size());
-        terrain.baseColorTexture = Renderer::isValid(baseColorTexture) ? baseColorTexture : g_whiteTexture;
+        terrain.material = isValidMaterial(material) ? material : MaterialHandle{0};
 
         for (uint32_t index = 0; index < g_terrainTiles.size(); ++index) {
             if (!g_terrainTiles[index].alive) {
@@ -595,12 +882,110 @@ namespace Renderer {
         g_instances[instance.id].usesExplicitTransform = true;
     }
 
-    void setInstanceBaseColorTexture(MeshInstanceHandle instance, TextureHandle texture)
+    void setInstanceMaterial(MeshInstanceHandle instance, MaterialHandle material)
+    {
+        if (!isValidMeshInstance(instance) || !isValidMaterial(material)) {
+            return;
+        }
+        g_instances[instance.id].materialOverride = material;
+        g_instances[instance.id].hasMaterialOverride = true;
+    }
+
+    void clearInstanceMaterial(MeshInstanceHandle instance)
     {
         if (!isValidMeshInstance(instance)) {
             return;
         }
-        g_instances[instance.id].baseColorOverride = texture;
+        g_instances[instance.id].materialOverride = {};
+        g_instances[instance.id].hasMaterialOverride = false;
+    }
+
+    void setTerrainMaterial(TerrainHandle terrain, MaterialHandle material)
+    {
+        if (!isValidTerrain(terrain) || !isValidMaterial(material)) {
+            return;
+        }
+        g_terrainTiles[terrain.id].material = material;
+    }
+
+    void setInstanceRenderLayer(MeshInstanceHandle instance, RenderLayer layer)
+    {
+        if (!isValidMeshInstance(instance)) {
+            return;
+        }
+        g_instances[instance.id].visibility.layer = layer;
+    }
+
+    void setInstanceVisibilityFlags(MeshInstanceHandle instance, VisibilityFlags flags)
+    {
+        if (!isValidMeshInstance(instance)) {
+            return;
+        }
+        g_instances[instance.id].visibility.flags = flags;
+    }
+
+    void setInstanceMaxDrawDistance(MeshInstanceHandle instance, float maxDrawDistance)
+    {
+        if (!isValidMeshInstance(instance)) {
+            return;
+        }
+        g_instances[instance.id].visibility.maxDrawDistance = maxDrawDistance;
+    }
+
+    void setInstanceRenderGroup(MeshInstanceHandle instance, RenderGroupHandle group)
+    {
+        if (!isValidMeshInstance(instance) || !isValidRenderGroup(group)) {
+            return;
+        }
+        g_instances[instance.id].renderGroup = group;
+    }
+
+    void clearInstanceRenderGroup(MeshInstanceHandle instance)
+    {
+        if (!isValidMeshInstance(instance)) {
+            return;
+        }
+        g_instances[instance.id].renderGroup = {};
+    }
+
+    void setTerrainRenderLayer(TerrainHandle terrain, RenderLayer layer)
+    {
+        if (!isValidTerrain(terrain)) {
+            return;
+        }
+        g_terrainTiles[terrain.id].visibility.layer = layer;
+    }
+
+    void setTerrainVisibilityFlags(TerrainHandle terrain, VisibilityFlags flags)
+    {
+        if (!isValidTerrain(terrain)) {
+            return;
+        }
+        g_terrainTiles[terrain.id].visibility.flags = flags;
+    }
+
+    void setTerrainMaxDrawDistance(TerrainHandle terrain, float maxDrawDistance)
+    {
+        if (!isValidTerrain(terrain)) {
+            return;
+        }
+        g_terrainTiles[terrain.id].visibility.maxDrawDistance = maxDrawDistance;
+    }
+
+    void setTerrainRenderGroup(TerrainHandle terrain, RenderGroupHandle group)
+    {
+        if (!isValidTerrain(terrain) || !isValidRenderGroup(group)) {
+            return;
+        }
+        g_terrainTiles[terrain.id].renderGroup = group;
+    }
+
+    void clearTerrainRenderGroup(TerrainHandle terrain)
+    {
+        if (!isValidTerrain(terrain)) {
+            return;
+        }
+        g_terrainTiles[terrain.id].renderGroup = {};
     }
 
     SceneDrawStats drawScene(const RenderView& view)
@@ -611,11 +996,25 @@ namespace Renderer {
         }
 
         const Frustum frustum = makeFrustum(view.viewProjection);
-        const glm::vec4 lightDirection = glm::normalize(glm::vec4{-0.35f, -0.85f, -0.25f, 0.0f});
+        const glm::vec3 sunDirection = glm::normalize(g_atmosphere.sunDirection);
+        const SceneUniforms sceneUniforms{
+            glm::vec4{sunDirection, 0.0f},
+            glm::vec4{
+            g_atmosphere.sunColor.r,
+            g_atmosphere.sunColor.g,
+            g_atmosphere.sunColor.b,
+            g_atmosphere.sunIntensity,
+            },
+            glm::vec4{view.cameraPosition, 1.0f},
+            glm::vec4{
+            g_atmosphere.fogEnabled ? std::max(g_atmosphere.fogDensity, 0.0f) : 0.0f,
+            g_atmosphere.fogEnabled ? 1.0f : 0.0f,
+            0.0f,
+            0.0f,
+            },
+        };
         const glm::mat4 identity{1.0f};
-        const glm::vec4 whiteFactor{1.0f};
-        const glm::vec4 terrainMaterialParams{0.0f, 1.0f, 0.0f, 0.0f};
-        const glm::vec4 noTextureFlags{0.0f};
+        std::vector<VisibleMeshDrawItem> visibleMeshDrawItems;
 
         for (const TerrainTileResource& terrain : g_terrainTiles) {
             if (!terrain.alive ||
@@ -624,25 +1023,54 @@ namespace Renderer {
                 continue;
             }
             ++stats.liveTerrainTiles;
+            Renderer::RenderGroupDrawStats* groupStats = findGroupStats(stats, terrain.renderGroup);
+            if (groupStats) {
+                ++groupStats->liveTerrainTiles;
+            }
+            if (!passesLayerAndFlags(terrain.visibility, view.layerMask)) {
+                ++stats.layerOrFlagCulledTerrainTiles;
+                if (groupStats) {
+                    ++groupStats->layerOrFlagCulledTerrainTiles;
+                }
+                continue;
+            }
             if (terrain.hasBounds && !intersects(frustum, terrain.worldBounds)) {
+                ++stats.frustumCulledTerrainTiles;
+                if (groupStats) {
+                    ++groupStats->frustumCulledTerrainTiles;
+                }
+                continue;
+            }
+            if (terrain.hasBounds && exceedsMaxDrawDistance(
+                terrain.visibility,
+                terrain.worldBounds,
+                view.cameraPosition,
+                view.enableDistanceCulling)) {
+                ++stats.distanceCulledTerrainTiles;
+                if (groupStats) {
+                    ++groupStats->distanceCulledTerrainTiles;
+                }
                 continue;
             }
             ++stats.visibleTerrainTiles;
+            if (groupStats) {
+                ++groupStats->visibleTerrainTiles;
+            }
+
+            const MaterialResource& material = isValidMaterial(terrain.material)
+                ? g_materials[terrain.material.id]
+                : g_materials[0];
 
             bgfx::setTransform(&identity[0][0]);
-            bgfx::setUniform(g_baseColorFactor, &whiteFactor[0]);
-            bgfx::setUniform(g_materialParams, &terrainMaterialParams[0]);
-            bgfx::setUniform(g_textureFlags, &noTextureFlags[0]);
-            bgfx::setUniform(g_lightDirection, &lightDirection[0]);
-            bgfx::setTexture(0, g_baseColorSampler, getNativeTexture(terrain.baseColorTexture));
-            bgfx::setTexture(1, g_normalSampler, getNativeTexture(g_flatNormalTexture));
-            bgfx::setTexture(2, g_metallicSampler, getNativeTexture(g_blackTexture));
-            bgfx::setTexture(3, g_roughnessSampler, getNativeTexture(g_whiteTexture));
+            setMaterialAndSceneUniforms(material, sceneUniforms);
             bgfx::setVertexBuffer(0, terrain.vertexBuffer);
             bgfx::setIndexBuffer(terrain.indexBuffer, 0, terrain.indexCount);
             bgfx::setState(BGFX_STATE_DEFAULT | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
             bgfx::submit(view.viewId, g_meshProgram);
             ++stats.submittedTerrainTiles;
+            if (groupStats) {
+                ++groupStats->submittedTerrainTiles;
+            }
         }
 
         for (const MeshInstanceResource& instance : g_instances) {
@@ -650,64 +1078,132 @@ namespace Renderer {
                 continue;
             }
             ++stats.liveMeshInstances;
+            Renderer::RenderGroupDrawStats* groupStats = findGroupStats(stats, instance.renderGroup);
+            if (groupStats) {
+                ++groupStats->liveMeshInstances;
+            }
+            if (!passesLayerAndFlags(instance.visibility, view.layerMask)) {
+                ++stats.layerOrFlagCulledMeshInstances;
+                if (groupStats) {
+                    ++groupStats->layerOrFlagCulledMeshInstances;
+                }
+                continue;
+            }
 
             const glm::mat4 transform = composeTransform(instance);
             const StaticMeshResource& mesh = g_meshes[instance.mesh.id];
-            if (mesh.hasBounds && !intersects(frustum, transformAabb(mesh.localBounds, transform))) {
+            const Aabb worldBounds = mesh.hasBounds ? transformAabb(mesh.localBounds, transform) : Aabb{};
+            if (mesh.hasBounds && !intersects(frustum, worldBounds)) {
+                ++stats.frustumCulledMeshInstances;
+                if (groupStats) {
+                    ++groupStats->frustumCulledMeshInstances;
+                }
+                continue;
+            }
+            if (mesh.hasBounds && exceedsMaxDrawDistance(
+                instance.visibility,
+                worldBounds,
+                view.cameraPosition,
+                view.enableDistanceCulling)) {
+                ++stats.distanceCulledMeshInstances;
+                if (groupStats) {
+                    ++groupStats->distanceCulledMeshInstances;
+                }
                 continue;
             }
             ++stats.visibleMeshInstances;
-
-            bgfx::setTransform(&transform[0][0]);
+            if (groupStats) {
+                ++groupStats->visibleMeshInstances;
+            }
 
             bool submittedInstance = false;
-            for (const SubmeshResource& submesh : mesh.submeshes) {
+            for (uint32_t submeshIndex = 0; submeshIndex < mesh.submeshes.size(); ++submeshIndex) {
+                const SubmeshResource& submesh = mesh.submeshes[submeshIndex];
                 if (!bgfx::isValid(submesh.vertexBuffer) ||
                     !bgfx::isValid(submesh.indexBuffer) ||
                     !isValidMaterial(submesh.material)) {
                     continue;
                 }
 
-                const MaterialResource& material = g_materials[submesh.material.id];
-                const TextureHandle baseColorTexture = Renderer::isValid(instance.baseColorOverride)
-                    ? instance.baseColorOverride
-                    : material.baseColorTexture;
-                const TextureHandle normalTexture = Renderer::isValid(material.normalTexture) ? material.normalTexture : g_flatNormalTexture;
-                const TextureHandle metallicTexture = Renderer::isValid(material.metallicTexture) ? material.metallicTexture : g_blackTexture;
-                const TextureHandle roughnessTexture = Renderer::isValid(material.roughnessTexture) ? material.roughnessTexture : g_whiteTexture;
+                const MaterialHandle materialHandle = instance.hasMaterialOverride && isValidMaterial(instance.materialOverride)
+                    ? instance.materialOverride
+                    : submesh.material;
+                if (!isValidMaterial(materialHandle)) {
+                    continue;
+                }
 
-                const glm::vec4 materialParams{
-                    material.metallicFactor,
-                    material.roughnessFactor,
-                    metallicTexture.id != g_blackTexture.id ? 1.0f : 0.0f,
-                    roughnessTexture.id != g_whiteTexture.id ? 1.0f : 0.0f,
-                };
-                const glm::vec4 textureFlags{
-                    normalTexture.id != g_flatNormalTexture.id ? 1.0f : 0.0f,
-                    0.0f,
-                    0.0f,
-                    0.0f,
-                };
-
-                bgfx::setUniform(g_baseColorFactor, &material.baseColorFactor[0]);
-                bgfx::setUniform(g_materialParams, &materialParams[0]);
-                bgfx::setUniform(g_textureFlags, &textureFlags[0]);
-                bgfx::setUniform(g_lightDirection, &lightDirection[0]);
-
-                bgfx::setTexture(0, g_baseColorSampler, getNativeTexture(baseColorTexture));
-                bgfx::setTexture(1, g_normalSampler, getNativeTexture(normalTexture));
-                bgfx::setTexture(2, g_metallicSampler, getNativeTexture(metallicTexture));
-                bgfx::setTexture(3, g_roughnessSampler, getNativeTexture(roughnessTexture));
-                bgfx::setVertexBuffer(0, submesh.vertexBuffer);
-                bgfx::setIndexBuffer(submesh.indexBuffer, 0, submesh.indexCount);
-                bgfx::setState(BGFX_STATE_DEFAULT | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
-                bgfx::submit(view.viewId, g_meshProgram);
+                visibleMeshDrawItems.push_back({
+                    MeshInstanceHandle{static_cast<uint32_t>(&instance - g_instances.data())},
+                    instance.mesh,
+                    submeshIndex,
+                    materialHandle,
+                    instance.renderGroup,
+                    transform,
+                });
                 submittedInstance = true;
             }
 
             if (submittedInstance) {
                 ++stats.submittedMeshInstances;
+                if (groupStats) {
+                    ++groupStats->submittedMeshInstances;
+                }
             }
+        }
+
+        std::sort(
+            visibleMeshDrawItems.begin(),
+            visibleMeshDrawItems.end(),
+            [](const VisibleMeshDrawItem& lhs, const VisibleMeshDrawItem& rhs) {
+                if (lhs.mesh.id != rhs.mesh.id) {
+                    return lhs.mesh.id < rhs.mesh.id;
+                }
+                if (lhs.submeshIndex != rhs.submeshIndex) {
+                    return lhs.submeshIndex < rhs.submeshIndex;
+                }
+                if (lhs.material.id != rhs.material.id) {
+                    return lhs.material.id < rhs.material.id;
+                }
+                return lhs.instance.id < rhs.instance.id;
+            }
+        );
+
+        stats.visibleMeshDrawItems = static_cast<uint32_t>(visibleMeshDrawItems.size());
+        uint32_t currentBatchSize = 0;
+        VisibleMeshDrawItem previousItem;
+        bool hasPreviousItem = false;
+        for (const VisibleMeshDrawItem& item : visibleMeshDrawItems) {
+            if (!isValidStaticMesh(item.mesh) || item.submeshIndex >= g_meshes[item.mesh.id].submeshes.size() || !isValidMaterial(item.material)) {
+                continue;
+            }
+
+            if (!hasPreviousItem || !sameBatch(previousItem, item)) {
+                if (currentBatchSize > stats.largestMeshBatchSize) {
+                    stats.largestMeshBatchSize = currentBatchSize;
+                }
+                currentBatchSize = 0;
+                ++stats.meshBatchCount;
+                hasPreviousItem = true;
+            }
+            previousItem = item;
+            ++currentBatchSize;
+
+            const SubmeshResource& submesh = g_meshes[item.mesh.id].submeshes[item.submeshIndex];
+            if (!bgfx::isValid(submesh.vertexBuffer) || !bgfx::isValid(submesh.indexBuffer)) {
+                continue;
+            }
+
+            const MaterialResource& material = g_materials[item.material.id];
+            bgfx::setTransform(&item.transform[0][0]);
+            setMaterialAndSceneUniforms(material, sceneUniforms);
+            bgfx::setVertexBuffer(0, submesh.vertexBuffer);
+            bgfx::setIndexBuffer(submesh.indexBuffer, 0, submesh.indexCount);
+            bgfx::setState(BGFX_STATE_DEFAULT | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
+            bgfx::submit(view.viewId, g_meshProgram);
+            ++stats.submittedMeshDrawItems;
+        }
+        if (currentBatchSize > stats.largestMeshBatchSize) {
+            stats.largestMeshBatchSize = currentBatchSize;
         }
 
         return stats;

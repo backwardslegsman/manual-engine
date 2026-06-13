@@ -2,11 +2,6 @@ input:
   actions:
     camera.pan:
       axis2:
-        keys:
-          positive_y: [W, Up]
-          negative_y: [S, Down]
-          positive_x: [A, Left]
-          negative_x: [D, Right]
         mouse_drag:
           button: Right
           scale: [1.0, 1.0]
@@ -19,3 +14,10 @@ input:
     camera.zoom:
       scalar:
         mouse_wheel_y: -1.0
+    player.move:
+      axis2:
+        keys:
+          positive_y: [W]
+          negative_y: [S]
+          positive_x: [D]
+          negative_x: [A]

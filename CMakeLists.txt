@@ -17,6 +17,7 @@ find_package(yaml-cpp CONFIG REQUIRED)
 add_executable(manual_engine
     src/App/main.cpp
     src/Assets/Assimp/Importer.cpp
+    src/Engine/ActorController.cpp
     src/Engine/AssetCache.cpp
     src/Engine/ChunkStreamer.cpp
     src/Engine/ChunkTypes.cpp
@@ -24,8 +25,12 @@ add_executable(manual_engine
     src/Engine/FixedStepLoop.cpp
     src/Engine/InputMapping.cpp
     src/Engine/OrbitCamera.cpp
+    src/Engine/Picking.cpp
+    src/Engine/ProceduralChunkContent.cpp
+    src/Engine/SpatialRegistry.cpp
     src/Engine/Terrain.cpp
     src/Engine/World.cpp
+    src/Engine/WorldState.cpp
     src/Engine/input.cpp
     src/Renderer/DebugUi.cpp
     src/Renderer/Scene.cpp

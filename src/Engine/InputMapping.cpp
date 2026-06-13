@@ -114,13 +114,17 @@ namespace Engine {
 
         Axis2Action pan;
         pan.action = "camera.pan";
-        pan.keys.positiveY = {Key::W, Key::Up};
-        pan.keys.negativeY = {Key::S, Key::Down};
-        pan.keys.positiveX = {Key::A, Key::Left};
-        pan.keys.negativeX = {Key::D, Key::Right};
         pan.mouseDrag = MouseDragAxis{MouseButton::Right, {1.0f, 1.0f}};
         pan.edgeScroll = true;
         mapping.axis2Actions_.push_back(pan);
+
+        Axis2Action playerMove;
+        playerMove.action = "player.move";
+        playerMove.keys.positiveY = {Key::W};
+        playerMove.keys.negativeY = {Key::S};
+        playerMove.keys.positiveX = {Key::D};
+        playerMove.keys.negativeX = {Key::A};
+        mapping.axis2Actions_.push_back(playerMove);
 
         Axis2Action rotate;
         rotate.action = "camera.rotate";

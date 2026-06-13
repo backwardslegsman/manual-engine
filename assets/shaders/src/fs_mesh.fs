@@ -1,4 +1,4 @@
-$input v_texcoord0, v_normal, v_tangent
+$input v_texcoord0, v_normal, v_tangent, v_worldPos
 
 #include <bgfx_shader.sh>
 
@@ -11,6 +11,10 @@ uniform vec4 u_baseColorFactor;
 uniform vec4 u_materialParams;
 uniform vec4 u_textureFlags;
 uniform vec4 u_lightDirection;
+uniform vec4 u_sunColorIntensity;
+uniform vec4 u_cameraPosition;
+uniform vec4 u_fogColor;
+uniform vec4 u_fogParams;
 
 void main()
 {
@@ -39,10 +43,16 @@ void main()
     float specPower = mix(64.0, 8.0, roughness);
     float specular = pow(ndoth, specPower) * (1.0 - roughness);
 
-    vec3 diffuse = baseColor.rgb * ndotl * (1.0 - metallic);
-    vec3 metalSpecular = baseColor.rgb * specular * metallic;
-    vec3 dielectricSpecular = vec3(0.04, 0.04, 0.04) * specular * (1.0 - metallic);
+    vec3 sunLight = u_sunColorIntensity.rgb * u_sunColorIntensity.a;
+    vec3 diffuse = baseColor.rgb * ndotl * (1.0 - metallic) * sunLight;
+    vec3 metalSpecular = baseColor.rgb * specular * metallic * sunLight;
+    vec3 dielectricSpecular = vec3(0.04, 0.04, 0.04) * specular * (1.0 - metallic) * sunLight;
     vec3 ambient = baseColor.rgb * 0.08;
+    vec3 litColor = ambient + diffuse + metalSpecular + dielectricSpecular;
 
-    gl_FragColor = vec4(ambient + diffuse + metalSpecular + dielectricSpecular, baseColor.a);
+    float fogDistance = distance(u_cameraPosition.xyz, v_worldPos);
+    float fogFactor = clamp(1.0 - exp(-fogDistance * max(u_fogParams.x, 0.0)), 0.0, 1.0) * u_fogParams.y;
+    vec3 finalColor = mix(litColor, u_fogColor.rgb, fogFactor);
+
+    gl_FragColor = vec4(finalColor, baseColor.a);
 }

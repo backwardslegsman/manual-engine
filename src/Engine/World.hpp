@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -39,7 +40,13 @@ namespace Engine {
         void setScale(WorldObjectHandle object, const glm::vec3& scale);
         void setTransform(WorldObjectHandle object, const Transform& transform);
         void setAngularVelocity(WorldObjectHandle object, const glm::vec3& radiansPerSecond);
+        void setLocalBounds(WorldObjectHandle object, const Renderer::Aabb& bounds);
+        void clearLocalBounds(WorldObjectHandle object);
         void attachRendererInstance(WorldObjectHandle object, Renderer::MeshInstanceHandle instance);
+        bool isValid(WorldObjectHandle object) const;
+        std::optional<Transform> transform(WorldObjectHandle object) const;
+        std::optional<glm::vec3> position(WorldObjectHandle object) const;
+        std::optional<Renderer::Aabb> worldBounds(WorldObjectHandle object) const;
         Renderer::MeshInstanceHandle rendererInstance(WorldObjectHandle object) const;
 
         void fixedUpdate(float dt);
@@ -52,6 +59,8 @@ namespace Engine {
             glm::vec3 angularVelocity{};
             Renderer::MeshInstanceHandle rendererInstance;
             bool hasRendererInstance = false;
+            Renderer::Aabb localBounds;
+            bool hasLocalBounds = false;
         };
 
         bool isAlive(WorldObjectHandle object) const;

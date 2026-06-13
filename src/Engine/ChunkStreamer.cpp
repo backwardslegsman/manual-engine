@@ -16,7 +16,8 @@ namespace Engine {
         const glm::vec3& centerWorldPosition,
         World& world,
         TerrainSystem& terrain,
-        const ChunkContentFactory& factory)
+        const ChunkContentFactory& factory,
+        SpatialRegistry* spatialRegistry)
     {
         const ChunkCoord center = coordForWorldPosition(centerWorldPosition);
         const std::vector<ChunkCoord> desired = desiredChunksAround(center);
@@ -30,7 +31,7 @@ namespace Engine {
         }
 
         for (ChunkCoord coord : chunksToUnload) {
-            unloadChunk(coord, world, terrain);
+            unloadChunk(coord, world, terrain, spatialRegistry);
         }
 
         for (ChunkCoord coord : desired) {
@@ -45,10 +46,10 @@ namespace Engine {
         }
 
         const ChunkContent content = factory(coord, world, terrain);
-        activeChunks_.insert({coord, ActiveChunk{content.terrain, content.objects}});
+        activeChunks_.insert({coord, ActiveChunk{content.terrain, content.objects, content.renderGroup}});
     }
 
-    void ChunkStreamer::unloadChunk(ChunkCoord coord, World& world, TerrainSystem& terrain)
+    void ChunkStreamer::unloadChunk(ChunkCoord coord, World& world, TerrainSystem& terrain, SpatialRegistry* spatialRegistry)
     {
         const auto chunkIt = activeChunks_.find(coord);
         if (chunkIt == activeChunks_.end()) {
@@ -56,13 +57,17 @@ namespace Engine {
         }
 
         for (WorldObjectHandle object : chunkIt->second.objects) {
+            if (spatialRegistry) {
+                spatialRegistry->remove(object);
+            }
             world.destroyObjectAndRendererInstance(object);
         }
         terrain.destroyTile(chunkIt->second.terrain);
+        Renderer::destroyRenderGroup(chunkIt->second.renderGroup);
         activeChunks_.erase(chunkIt);
     }
 
-    void ChunkStreamer::unloadAll(World& world, TerrainSystem& terrain)
+    void ChunkStreamer::unloadAll(World& world, TerrainSystem& terrain, SpatialRegistry* spatialRegistry)
     {
         std::vector<ChunkCoord> loadedCoords;
         loadedCoords.reserve(activeChunks_.size());
@@ -71,7 +76,7 @@ namespace Engine {
         }
 
         for (ChunkCoord coord : loadedCoords) {
-            unloadChunk(coord, world, terrain);
+            unloadChunk(coord, world, terrain, spatialRegistry);
         }
     }
 
@@ -106,6 +111,14 @@ namespace Engine {
         }
 
         return chunks;
+    }
+
+    void ChunkStreamer::forEachLoadedChunkContent(
+        const std::function<void(TerrainTileHandle, const std::vector<WorldObjectHandle>&, Renderer::RenderGroupHandle)>& visitor) const
+    {
+        for (const auto& [_, chunk] : activeChunks_) {
+            visitor(chunk.terrain, chunk.objects, chunk.renderGroup);
+        }
     }
 
     const ChunkSettings& ChunkStreamer::settings() const
