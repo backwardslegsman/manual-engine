@@ -10,7 +10,15 @@
       ]
     },
     "glm",
-    "sdl3"
+    {
+      "name": "imgui",
+      "features": [
+        "sdl3-binding"
+      ]
+    },
+    "sdl3",
+    "stb",
+    "yaml-cpp"
   ],
   "builtin-baseline": "c16c1bd46c7f6de21efc6dcf19c1069d6825df23"
 }

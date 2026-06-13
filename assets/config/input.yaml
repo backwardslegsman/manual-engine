@@ -1,0 +1,21 @@
+input:
+  actions:
+    camera.pan:
+      axis2:
+        keys:
+          positive_y: [W, Up]
+          negative_y: [S, Down]
+          positive_x: [A, Left]
+          negative_x: [D, Right]
+        mouse_drag:
+          button: Right
+          scale: [1.0, 1.0]
+        edge_scroll: true
+    camera.rotate:
+      axis2:
+        mouse_drag:
+          button: Middle
+          scale: [1.0, -1.0]
+    camera.zoom:
+      scalar:
+        mouse_wheel_y: -1.0

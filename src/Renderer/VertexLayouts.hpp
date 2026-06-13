@@ -12,5 +12,21 @@ namespace Renderer {
             static bgfx::VertexLayout layout;
     };
 
+    struct MeshVertex {
+        float px;
+        float py;
+        float pz;
+        float nx;
+        float ny;
+        float nz;
+        float tx;
+        float ty;
+        float tz;
+        float u;
+        float v;
+
+        static bgfx::VertexLayout layout;
+    };
+
     void configureVertexLayouts();
 }
