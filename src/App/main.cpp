@@ -1,8 +1,9 @@
 #include <SDL3/SDL.h>
 #include <bgfx/bgfx.h>
 
-#include <array>
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,7 +14,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 
+#include "Engine/ActorCommand.hpp"
 #include "Engine/ActorController.hpp"
+#include "Engine/ActorSelection.hpp"
 #include "Engine/AssetCache.hpp"
 #include "Engine/Biome.hpp"
 #include "Engine/BlockingCollision.hpp"
@@ -23,6 +26,7 @@
 #include "Engine/InputMapping.hpp"
 #include "Engine/InteractionHandlerSystem.hpp"
 #include "Engine/InteractionSystem.hpp"
+#include "Engine/Navigation.hpp"
 #include "Engine/ObjectArchetype.hpp"
 #include "Engine/OrbitCamera.hpp"
 #include "Engine/PersistentObjectEditor.hpp"
@@ -44,6 +48,9 @@ namespace {
     constexpr float DebugPickMaxDistance = 500.0f;
     constexpr float DebugPickTerrainStep = 1.0f;
     constexpr float DebugPickObjectQueryMargin = 2.0f;
+    constexpr float DestinationClickDragThresholdPixels = 6.0f;
+    constexpr float ActorSelectionDragThresholdPixels = 6.0f;
+    constexpr float FormationSpacing = 1.5f;
 
     struct RuntimeObjectArchetypeVisual {
         std::string id;
@@ -58,6 +65,60 @@ namespace {
         Engine::CachedTexture texture;
         Renderer::MaterialHandle material;
     };
+
+    struct NavigationBlockerStats {
+        uint32_t vertices = 0;
+        uint32_t triangles = 0;
+    };
+
+    bool validBounds(const Renderer::Aabb& bounds)
+    {
+        return std::isfinite(bounds.min.x) &&
+            std::isfinite(bounds.min.y) &&
+            std::isfinite(bounds.min.z) &&
+            std::isfinite(bounds.max.x) &&
+            std::isfinite(bounds.max.y) &&
+            std::isfinite(bounds.max.z) &&
+            bounds.min.x <= bounds.max.x &&
+            bounds.min.y <= bounds.max.y &&
+            bounds.min.z <= bounds.max.z;
+    }
+
+    void appendAabbNavigationBlocker(Engine::NavigationTerrainBuildData& buildData, const Renderer::Aabb& bounds)
+    {
+        if (!validBounds(bounds)) {
+            return;
+        }
+
+        const uint32_t base = static_cast<uint32_t>(buildData.blockingVertices.size());
+        buildData.blockingVertices.push_back({bounds.min.x, bounds.min.y, bounds.min.z});
+        buildData.blockingVertices.push_back({bounds.max.x, bounds.min.y, bounds.min.z});
+        buildData.blockingVertices.push_back({bounds.max.x, bounds.min.y, bounds.max.z});
+        buildData.blockingVertices.push_back({bounds.min.x, bounds.min.y, bounds.max.z});
+        buildData.blockingVertices.push_back({bounds.min.x, bounds.max.y, bounds.min.z});
+        buildData.blockingVertices.push_back({bounds.max.x, bounds.max.y, bounds.min.z});
+        buildData.blockingVertices.push_back({bounds.max.x, bounds.max.y, bounds.max.z});
+        buildData.blockingVertices.push_back({bounds.min.x, bounds.max.y, bounds.max.z});
+
+        constexpr uint32_t boxIndices[] = {
+            0, 1, 2, 0, 2, 3,
+            4, 6, 5, 4, 7, 6,
+            0, 4, 5, 0, 5, 1,
+            1, 5, 6, 1, 6, 2,
+            2, 6, 7, 2, 7, 3,
+            3, 7, 4, 3, 4, 0,
+        };
+        for (uint32_t index : boxIndices) {
+            buildData.blockingIndices.push_back(base + index);
+        }
+
+        buildData.bounds.min.x = std::min(buildData.bounds.min.x, bounds.min.x);
+        buildData.bounds.min.y = std::min(buildData.bounds.min.y, bounds.min.y);
+        buildData.bounds.min.z = std::min(buildData.bounds.min.z, bounds.min.z);
+        buildData.bounds.max.x = std::max(buildData.bounds.max.x, bounds.max.x);
+        buildData.bounds.max.y = std::max(buildData.bounds.max.y, bounds.max.y);
+        buildData.bounds.max.z = std::max(buildData.bounds.max.z, bounds.max.z);
+    }
 
     uint32_t clearColorFromLinearRgba(const glm::vec4& color)
     {
@@ -117,6 +178,86 @@ namespace {
             static_cast<uint32_t>(r);
     }
 
+    const char* navStatusName(Engine::NavQueryStatus status)
+    {
+        switch (status) {
+            case Engine::NavQueryStatus::Success:
+                return "success";
+            case Engine::NavQueryStatus::NotInitialized:
+                return "not initialized";
+            case Engine::NavQueryStatus::NoTile:
+                return "no tile";
+            case Engine::NavQueryStatus::NoNearestPoly:
+                return "no nearest polygon";
+            case Engine::NavQueryStatus::NoPath:
+                return "no path";
+            case Engine::NavQueryStatus::InvalidInput:
+                return "invalid input";
+            case Engine::NavQueryStatus::Unsupported:
+                return "unsupported";
+        }
+        return "unknown";
+    }
+
+    const char* actorPathStatusName(Engine::ActorPathStatus status)
+    {
+        switch (status) {
+            case Engine::ActorPathStatus::Idle:
+                return "idle";
+            case Engine::ActorPathStatus::Pathing:
+                return "pathing";
+            case Engine::ActorPathStatus::Moving:
+                return "moving";
+            case Engine::ActorPathStatus::Blocked:
+                return "blocked";
+            case Engine::ActorPathStatus::Repathing:
+                return "repathing";
+            case Engine::ActorPathStatus::Arrived:
+                return "arrived";
+            case Engine::ActorPathStatus::Failed:
+                return "failed";
+            case Engine::ActorPathStatus::Cancelled:
+                return "cancelled";
+        }
+        return "unknown";
+    }
+
+    Renderer::DebugUi::NavigationAgentDebugSettings toDebugAgentSettings(const Engine::NavAgentSettings& settings)
+    {
+        return {
+            settings.radius,
+            settings.height,
+            settings.maxSlopeDegrees,
+            settings.maxClimb,
+        };
+    }
+
+    Engine::NavAgentSettings toEngineAgentSettings(const Renderer::DebugUi::NavigationAgentDebugSettings& settings)
+    {
+        return {
+            settings.radius,
+            settings.height,
+            settings.maxSlopeDegrees,
+            settings.maxClimb,
+        };
+    }
+
+    Renderer::DebugUi::NavigationBuildDebugSettings toDebugBuildSettings(const Engine::NavBuildSettings& settings)
+    {
+        return {
+            settings.cellSize,
+            settings.cellHeight,
+        };
+    }
+
+    void applyDebugBuildSettings(
+        const Renderer::DebugUi::NavigationBuildDebugSettings& debugSettings,
+        Engine::NavBuildSettings& settings)
+    {
+        settings.cellSize = debugSettings.cellSize;
+        settings.cellHeight = debugSettings.cellHeight;
+    }
+
     std::string joinTags(const std::vector<std::string>& tags)
     {
         std::string result;
@@ -135,6 +276,15 @@ namespace {
             return event.action == actionName &&
                 event.payloadType == Engine::InputActionPayloadType::Digital &&
                 event.phase == Engine::InputActionPhase::Pressed;
+        });
+    }
+
+    bool releasedAction(const Engine::EventQueue& events, std::string_view actionName)
+    {
+        return std::ranges::any_of(events.inputActions(), [actionName](const Engine::InputActionEvent& event) {
+            return event.action == actionName &&
+                event.payloadType == Engine::InputActionPayloadType::Digital &&
+                event.phase == Engine::InputActionPhase::Released;
         });
     }
 
@@ -420,6 +570,16 @@ namespace {
         stats.collisionHitCount = state->collisionHitCount;
         stats.firstBlockingObjectId = state->firstBlockingObject.id;
         stats.firstBlockingStableId = state->firstBlockingObjectId.toString();
+        stats.pathStatus = actorPathStatusName(state->path.status);
+        stats.pathDestination = state->path.destination;
+        stats.pathPointCount = static_cast<uint32_t>(state->path.path.points.size());
+        stats.pathCurrentCorner = state->path.currentCorner;
+        stats.pathArrivalRadius = state->path.settings.arrivalRadius;
+        stats.pathCornerAdvanceRadius = state->path.settings.cornerAdvanceRadius;
+        stats.pathBlockedTicks = state->path.blockedTicks;
+        stats.pathRepathAttemptsUsed = state->path.repathAttemptsUsed;
+        stats.pathLastQueryStatus = navStatusName(state->path.lastQueryStatus);
+        stats.pathLastQueryMessage = state->path.lastQueryMessage;
         if (const std::optional<float> groundHeight = terrain.sampleHeight(stats.position.x, stats.position.z)) {
             stats.hasGroundHeight = true;
             stats.groundHeight = *groundHeight;
@@ -434,9 +594,15 @@ namespace {
         const Engine::World& world,
         const Engine::ChunkStreamer& chunkStreamer,
         const Engine::TerrainSystem& terrain,
+        const Engine::NavigationSystem& navigation,
+        const std::unordered_set<Engine::ChunkCoord, Engine::ChunkCoordHash>& navigationChunks,
+        const Engine::NavAgentSettings& navAgent,
         Engine::WorldObjectHandle playerObject,
         const Engine::ActorController& actors,
-        Engine::ActorHandle playerActor)
+        Engine::ActorHandle playerActor,
+        const Engine::ActorSelection& actorSelection,
+        const std::vector<glm::vec3>& formationDestinations,
+        const std::vector<glm::vec3>& failedFormationDestinations)
     {
         Renderer::clearDebugPrimitives();
         if (!settings.enabled) {
@@ -447,8 +613,14 @@ namespace {
         constexpr uint32_t CollisionColor = debugColorAbgr(255, 64, 64);
         constexpr uint32_t ChunkColor = debugColorAbgr(70, 120, 255);
         constexpr uint32_t TerrainColor = debugColorAbgr(80, 220, 240);
+        constexpr uint32_t NavigationColor = debugColorAbgr(160, 255, 80);
+        constexpr uint32_t NavigationMeshColor = debugColorAbgr(80, 180, 255);
+        constexpr uint32_t NavigationNearestColor = debugColorAbgr(255, 255, 80);
+        constexpr uint32_t NavigationBlockerColor = debugColorAbgr(255, 120, 40);
         constexpr uint32_t FrustumColor = debugColorAbgr(255, 80, 255);
         constexpr uint32_t ActorColor = debugColorAbgr(80, 255, 120);
+        constexpr uint32_t ActorCompletedPathColor = debugColorAbgr(60, 120, 80);
+        constexpr uint32_t ActorWarningColor = debugColorAbgr(255, 180, 40);
 
         if (settings.selectedBounds && selection.selectedObject && world.isValid(selection.selectedObject->object)) {
             if (const std::optional<Renderer::Aabb> bounds = world.worldBounds(selection.selectedObject->object)) {
@@ -491,6 +663,17 @@ namespace {
                         addCollisionBounds(object);
                     }
                 }
+
+                if (settings.navigationBlockerBounds) {
+                    for (Engine::WorldObjectHandle object : objects) {
+                        if (!world.isValid(object) || object.id == playerObject.id || !world.collisionEnabled(object)) {
+                            continue;
+                        }
+                        if (const std::optional<Renderer::Aabb> bounds = world.worldBounds(object)) {
+                            Renderer::addDebugAabb(*bounds, NavigationBlockerColor);
+                        }
+                    }
+                }
             }
         );
 
@@ -498,23 +681,146 @@ namespace {
             addCollisionBounds(playerObject);
         }
 
+        if (settings.navigationTileBounds) {
+            for (Engine::ChunkCoord coord : navigationChunks) {
+                if (const std::optional<Renderer::Aabb> bounds = navigation.tileBounds(coord)) {
+                    Renderer::addDebugAabb(*bounds, NavigationColor);
+                }
+            }
+        }
+
+        if (settings.navigationMeshEdges) {
+            const Engine::NavigationDebugGeometry geometry = navigation.debugGeometry();
+            for (const Engine::NavDebugLine& edge : geometry.polygonEdges) {
+                Renderer::addDebugLine(edge.a, edge.b, NavigationMeshColor);
+            }
+        }
+
+        if (settings.navigationNearestPoint && selection.terrainHit) {
+            const Engine::NavQueryResult nearest = navigation.nearestNavigablePoint(selection.terrainHit->position, navAgent);
+            if (nearest.status == Engine::NavQueryStatus::Success) {
+                const float markerSize = 0.25f;
+                Renderer::addDebugXZRect(
+                    nearest.point.x - markerSize,
+                    nearest.point.z - markerSize,
+                    nearest.point.x + markerSize,
+                    nearest.point.z + markerSize,
+                    nearest.point.y + 0.08f,
+                    NavigationNearestColor
+                );
+            }
+        }
+
         if (settings.cameraFrustum) {
             Renderer::addDebugFrustum(glm::inverse(renderView.viewProjection), FrustumColor);
         }
 
-        if (settings.actorDestination) {
-            const std::optional<Engine::ActorState> actorState = actors.state(playerActor);
-            if (actorState && actorState->hasMovementDebug) {
+        if (settings.selectedBounds) {
+            for (Engine::ActorHandle actor : actorSelection.selectedActors()) {
+                if (const std::optional<Engine::ActorState> actorState = actors.state(actor)) {
+                    if (world.isValid(actorState->object)) {
+                        if (const std::optional<Renderer::Aabb> bounds = world.worldBounds(actorState->object)) {
+                            Renderer::addDebugAabb(*bounds, SelectedColor);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (settings.actorDestination && settings.navigationCurrentPath) {
+            const auto drawActorPath = [&](Engine::ActorHandle actor) {
+                const std::optional<Engine::ActorState> actorState = actors.state(actor);
+                if (!actorState) {
+                    return;
+                }
+
                 const glm::vec3 currentPosition = world.position(actorState->object).value_or(actorState->resolvedPosition);
-                Renderer::addDebugLine(currentPosition, actorState->desiredPosition, ActorColor);
-                const float markerSize = 0.25f;
+                const Engine::ActorPathState& path = actorState->path;
+                if (path.path.points.size() >= 2) {
+                    for (size_t index = 1; index < path.path.points.size(); ++index) {
+                        const uint32_t segmentColor = index < path.currentCorner
+                            ? ActorCompletedPathColor
+                            : ActorColor;
+                        Renderer::addDebugLine(path.path.points[index - 1], path.path.points[index], segmentColor);
+                    }
+                }
+
+                if (path.status == Engine::ActorPathStatus::Moving ||
+                    path.status == Engine::ActorPathStatus::Blocked ||
+                    path.status == Engine::ActorPathStatus::Repathing ||
+                    path.status == Engine::ActorPathStatus::Failed) {
+                    const uint32_t markerColor =
+                        (path.status == Engine::ActorPathStatus::Blocked ||
+                            path.status == Engine::ActorPathStatus::Repathing ||
+                            path.status == Engine::ActorPathStatus::Failed)
+                        ? ActorWarningColor
+                        : ActorColor;
+                    const float destinationMarker = 0.45f;
+                    Renderer::addDebugXZRect(
+                        path.destination.x - destinationMarker,
+                        path.destination.z - destinationMarker,
+                        path.destination.x + destinationMarker,
+                        path.destination.z + destinationMarker,
+                        path.destination.y + 0.08f,
+                        markerColor
+                    );
+                    if (path.currentCorner < path.path.points.size()) {
+                        constexpr uint32_t TargetCornerColor = debugColorAbgr(180, 255, 180);
+                        const glm::vec3 corner = path.path.points[path.currentCorner];
+                        const float cornerMarker = 0.3f;
+                        Renderer::addDebugXZRect(
+                            corner.x - cornerMarker,
+                            corner.z - cornerMarker,
+                            corner.x + cornerMarker,
+                            corner.z + cornerMarker,
+                            corner.y + 0.1f,
+                            TargetCornerColor
+                        );
+                    }
+                }
+
+                if (actorState->hasMovementDebug) {
+                    Renderer::addDebugLine(currentPosition, actorState->desiredPosition, ActorColor);
+                    const float markerSize = 0.25f;
+                    Renderer::addDebugXZRect(
+                        actorState->resolvedPosition.x - markerSize,
+                        actorState->resolvedPosition.z - markerSize,
+                        actorState->resolvedPosition.x + markerSize,
+                        actorState->resolvedPosition.z + markerSize,
+                        actorState->resolvedPosition.y + 0.05f,
+                        ActorColor
+                    );
+                }
+            };
+
+            if (actorSelection.selectedActors().empty()) {
+                drawActorPath(playerActor);
+            } else {
+                for (Engine::ActorHandle actor : actorSelection.selectedActors()) {
+                    drawActorPath(actor);
+                }
+            }
+
+            for (const glm::vec3& destination : formationDestinations) {
+                const float markerSize = 0.35f;
                 Renderer::addDebugXZRect(
-                    actorState->resolvedPosition.x - markerSize,
-                    actorState->resolvedPosition.z - markerSize,
-                    actorState->resolvedPosition.x + markerSize,
-                    actorState->resolvedPosition.z + markerSize,
-                    actorState->resolvedPosition.y + 0.05f,
+                    destination.x - markerSize,
+                    destination.z - markerSize,
+                    destination.x + markerSize,
+                    destination.z + markerSize,
+                    destination.y + 0.12f,
                     ActorColor
+                );
+            }
+            for (const glm::vec3& destination : failedFormationDestinations) {
+                const float markerSize = 0.4f;
+                Renderer::addDebugXZRect(
+                    destination.x - markerSize,
+                    destination.z - markerSize,
+                    destination.x + markerSize,
+                    destination.z + markerSize,
+                    destination.y + 0.16f,
+                    ActorWarningColor
                 );
             }
         }
@@ -558,9 +864,20 @@ int main(int, char**)
 
     Engine::AssetCache assetCache;
     const Engine::CachedTexture yellowTexture = assetCache.acquireSolidTexture(220, 190, 70);
+    const Engine::CachedTexture squadRedTexture = assetCache.acquireSolidTexture(220, 80, 80);
+    const Engine::CachedTexture squadGreenTexture = assetCache.acquireSolidTexture(80, 200, 120);
+    const Engine::CachedTexture squadBlueTexture = assetCache.acquireSolidTexture(90, 140, 230);
     const Engine::CachedTexture cyanTexture = assetCache.acquireSolidTexture(80, 190, 210);
     constexpr std::array<uint8_t, 4> FallbackTerrainColor{80, 190, 210, 255};
     const Renderer::MaterialHandle yellowMaterial = createMaterial("sample.player", yellowTexture.handle);
+    const Renderer::MaterialHandle squadRedMaterial = createMaterial("sample.squad.red", squadRedTexture.handle);
+    const Renderer::MaterialHandle squadGreenMaterial = createMaterial("sample.squad.green", squadGreenTexture.handle);
+    const Renderer::MaterialHandle squadBlueMaterial = createMaterial("sample.squad.blue", squadBlueTexture.handle);
+    const std::array<Renderer::MaterialHandle, 3> squadMaterials{
+        squadRedMaterial,
+        squadGreenMaterial,
+        squadBlueMaterial,
+    };
     const Renderer::MaterialHandle cyanMaterial = createMaterial("sample.terrain", cyanTexture.handle);
 
     const Engine::ObjectArchetypeLoadResult archetypeLoad =
@@ -636,12 +953,48 @@ int main(int, char**)
     terrainSettings.heightScale = 1.25f;
     terrainSettings.biomes = &biomes;
     Engine::TerrainSystem terrain(terrainSettings);
+    Engine::NavBuildSettings navBuildSettings;
+    Engine::NavigationSystem navigation(navBuildSettings);
+    Engine::NavAgentSettings playerNavAgent;
+    Renderer::DebugUi::NavigationDebugControls navigationDebugControls;
+    navigationDebugControls.agent = toDebugAgentSettings(playerNavAgent);
+    navigationDebugControls.build = toDebugBuildSettings(navBuildSettings);
+    std::unordered_set<Engine::ChunkCoord, Engine::ChunkCoordHash> navigationChunks;
+    NavigationBlockerStats navigationBlockerStats;
+    std::optional<Engine::ChunkCoord> lastRebuiltNavigationChunk;
+    Engine::WorldObjectHandle playerObject;
+    Engine::ActorHandle playerActor;
+    std::vector<Engine::ActorHandle> demoActors;
+    std::vector<Engine::WorldObjectHandle> demoActorObjects;
+    Engine::ActorSelection actorSelection;
+    bool actorSelectionPressActive = false;
+    bool actorSelectionDragging = false;
+    glm::vec2 actorSelectionDragStart{};
+    glm::vec2 actorSelectionDragEnd{};
+    bool actorSelectionDragReleased = false;
+    glm::vec2 actorSelectionReleaseStart{};
+    glm::vec2 actorSelectionReleaseEnd{};
+    std::optional<glm::vec3> lastGroupCommandDestination;
+    uint32_t lastGroupCommandSuccessCount = 0;
+    uint32_t lastGroupCommandFailureCount = 0;
+    std::string lastGroupCommandStatus;
+    std::string lastGroupCommandFailureSummary;
+    std::vector<glm::vec3> lastFormationDestinations;
+    std::vector<glm::vec3> lastFailedFormationDestinations;
     Engine::ChunkStreamer chunkStreamer({16.0f, 1});
     Engine::WorldObjectOverrides objectOverrides;
     const Engine::ProceduralChunkContentConfig chunkContentConfig =
         Engine::ProceduralChunkContentConfig::sampleOpenWorldConfig(objectArchetypes, &biomes);
     bool debugUiWantsMouse = false;
     bool debugUiWantsKeyboard = false;
+    bool destinationClickTracking = false;
+    glm::vec2 destinationClickPressPosition{};
+    const auto cancelCommandedActorPaths = [&]() {
+        actors.cancelPath(playerActor);
+        for (Engine::ActorHandle actor : demoActors) {
+            actors.cancelPath(actor);
+        }
+    };
     const auto terrainMaterialForBiome = [&](std::string_view biomeId) {
         if (const RuntimeBiomeTerrainMaterial* material = findTerrainMaterial(biomeTerrainMaterials, biomeId)) {
             return material->material;
@@ -812,6 +1165,119 @@ int main(int, char**)
                 }
             }
         );
+        for (Engine::WorldObjectHandle object : demoActorObjects) {
+            if (const std::optional<glm::vec3> position = world.position(object)) {
+                spatialRegistry.update(object, *position);
+            }
+        }
+    };
+    const auto buildNavigationDataForChunk = [&](
+        Engine::TerrainTileHandle terrainTile,
+        const std::vector<Engine::WorldObjectHandle>& objects,
+        NavigationBlockerStats* blockerStats = nullptr) -> std::optional<Engine::NavigationTerrainBuildData> {
+        std::optional<Engine::NavigationTerrainBuildData> buildData = terrain.navigationBuildData(terrainTile);
+        if (!buildData) {
+            return std::nullopt;
+        }
+
+        for (Engine::WorldObjectHandle object : objects) {
+            if (object.id == UINT32_MAX || object.id == playerObject.id || !world.isValid(object) || !world.collisionEnabled(object)) {
+                continue;
+            }
+
+            const std::optional<Renderer::Aabb> bounds = world.worldBounds(object);
+            if (!bounds || !validBounds(*bounds)) {
+                continue;
+            }
+
+            appendAabbNavigationBlocker(*buildData, *bounds);
+            if (blockerStats) {
+                blockerStats->vertices += 8;
+                blockerStats->triangles += 12;
+            }
+        }
+
+        return buildData;
+    };
+    const auto rebuildNavigationTile = [&](Engine::ChunkCoord targetCoord, bool cancelActivePath = true) {
+        bool rebuilt = false;
+        chunkStreamer.forEachLoadedChunkContent(
+            [&](Engine::TerrainTileHandle terrainTile, const std::vector<Engine::WorldObjectHandle>& objects, Renderer::RenderGroupHandle) {
+                if (rebuilt) {
+                    return;
+                }
+                const std::optional<Engine::ChunkCoord> coord = terrain.tileCoord(terrainTile);
+                if (!coord || *coord != targetCoord) {
+                    return;
+                }
+
+                navigation.destroyTile(targetCoord);
+                navigationChunks.erase(targetCoord);
+                if (const std::optional<Engine::NavigationTerrainBuildData> buildData =
+                        buildNavigationDataForChunk(terrainTile, objects)) {
+                    const Engine::NavigationTileHandle handle = navigation.buildTerrainTile(*buildData, playerNavAgent);
+                    if (handle.id != UINT32_MAX) {
+                        navigationChunks.insert(targetCoord);
+                        lastRebuiltNavigationChunk = targetCoord;
+                        rebuilt = true;
+                    }
+                }
+            }
+        );
+
+        if (rebuilt && cancelActivePath) {
+            cancelCommandedActorPaths();
+        }
+        return rebuilt;
+    };
+    const auto rebuildNavigationTiles = [&](const std::vector<Engine::ChunkCoord>& coords, bool cancelActivePath = true) {
+        bool anyRebuilt = false;
+        for (Engine::ChunkCoord coord : coords) {
+            anyRebuilt = rebuildNavigationTile(coord, false) || anyRebuilt;
+        }
+        if (anyRebuilt && cancelActivePath) {
+            cancelCommandedActorPaths();
+        }
+        return anyRebuilt;
+    };
+    const auto syncNavigationTiles = [&]() {
+        std::unordered_set<Engine::ChunkCoord, Engine::ChunkCoordHash> loadedChunks;
+        NavigationBlockerStats syncedBlockerStats;
+        chunkStreamer.forEachLoadedChunkContent(
+            [&](Engine::TerrainTileHandle terrainTile, const std::vector<Engine::WorldObjectHandle>& objects, Renderer::RenderGroupHandle) {
+                const std::optional<Engine::ChunkCoord> coord = terrain.tileCoord(terrainTile);
+                if (!coord) {
+                    return;
+                }
+
+                loadedChunks.insert(*coord);
+                const std::optional<Engine::NavigationTerrainBuildData> buildData =
+                    buildNavigationDataForChunk(terrainTile, objects, &syncedBlockerStats);
+                if (navigation.hasTile(*coord)) {
+                    return;
+                }
+
+                if (buildData) {
+                    const Engine::NavigationTileHandle handle = navigation.buildTerrainTile(*buildData, playerNavAgent);
+                    if (handle.id != UINT32_MAX) {
+                        navigationChunks.insert(*coord);
+                        lastRebuiltNavigationChunk = *coord;
+                    }
+                }
+            }
+        );
+        navigationBlockerStats = syncedBlockerStats;
+
+        std::vector<Engine::ChunkCoord> staleChunks;
+        for (Engine::ChunkCoord coord : navigationChunks) {
+            if (!loadedChunks.contains(coord)) {
+                staleChunks.push_back(coord);
+            }
+        }
+        for (Engine::ChunkCoord coord : staleChunks) {
+            navigation.destroyTile(coord);
+            navigationChunks.erase(coord);
+        }
     };
 
     bool running = true;
@@ -841,10 +1307,11 @@ int main(int, char**)
     Engine::DebugSelectionState debugSelection;
     Renderer::DebugUi::InteractionDebugStats interactionStats;
     chunkStreamer.update(camera.state().pivot, world, terrain, chunkFactory, &spatialRegistry);
+    syncNavigationTiles();
     terrain.updateLods(camera.position());
     applyDebugVisibilitySettings();
 
-    const Engine::WorldObjectHandle playerObject = world.createObject(Engine::ObjectId::player());
+    playerObject = world.createObject(Engine::ObjectId::player());
     const Renderer::MeshInstanceHandle playerInstance = Renderer::createInstance(playerStaticMesh);
     Renderer::setInstanceMaterial(playerInstance, yellowMaterial);
     Renderer::setInstanceRenderLayer(playerInstance, Renderer::RenderLayer::Props);
@@ -854,16 +1321,52 @@ int main(int, char**)
     world.setScale(playerObject, {0.55f, 1.15f, 0.55f});
     world.setLocalBounds(playerObject, {{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}});
     world.setCollisionEnabled(playerObject, false);
-    const Engine::ActorHandle playerActor = actors.createActor(playerObject, {6.0f, 1.15f, 20.0f});
+    playerActor = actors.createActor(playerObject, {6.0f, 1.15f, 20.0f});
     actors.setPosition(playerActor, {0.0f, 0.0f, 0.0f}, &terrain, &world);
     if (const std::optional<glm::vec3> playerPosition = world.position(playerObject)) {
         spatialRegistry.insert(playerObject, *playerPosition);
     }
+
+    const auto createDemoActor = [&](size_t index, const glm::vec3& position) {
+        const Engine::ObjectId objectId =
+            Engine::ObjectId::fromString("demo/squad/" + std::to_string(index));
+        const Engine::WorldObjectHandle object = world.createObject(objectId);
+        const Renderer::MeshInstanceHandle instance = Renderer::createInstance(playerStaticMesh);
+        Renderer::setInstanceMaterial(instance, squadMaterials[index % squadMaterials.size()]);
+        Renderer::setInstanceRenderLayer(instance, Renderer::RenderLayer::Props);
+        Renderer::setInstanceVisibilityFlags(instance, Renderer::VisibilityFlags::Visible);
+        Renderer::setInstanceMaxDrawDistance(instance, 0.0f);
+        world.attachRendererInstance(object, instance);
+        world.setScale(object, {0.5f, 1.0f, 0.5f});
+        world.setLocalBounds(object, {{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}});
+        world.setCollisionEnabled(object, false);
+
+        Engine::ActorControllerSettings settings;
+        settings.movementSpeed = 6.0f;
+        settings.groundOffset = 1.0f;
+        settings.facingTurnSpeed = 20.0f;
+        settings.manualInputCancelsPath = false;
+        const Engine::ActorHandle actor = actors.createActor(object, settings);
+        actors.setPosition(actor, position, &terrain, &world);
+        if (const std::optional<glm::vec3> actorPosition = world.position(object)) {
+            spatialRegistry.insert(object, *actorPosition);
+        }
+        demoActors.push_back(actor);
+        demoActorObjects.push_back(object);
+    };
+    createDemoActor(0, {1.8f, 0.0f, 0.0f});
+    createDemoActor(1, {-1.8f, 0.0f, 0.0f});
+    createDemoActor(2, {0.0f, 0.0f, 1.8f});
+
     world.syncRenderState();
 
     const auto reloadLoadedChunks = [&]() {
         chunkStreamer.unloadAll(world, terrain, &spatialRegistry);
+        navigation.clear();
+        navigationChunks.clear();
         chunkStreamer.update(camera.state().pivot, world, terrain, chunkFactory, &spatialRegistry);
+        syncNavigationTiles();
+        cancelCommandedActorPaths();
         terrain.updateLods(camera.position());
         applyDebugVisibilitySettings();
         world.syncRenderState();
@@ -880,6 +1383,10 @@ int main(int, char**)
     const auto applyEditResult = [&](const Engine::PersistentObjectEditResult& result) {
         if (result.reloadChunks) {
             reloadLoadedChunks();
+        } else if (debugSelection.selectedObject &&
+            world.isValid(debugSelection.selectedObject->object) &&
+            world.collisionEnabled(debugSelection.selectedObject->object)) {
+            rebuildNavigationTile(debugSelection.selectedObject->cell);
         }
         if (result.clearSelection) {
             debugSelection = {};
@@ -950,6 +1457,78 @@ int main(int, char**)
         debugUiWantsMouse = debugUiEnabled && Renderer::DebugUi::wantsMouseCapture();
         debugUiWantsKeyboard = debugUiEnabled && Renderer::DebugUi::wantsKeyboardCapture();
         inputMapping.publishEvents(input, events);
+        playerNavAgent = toEngineAgentSettings(navigationDebugControls.agent);
+        if (pressedAction(events, "player.set_destination")) {
+            destinationClickTracking = true;
+            destinationClickPressPosition = input.mousePosition();
+        }
+        bool destinationClickRequested = false;
+        if (releasedAction(events, "player.set_destination")) {
+            if (destinationClickTracking) {
+                const glm::vec2 delta = input.mousePosition() - destinationClickPressPosition;
+                destinationClickRequested = glm::dot(delta, delta) <=
+                    DestinationClickDragThresholdPixels * DestinationClickDragThresholdPixels;
+            }
+            destinationClickTracking = false;
+        }
+        if (pressedAction(events, "player.cancel_destination")) {
+            if (actorSelection.selectedActors().empty()) {
+                actors.cancelPath(playerActor);
+            } else {
+                for (Engine::ActorHandle actor : actorSelection.selectedActors()) {
+                    actors.cancelPath(actor);
+                }
+            }
+            lastGroupCommandStatus = "Destination cancelled.";
+            lastGroupCommandSuccessCount = 0;
+            lastGroupCommandFailureCount = 0;
+            lastGroupCommandFailureSummary.clear();
+            lastFormationDestinations.clear();
+            lastFailedFormationDestinations.clear();
+            worldSaveControls.status = lastGroupCommandStatus;
+        }
+        if (pressedAction(events, "player.stop")) {
+            if (actorSelection.selectedActors().empty()) {
+                actors.cancelPath(playerActor);
+                lastGroupCommandStatus = "Stopped player actor.";
+            } else {
+                for (Engine::ActorHandle actor : actorSelection.selectedActors()) {
+                    actors.cancelPath(actor);
+                }
+                lastGroupCommandStatus = std::string{"Stopped "} +
+                    std::to_string(actorSelection.selectedActors().size()) +
+                    " selected actor(s).";
+            }
+            lastGroupCommandSuccessCount = 0;
+            lastGroupCommandFailureCount = 0;
+            lastGroupCommandFailureSummary.clear();
+            lastFormationDestinations.clear();
+            lastFailedFormationDestinations.clear();
+            worldSaveControls.status = lastGroupCommandStatus;
+        }
+        if (input.wasMouseButtonPressed(Engine::MouseButton::Left)) {
+            actorSelectionPressActive = true;
+            actorSelectionDragging = false;
+            actorSelectionDragStart = input.mousePosition();
+            actorSelectionDragEnd = actorSelectionDragStart;
+        }
+        if (actorSelectionPressActive && input.isMouseButtonDown(Engine::MouseButton::Left)) {
+            actorSelectionDragEnd = input.mousePosition();
+            const glm::vec2 delta = actorSelectionDragEnd - actorSelectionDragStart;
+            if (glm::dot(delta, delta) >
+                ActorSelectionDragThresholdPixels * ActorSelectionDragThresholdPixels) {
+                actorSelectionDragging = true;
+            }
+        }
+        if (actorSelectionPressActive && input.wasMouseButtonReleased(Engine::MouseButton::Left)) {
+            if (actorSelectionDragging) {
+                actorSelectionDragReleased = true;
+                actorSelectionReleaseStart = actorSelectionDragStart;
+                actorSelectionReleaseEnd = input.mousePosition();
+            }
+            actorSelectionPressActive = false;
+            actorSelectionDragging = false;
+        }
         camera.followSettings().followSmoothing = cameraDebugControls.followSmoothing;
         camera.followSettings().maxFollowLag = cameraDebugControls.maxFollowLag;
 
@@ -988,6 +1567,7 @@ int main(int, char**)
 
         camera.update(events, loop.frameDeltaSeconds(), playerCameraTarget);
         chunkStreamer.update(camera.state().pivot, world, terrain, chunkFactory, &spatialRegistry);
+        syncNavigationTiles();
         terrain.updateLods(camera.position());
         applyDebugVisibilitySettings();
         Renderer::setAtmosphereSettings(atmosphere);
@@ -1013,9 +1593,47 @@ int main(int, char**)
             debugSettings.enableDistanceCulling,
         };
 
+        if (actorSelectionDragReleased) {
+            actorSelectionDragReleased = false;
+            actorSelection.setSelectedActors(Engine::selectActorsInScreenRect(
+                actors,
+                world,
+                renderView.viewProjection,
+                input.viewportSize(),
+                actorSelectionReleaseStart,
+                actorSelectionReleaseEnd
+            ));
+            debugSelection.selectedObject = std::nullopt;
+            worldSaveControls.status = "Selected " +
+                std::to_string(actorSelection.selectedActors().size()) +
+                " actor(s).";
+        }
+
         while (loop.shouldRunFixedUpdate()) {
             world.fixedUpdate(loop.fixedDeltaSeconds());
-            actors.fixedUpdate(playerActor, events, terrain, world, spatialRegistry, blockingCollision, loop.fixedDeltaSeconds());
+            actors.fixedUpdate(
+                playerActor,
+                events,
+                terrain,
+                world,
+                spatialRegistry,
+                blockingCollision,
+                navigation,
+                playerNavAgent,
+                loop.fixedDeltaSeconds());
+            Engine::EventQueue actorNoInputEvents;
+            for (Engine::ActorHandle actor : demoActors) {
+                actors.fixedUpdate(
+                    actor,
+                    actorNoInputEvents,
+                    terrain,
+                    world,
+                    spatialRegistry,
+                    blockingCollision,
+                    navigation,
+                    playerNavAgent,
+                    loop.fixedDeltaSeconds());
+            }
             updateSpatialRegistryForLoadedObjects();
             if (const std::optional<glm::vec3> playerPosition = world.position(playerObject)) {
                 spatialRegistry.update(playerObject, *playerPosition);
@@ -1039,6 +1657,99 @@ int main(int, char**)
             DebugPickObjectQueryMargin
         );
         debugSelection.terrainHit = terrain.raycast(debugSelection.ray, DebugPickMaxDistance, DebugPickTerrainStep);
+        std::optional<Engine::NavQueryResult> nearestNavigationPoint;
+        if (debugSelection.terrainHit) {
+            nearestNavigationPoint = navigation.nearestNavigablePoint(debugSelection.terrainHit->position, playerNavAgent);
+        }
+        if (destinationClickRequested) {
+            if (debugSelection.hoveredObject) {
+                Engine::InteractionEvent interaction;
+                interaction.action = Engine::InteractionAction::Interact;
+                interaction.target = Engine::InteractionTargetType::Object;
+                interaction.object = debugSelection.hoveredObject->object;
+                interaction.objectId = debugSelection.hoveredObject->objectId;
+                interaction.objectHitPosition = debugSelection.hoveredObject->position;
+                interaction.chunk = debugSelection.hoveredObject->cell;
+                interaction.distance = debugSelection.hoveredObject->distance;
+                Engine::InteractionOutcome outcome = interactionHandlers.handle(resolveInteractionRequest(interaction));
+                worldSaveControls.status = outcome.status;
+                interactionStats = makeInteractionDebugStats(outcome);
+            } else if (debugSelection.terrainHit) {
+                std::vector<Engine::ActorHandle> commandedActors = actorSelection.selectedActors();
+                if (commandedActors.empty()) {
+                    commandedActors.push_back(playerActor);
+                }
+                lastGroupCommandDestination = debugSelection.terrainHit->position;
+                lastGroupCommandSuccessCount = 0;
+                lastGroupCommandFailureCount = 0;
+                lastGroupCommandStatus.clear();
+                lastGroupCommandFailureSummary.clear();
+                lastFormationDestinations.clear();
+                lastFailedFormationDestinations.clear();
+
+                for (size_t index = 0; index < commandedActors.size(); ++index) {
+                    const glm::vec2 offset =
+                        Engine::formationOffsetForActorIndex(index, FormationSpacing);
+                    glm::vec3 destination = debugSelection.terrainHit->position + glm::vec3{offset.x, 0.0f, offset.y};
+                    if (const std::optional<float> height = terrain.sampleHeight(destination.x, destination.z)) {
+                        destination.y = *height;
+                    }
+
+                    const Engine::NavQueryResult nearest = navigation.nearestNavigablePoint(destination, playerNavAgent);
+                    if (nearest.status != Engine::NavQueryStatus::Success) {
+                        ++lastGroupCommandFailureCount;
+                        lastFailedFormationDestinations.push_back(destination);
+                        if (lastGroupCommandFailureSummary.empty()) {
+                            lastGroupCommandFailureSummary =
+                                std::string{"Nearest nav failed for actor "} +
+                                std::to_string(commandedActors[index].id) +
+                                ": " +
+                                navStatusName(nearest.status) +
+                                (nearest.message.empty() ? "" : ". " + nearest.message);
+                        }
+                        continue;
+                    }
+
+                    lastFormationDestinations.push_back(nearest.point);
+                    const Engine::NavQueryResult result = actors.setPathDestination(
+                        commandedActors[index],
+                        nearest.point,
+                        navigation,
+                        playerNavAgent,
+                        world);
+                    if (result.status == Engine::NavQueryStatus::Success && result.path.points.size() >= 2) {
+                        ++lastGroupCommandSuccessCount;
+                    } else {
+                        ++lastGroupCommandFailureCount;
+                        lastFailedFormationDestinations.push_back(nearest.point);
+                        if (lastGroupCommandFailureSummary.empty()) {
+                            lastGroupCommandFailureSummary =
+                                std::string{"Path failed for actor "} +
+                                std::to_string(commandedActors[index].id) +
+                                ": " +
+                                navStatusName(result.status) +
+                                (result.message.empty() ? "" : ". " + result.message);
+                        }
+                    }
+                }
+
+                lastGroupCommandStatus =
+                    std::string{"Move command: "} +
+                    std::to_string(lastGroupCommandSuccessCount) +
+                    " path(s), " +
+                    std::to_string(lastGroupCommandFailureCount) +
+                    " failure(s).";
+                worldSaveControls.status = lastGroupCommandStatus;
+            } else {
+                lastGroupCommandStatus = "Move failed: no terrain hit under cursor.";
+                lastGroupCommandSuccessCount = 0;
+                lastGroupCommandFailureCount = 1;
+                lastGroupCommandFailureSummary = lastGroupCommandStatus;
+                lastFormationDestinations.clear();
+                lastFailedFormationDestinations.clear();
+                worldSaveControls.status = lastGroupCommandStatus;
+            }
+        }
         if (debugSelection.selectedObject && !world.isValid(debugSelection.selectedObject->object)) {
             debugSelection.selectedObject = std::nullopt;
         }
@@ -1087,9 +1798,15 @@ int main(int, char**)
             world,
             chunkStreamer,
             terrain,
+            navigation,
+            navigationChunks,
+            playerNavAgent,
             playerObject,
             actors,
-            playerActor
+            playerActor,
+            actorSelection,
+            lastFormationDestinations,
+            lastFailedFormationDestinations
         );
         const Renderer::SceneDrawStats drawStats = Renderer::drawScene(renderView);
         Renderer::drawDebugPrimitives(renderView);
@@ -1106,6 +1823,73 @@ int main(int, char**)
             spatialStats.objectsInCurrentCell = static_cast<uint32_t>(spatialRegistry.objectsInCell(currentSpatialCell).size());
             spatialStats.objectsNearCamera = static_cast<uint32_t>(spatialRegistry.objectsInRadius(camera.state().pivot, spatialQueryRadius).size());
             spatialStats.nearQueryRadius = spatialQueryRadius;
+            Renderer::DebugUi::NavigationDebugStats navigationStats;
+            navigationStats.loadedTiles = static_cast<uint32_t>(navigation.tileCount());
+            navigationStats.polygonEdgeCount = static_cast<uint32_t>(navigation.debugGeometry().polygonEdges.size());
+            navigationStats.blockerVertexCount = navigationBlockerStats.vertices;
+            navigationStats.blockerTriangleCount = navigationBlockerStats.triangles;
+            if (lastRebuiltNavigationChunk) {
+                navigationStats.hasLastRebuiltChunk = true;
+                navigationStats.lastRebuiltChunkX = lastRebuiltNavigationChunk->x;
+                navigationStats.lastRebuiltChunkZ = lastRebuiltNavigationChunk->z;
+            }
+            navigationStats.selectedObjectNavBlocking =
+                debugSelection.selectedObject &&
+                world.isValid(debugSelection.selectedObject->object) &&
+                world.collisionEnabled(debugSelection.selectedObject->object);
+            navigationStats.selectedActorCount = static_cast<uint32_t>(actorSelection.selectedActors().size());
+            for (Engine::ActorHandle actor : actorSelection.selectedActors()) {
+                if (const std::optional<Engine::ActorState> actorState = actors.state(actor)) {
+                    if (!navigationStats.selectedActorSummary.empty()) {
+                        navigationStats.selectedActorSummary += "; ";
+                    }
+                    navigationStats.selectedActorSummary += "actor ";
+                    navigationStats.selectedActorSummary += std::to_string(actor.id);
+                    navigationStats.selectedActorSummary += " object ";
+                    navigationStats.selectedActorSummary += std::to_string(actorState->object.id);
+                    if (const std::optional<Engine::ObjectId> objectId = world.objectId(actorState->object)) {
+                        navigationStats.selectedActorSummary += " ";
+                        navigationStats.selectedActorSummary += objectId->toString();
+                    }
+                    navigationStats.selectedActorSummary += " [";
+                    navigationStats.selectedActorSummary += actorPathStatusName(actorState->path.status);
+                    navigationStats.selectedActorSummary += "]";
+                }
+            }
+            if (lastGroupCommandDestination) {
+                navigationStats.hasLastGroupDestination = true;
+                navigationStats.lastGroupDestination = *lastGroupCommandDestination;
+                navigationStats.lastGroupCommandSuccessCount = lastGroupCommandSuccessCount;
+                navigationStats.lastGroupCommandFailureCount = lastGroupCommandFailureCount;
+                navigationStats.lastGroupCommandStatus = lastGroupCommandStatus;
+                navigationStats.lastGroupCommandFailureSummary = lastGroupCommandFailureSummary;
+            }
+            navigationStats.lastBuildStatus = navStatusName(navigation.lastBuildStatus());
+            navigationStats.lastBuildMessage = navigation.lastBuildMessage();
+            navigationStats.lastQueryStatus = navStatusName(navigation.lastQueryStatus());
+            navigationStats.lastQueryMessage = navigation.lastQueryMessage();
+            if (nearestNavigationPoint) {
+                navigationStats.nearestPointStatus = navStatusName(nearestNavigationPoint->status);
+                navigationStats.hasNearestPoint = nearestNavigationPoint->status == Engine::NavQueryStatus::Success;
+                navigationStats.nearestPoint = nearestNavigationPoint->point;
+            }
+            if (actorSelection.selectedActors().empty()) {
+                if (const std::optional<Engine::ActorPathState> path = actors.pathState(playerActor)) {
+                    navigationStats.currentPathStatus = actorPathStatusName(path->status);
+                    navigationStats.currentPathPointCount = static_cast<uint32_t>(path->path.points.size());
+                }
+            } else {
+                navigationStats.currentPathStatus = "selected actors";
+                uint32_t selectedPathPoints = 0;
+                for (Engine::ActorHandle actor : actorSelection.selectedActors()) {
+                    if (const std::optional<Engine::ActorPathState> path = actors.pathState(actor)) {
+                        selectedPathPoints += static_cast<uint32_t>(path->path.points.size());
+                    }
+                }
+                navigationStats.currentPathPointCount = selectedPathPoints;
+            }
+            navigationStats.agent = toDebugAgentSettings(playerNavAgent);
+            navigationStats.build = toDebugBuildSettings(navigation.settings());
             const Renderer::DebugUi::DebugPickingStats pickingStats =
                 makeDebugPickingStats(debugSelection, world, objectArchetypes, objectOverrides, chunkStreamer);
             const Renderer::DebugUi::PlayerActorDebugStats playerStats =
@@ -1129,6 +1913,8 @@ int main(int, char**)
                 debugDrawSettings,
                 terrainLods,
                 spatialStats,
+                navigationStats,
+                &navigationDebugControls,
                 cameraStats,
                 &cameraDebugControls,
                 biomeStats,
@@ -1141,6 +1927,15 @@ int main(int, char**)
         }
         bgfx::touch(0);
         bgfx::frame();
+        if (navigationDebugControls.rebuildVisibleTilesRequested) {
+            navigationDebugControls.rebuildVisibleTilesRequested = false;
+            applyDebugBuildSettings(navigationDebugControls.build, navBuildSettings);
+            navigation = Engine::NavigationSystem(navBuildSettings);
+            navigationChunks.clear();
+            syncNavigationTiles();
+            cancelCommandedActorPaths();
+            worldSaveControls.status = "Rebuilt visible navigation tiles.";
+        }
         if (worldSaveControls.saveRequested) {
             worldSaveControls.saveRequested = false;
             std::string error;
@@ -1160,13 +1955,22 @@ int main(int, char**)
                 camera.setState(result.snapshot.camera);
                 chunkStreamer.unloadAll(world, terrain, &spatialRegistry);
                 spatialRegistry.clear();
+                navigation.clear();
+                navigationChunks.clear();
                 chunkStreamer.update(camera.state().pivot, world, terrain, chunkFactory, &spatialRegistry);
+                syncNavigationTiles();
                 terrain.updateLods(camera.position());
+                cancelCommandedActorPaths();
                 actors.setPosition(playerActor, result.snapshot.player.position, &terrain, &world);
                 if (const std::optional<glm::vec3> playerPosition = world.position(playerObject)) {
                     spatialRegistry.insert(playerObject, *playerPosition);
                     if (camera.mode() == Engine::CameraMode::FollowTarget) {
                         recenterCameraOnPlayer(camera, *playerPosition);
+                    }
+                }
+                for (Engine::WorldObjectHandle object : demoActorObjects) {
+                    if (const std::optional<glm::vec3> position = world.position(object)) {
+                        spatialRegistry.insert(object, *position);
                     }
                 }
                 applyDebugVisibilitySettings();
@@ -1273,11 +2077,16 @@ int main(int, char**)
         events.clear();
     }
 
+    navigation.clear();
+    navigationChunks.clear();
     chunkStreamer.unloadAll(world, terrain, &spatialRegistry);
     spatialRegistry.clear();
     world.syncRenderState();
 
     Renderer::destroyMaterial(yellowMaterial);
+    Renderer::destroyMaterial(squadRedMaterial);
+    Renderer::destroyMaterial(squadGreenMaterial);
+    Renderer::destroyMaterial(squadBlueMaterial);
     Renderer::destroyMaterial(cyanMaterial);
     for (const RuntimeBiomeTerrainMaterial& material : biomeTerrainMaterials) {
         Renderer::destroyMaterial(material.material);
@@ -1287,6 +2096,9 @@ int main(int, char**)
     }
 
     assetCache.release(yellowTexture);
+    assetCache.release(squadRedTexture);
+    assetCache.release(squadGreenTexture);
+    assetCache.release(squadBlueTexture);
     assetCache.release(cyanTexture);
     for (const RuntimeBiomeTerrainMaterial& material : biomeTerrainMaterials) {
         assetCache.release(material.texture);

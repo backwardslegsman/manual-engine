@@ -33,6 +33,12 @@ namespace {
             case SDLK_HOME:
                 key = Engine::Key::Home;
                 return true;
+            case SDLK_ESCAPE:
+                key = Engine::Key::Escape;
+                return true;
+            case SDLK_SPACE:
+                key = Engine::Key::Space;
+                return true;
             case SDLK_UP:
                 key = Engine::Key::Up;
                 return true;
@@ -101,6 +107,7 @@ namespace Engine {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
             case SDL_EVENT_MOUSE_BUTTON_UP: {
                 MouseButton button;
+                mousePosition_ = {event.button.x, event.button.y};
                 if (mapMouseButton(event.button.button, button)) {
                     const uint32_t index = static_cast<uint32_t>(button);
                     const bool isDown = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;

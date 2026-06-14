@@ -16,6 +16,8 @@ namespace Engine {
         P,
         Delete,
         Home,
+        Escape,
+        Space,
         Up,
         Down,
         Left,

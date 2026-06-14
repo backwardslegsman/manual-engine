@@ -8,3 +8,4 @@
 - Prefer calling public subsystem interfaces over reaching into implementation details.
 - Debug UI control plumbing may live here, but the behavior it triggers should be implemented through public Engine/Renderer interfaces.
 - If a helper in `main.cpp` becomes broadly useful or owns state beyond sample composition, move it behind an Engine service before adding more call sites.
+- Actor command rules, formation math, selection semantics, and navigation query behavior belong in `src/Engine`; App should only gather the active target/input context and call those APIs.

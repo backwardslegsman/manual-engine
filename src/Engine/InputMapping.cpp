@@ -42,6 +42,10 @@ namespace {
             key = Engine::Key::Delete;
         } else if (normalized == "home") {
             key = Engine::Key::Home;
+        } else if (normalized == "escape" || normalized == "esc") {
+            key = Engine::Key::Escape;
+        } else if (normalized == "space" || normalized == "spacebar") {
+            key = Engine::Key::Space;
         } else if (normalized == "up") {
             key = Engine::Key::Up;
         } else if (normalized == "down") {
@@ -144,6 +148,9 @@ namespace Engine {
         mapping.scalarActions_.push_back({"camera.zoom", -1.0f});
         mapping.digitalActions_.push_back({"camera.toggle_follow", {Key::F}, {}});
         mapping.digitalActions_.push_back({"camera.recenter", {Key::Home}, {}});
+        mapping.digitalActions_.push_back({"player.set_destination", {}, {MouseButton::Right}});
+        mapping.digitalActions_.push_back({"player.cancel_destination", {Key::Escape}, {}});
+        mapping.digitalActions_.push_back({"player.stop", {Key::Space}, {}});
         mapping.digitalActions_.push_back({"interaction.select", {}, {MouseButton::Left}});
         mapping.digitalActions_.push_back({"interaction.interact", {Key::E}, {}});
         mapping.digitalActions_.push_back({"interaction.remove_object", {Key::Delete}, {}});

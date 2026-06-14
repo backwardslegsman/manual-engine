@@ -9,6 +9,7 @@
 
 #include "Engine/ChunkTypes.hpp"
 #include "Engine/Biome.hpp"
+#include "Engine/Navigation.hpp"
 #include "Engine/Picking.hpp"
 #include "Renderer/Scene.hpp"
 
@@ -81,6 +82,7 @@ namespace Engine {
         std::optional<BiomeSample> tileBiome(TerrainTileHandle handle) const;
         std::optional<ChunkCoord> tileCoord(TerrainTileHandle handle) const;
         std::optional<Renderer::Aabb> tileWorldBounds(TerrainTileHandle handle) const;
+        std::optional<NavigationTerrainBuildData> navigationBuildData(TerrainTileHandle handle) const;
         ChunkCoord coordForWorldPosition(float worldX, float worldZ) const;
 
         const TerrainSettings& settings() const;

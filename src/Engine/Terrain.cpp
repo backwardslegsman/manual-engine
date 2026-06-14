@@ -280,6 +280,49 @@ namespace Engine {
         };
     }
 
+    std::optional<NavigationTerrainBuildData> TerrainSystem::navigationBuildData(TerrainTileHandle handle) const
+    {
+        const TerrainTile* terrain = tile(handle);
+        const std::optional<Renderer::Aabb> bounds = tileWorldBounds(handle);
+        if (!terrain || !bounds || terrain->heights.empty() || terrain->resolution < 2) {
+            return std::nullopt;
+        }
+
+        NavigationTerrainBuildData buildData;
+        buildData.coord = terrain->coord;
+        buildData.bounds = *bounds;
+        buildData.vertices.reserve(static_cast<size_t>(terrain->resolution) * terrain->resolution);
+        buildData.indices.reserve(static_cast<size_t>(terrain->resolution - 1) * (terrain->resolution - 1) * 6);
+
+        const float spacing = terrain->size / static_cast<float>(terrain->resolution - 1);
+        for (uint32_t z = 0; z < terrain->resolution; ++z) {
+            for (uint32_t x = 0; x < terrain->resolution; ++x) {
+                buildData.vertices.push_back({
+                    terrain->origin.x + static_cast<float>(x) * spacing,
+                    tileHeightAt(*terrain, x, z),
+                    terrain->origin.z + static_cast<float>(z) * spacing,
+                });
+            }
+        }
+
+        for (uint32_t z = 0; z + 1 < terrain->resolution; ++z) {
+            for (uint32_t x = 0; x + 1 < terrain->resolution; ++x) {
+                const uint32_t topLeft = z * terrain->resolution + x;
+                const uint32_t topRight = topLeft + 1;
+                const uint32_t bottomLeft = (z + 1) * terrain->resolution + x;
+                const uint32_t bottomRight = bottomLeft + 1;
+                buildData.indices.push_back(topLeft);
+                buildData.indices.push_back(bottomLeft);
+                buildData.indices.push_back(topRight);
+                buildData.indices.push_back(topRight);
+                buildData.indices.push_back(bottomLeft);
+                buildData.indices.push_back(bottomRight);
+            }
+        }
+
+        return buildData;
+    }
+
     ChunkCoord TerrainSystem::coordForWorldPosition(float worldX, float worldZ) const
     {
         return {

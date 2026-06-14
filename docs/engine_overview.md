@@ -20,6 +20,8 @@ Keep this document current whenever subsystem ownership, data flow, or save-faci
 - `World::syncRenderState()` pushes CPU transforms into renderer instances. Renderer resources never own world object lifetime.
 - Chunk streaming owns loaded chunk membership, render group metadata, terrain tile handles, and prop object lists. It does not own mesh/material/texture assets.
 - Terrain is generated as deterministic CPU heightfield tiles with renderer LOD meshes rebuilt as needed. Gameplay height queries use CPU tile data, not active render LOD.
+- Navigation is an Engine service wrapped by `NavigationSystem`; Recast/Detour types stay behind that boundary. V1 navigation tiles are synchronous loaded-chunk tiles built from terrain plus conservative static blocker bounds, and actors can follow nav paths through Engine-owned path state. Multi-actor commands use Engine actor selection state plus independent actor path requests rather than a crowd manager.
+- Simple group-command formation math lives in Engine actor command helpers so App composition does not become the owner of reusable movement rules.
 - V1 terrain material assignment is one renderer material per tile, selected from the primary chunk biome's configured terrain color. Biome boundaries are not blended yet.
 - Procedural props are generated from chunk coord, biome rules, archetype descriptors, and explicit local slots. Stable procedural IDs use chunk coord + archetype ID + slot.
 - Save/load stores high-level state: player position, camera state, settings, persistent object overrides, removed object IDs, and custom object serials. Baseline terrain and procedural content regenerate.
@@ -30,13 +32,14 @@ Keep this document current whenever subsystem ownership, data flow, or save-faci
 - Renderer material handles with base color, normal, metallic, and roughness factors.
 - Renderer scene submission through `RenderView`, with CPU frustum culling, distance culling, render layers, render groups, draw stats, and conservative CPU batching by mesh/material.
 - Renderer atmosphere state: sky clear color, exponential fog, and directional sun settings.
-- Renderer debug draw primitives are transient per-frame submission aids for bounds, chunk borders, frustums, and actor movement diagnostics.
+- Renderer debug draw primitives are transient per-frame submission aids for bounds, chunk borders, frustums, actor movement diagnostics, and navigation visualization.
 - Dear ImGui debug panel for renderer stats, world save/edit controls, camera, biomes, picking, interactions, terrain LOD, spatial registry, and player actor status.
-- Fixed-step engine loop, world object ownership, kinematic player actor, simple blocking collision, and terrain grounding.
+- Fixed-step engine loop, world object ownership, kinematic actors, reusable actor path-following state, simple blocking collision, and terrain grounding.
 - Sim/orbit camera with free and player-follow modes.
 - Sparse grid spatial registry for gameplay/debug queries.
 - CPU debug picking against object bounds and loaded terrain.
 - Deterministic chunk streaming with terrain tiles and biome-driven procedural props.
+- Recast/Detour loaded-chunk navigation tile generation with static prop blockers, nearest/path query support, right-click terrain movement for the player or selected demo actors, right-click object interaction, semantic stop/cancel commands, and navigation debug draw/tuning controls.
 - YAML-backed input mapping, object archetype definitions, and biome definitions with safe fallback defaults.
 - Stable `ObjectId` identity and save-backed persistent object overrides/removals.
 - Tag-based interaction handling for inspectable, removable, and resource-node archetypes.

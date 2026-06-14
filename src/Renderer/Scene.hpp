@@ -42,6 +42,11 @@ namespace Renderer {
         bool collisionBounds = true;
         bool chunkBorders = true;
         bool terrainTileBounds = true;
+        bool navigationTileBounds = true;
+        bool navigationMeshEdges = false;
+        bool navigationCurrentPath = true;
+        bool navigationNearestPoint = true;
+        bool navigationBlockerBounds = false;
         bool cameraFrustum = false;
         bool actorDestination = true;
     };

@@ -9,6 +9,7 @@
 - Use the simple frame `EventQueue` for new engine events until there is concrete pressure for subscriber-owned buses or multiple specialized queues.
 - Add camera behavior as engine-level state that produces view/projection inputs for the renderer.
 - Keep first-pass actors kinematic and terrain-grounded. Actor controllers should consume semantic input events and write through `World`, not bypass world ownership.
+- Keep actor selection and group-command helpers deterministic and renderer-independent. App may choose targets, but reusable formation and command rules belong here.
 - For open-world features, start with explicit chunk coordinates, load/unload calls, and simple distance-based policies.
 - Keep first-pass chunk streaming synchronous and grid-based. Chunks should own membership lists, while `World` owns object state and `Renderer` owns draw resources.
 - Keep procedural chunk content behind small descriptor/config interfaces. App code may translate descriptors into renderer/world resources, but placement rules should not live inline in the sample loop.
@@ -20,4 +21,5 @@
 - Compare persistent objects, removed procedural props, quests, and interactions by stable `ObjectId`, never by transient `WorldObjectHandle`.
 - Keep biome, procedural content, terrain, and persistence rules deterministic from world coordinates, chunk coordinates, stable object IDs, and saved settings.
 - Debug/editor tools should mutate durable world state through `WorldObjectOverrides`, not by writing ad hoc serialized scene data.
+- Keep Recast/Detour private to `Navigation.cpp`; public navigation headers should expose plain Engine types and status values only.
 - Avoid premature ECS architecture. Use plain structs and focused managers until entity/component needs are concrete.

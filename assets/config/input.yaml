@@ -27,6 +27,15 @@ input:
           negative_y: [S]
           positive_x: [D]
           negative_x: [A]
+    player.set_destination:
+      digital:
+        mouse_buttons: [Right]
+    player.cancel_destination:
+      digital:
+        keys: [Escape]
+    player.stop:
+      digital:
+        keys: [Space]
     interaction.select:
       digital:
         mouse_buttons: [Left]

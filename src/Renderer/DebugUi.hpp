@@ -33,6 +33,54 @@ namespace Renderer::DebugUi {
         float nearQueryRadius = 0.0f;
     };
 
+    struct NavigationAgentDebugSettings {
+        float radius = 0.45f;
+        float height = 1.8f;
+        float maxSlopeDegrees = 45.0f;
+        float maxClimb = 0.45f;
+    };
+
+    struct NavigationBuildDebugSettings {
+        float cellSize = 0.3f;
+        float cellHeight = 0.2f;
+    };
+
+    struct NavigationDebugStats {
+        uint32_t loadedTiles = 0;
+        uint32_t polygonEdgeCount = 0;
+        uint32_t blockerVertexCount = 0;
+        uint32_t blockerTriangleCount = 0;
+        bool hasLastRebuiltChunk = false;
+        int32_t lastRebuiltChunkX = 0;
+        int32_t lastRebuiltChunkZ = 0;
+        bool selectedObjectNavBlocking = false;
+        uint32_t selectedActorCount = 0;
+        std::string selectedActorSummary;
+        bool hasLastGroupDestination = false;
+        glm::vec3 lastGroupDestination{};
+        uint32_t lastGroupCommandSuccessCount = 0;
+        uint32_t lastGroupCommandFailureCount = 0;
+        std::string lastGroupCommandStatus;
+        std::string lastGroupCommandFailureSummary;
+        std::string lastBuildStatus;
+        std::string lastBuildMessage;
+        std::string lastQueryStatus;
+        std::string lastQueryMessage;
+        bool hasNearestPoint = false;
+        std::string nearestPointStatus;
+        glm::vec3 nearestPoint{};
+        std::string currentPathStatus;
+        uint32_t currentPathPointCount = 0;
+        NavigationAgentDebugSettings agent;
+        NavigationBuildDebugSettings build;
+    };
+
+    struct NavigationDebugControls {
+        bool rebuildVisibleTilesRequested = false;
+        NavigationAgentDebugSettings agent;
+        NavigationBuildDebugSettings build;
+    };
+
     struct CameraDebugStats {
         bool followMode = false;
         bool hasTarget = false;
@@ -170,6 +218,16 @@ namespace Renderer::DebugUi {
         uint32_t collisionHitCount = 0;
         uint32_t firstBlockingObjectId = UINT32_MAX;
         std::string firstBlockingStableId;
+        std::string pathStatus;
+        glm::vec3 pathDestination{};
+        uint32_t pathPointCount = 0;
+        uint32_t pathCurrentCorner = 0;
+        float pathArrivalRadius = 0.0f;
+        float pathCornerAdvanceRadius = 0.0f;
+        uint32_t pathBlockedTicks = 0;
+        uint32_t pathRepathAttemptsUsed = 0;
+        std::string pathLastQueryStatus;
+        std::string pathLastQueryMessage;
     };
 
     bool init(SDL_Window* window);
@@ -186,6 +244,8 @@ namespace Renderer::DebugUi {
         DebugDrawSettings& debugDraw,
         const TerrainLodDebugStats& terrainLods = {},
         const SpatialRegistryDebugStats& spatial = {},
+        const NavigationDebugStats& navigation = {},
+        NavigationDebugControls* navigationControls = nullptr,
         const CameraDebugStats& camera = {},
         CameraDebugControls* cameraControls = nullptr,
         const BiomeDebugStats& biome = {},

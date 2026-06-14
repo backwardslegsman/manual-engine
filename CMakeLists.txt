@@ -18,7 +18,9 @@ find_package(yaml-cpp CONFIG REQUIRED)
 add_executable(manual_engine
     src/App/main.cpp
     src/Assets/Assimp/Importer.cpp
+    src/Engine/ActorCommand.cpp
     src/Engine/ActorController.cpp
+    src/Engine/ActorSelection.cpp
     src/Engine/AssetCache.cpp
     src/Engine/Biome.cpp
     src/Engine/BlockingCollision.cpp
@@ -31,6 +33,7 @@ add_executable(manual_engine
     src/Engine/InteractionSystem.cpp
     src/Engine/ObjectArchetype.cpp
     src/Engine/ObjectId.cpp
+    src/Engine/Navigation.cpp
     src/Engine/OrbitCamera.cpp
     src/Engine/PersistentObjectEditor.cpp
     src/Engine/Picking.cpp

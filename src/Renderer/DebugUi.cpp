@@ -170,6 +170,8 @@ namespace Renderer::DebugUi {
         DebugDrawSettings& debugDraw,
         const TerrainLodDebugStats& terrainLods,
         const SpatialRegistryDebugStats& spatial,
+        const NavigationDebugStats& navigation,
+        NavigationDebugControls* navigationControls,
         const CameraDebugStats& camera,
         CameraDebugControls* cameraControls,
         const BiomeDebugStats& biome,
@@ -211,6 +213,11 @@ namespace Renderer::DebugUi {
         ImGui::Checkbox("Collision bounds", &debugDraw.collisionBounds);
         ImGui::Checkbox("Chunk borders", &debugDraw.chunkBorders);
         ImGui::Checkbox("Terrain tile bounds", &debugDraw.terrainTileBounds);
+        ImGui::Checkbox("Navigation tile bounds", &debugDraw.navigationTileBounds);
+        ImGui::Checkbox("Navigation mesh edges", &debugDraw.navigationMeshEdges);
+        ImGui::Checkbox("Navigation current path", &debugDraw.navigationCurrentPath);
+        ImGui::Checkbox("Navigation nearest point", &debugDraw.navigationNearestPoint);
+        ImGui::Checkbox("Navigation blocker bounds", &debugDraw.navigationBlockerBounds);
         ImGui::Checkbox("Camera frustum", &debugDraw.cameraFrustum);
         ImGui::Checkbox("Actor destination", &debugDraw.actorDestination);
         ImGui::Separator();
@@ -330,6 +337,21 @@ namespace Renderer::DebugUi {
             } else {
                 ImGui::Text("Ground height: no loaded terrain");
             }
+            ImGui::Text("Path status: %s", player.pathStatus.empty() ? "<none>" : player.pathStatus.c_str());
+            ImGui::Text("Path destination: %.2f, %.2f, %.2f",
+                player.pathDestination.x,
+                player.pathDestination.y,
+                player.pathDestination.z);
+            ImGui::Text("Path corner/count: %u / %u", player.pathCurrentCorner, player.pathPointCount);
+            ImGui::Text("Path arrival/corner radius: %.2f / %.2f",
+                player.pathArrivalRadius,
+                player.pathCornerAdvanceRadius);
+            ImGui::Text("Path blocked ticks: %u", player.pathBlockedTicks);
+            ImGui::Text("Path repaths used: %u", player.pathRepathAttemptsUsed);
+            ImGui::Text("Path query: %s", player.pathLastQueryStatus.empty() ? "<none>" : player.pathLastQueryStatus.c_str());
+            if (!player.pathLastQueryMessage.empty()) {
+                ImGui::TextWrapped("%s", player.pathLastQueryMessage.c_str());
+            }
         } else {
             ImGui::Text("No player actor");
         }
@@ -345,6 +367,73 @@ namespace Renderer::DebugUi {
         ImGui::Text("Camera cell: %d, %d", spatial.currentCellX, spatial.currentCellZ);
         ImGui::Text("Objects in camera cell: %u", spatial.objectsInCurrentCell);
         ImGui::Text("Objects within %.1f: %u", spatial.nearQueryRadius, spatial.objectsNearCamera);
+        ImGui::Separator();
+        ImGui::Text("Navigation");
+        ImGui::Text("Loaded tiles: %u", navigation.loadedTiles);
+        ImGui::Text("Polygon edges: %u", navigation.polygonEdgeCount);
+        ImGui::Text("Blocker vertices/triangles: %u / %u",
+            navigation.blockerVertexCount,
+            navigation.blockerTriangleCount);
+        if (navigation.hasLastRebuiltChunk) {
+            ImGui::Text("Last rebuilt chunk: %d, %d",
+                navigation.lastRebuiltChunkX,
+                navigation.lastRebuiltChunkZ);
+        } else {
+            ImGui::Text("Last rebuilt chunk: none");
+        }
+        ImGui::Text("Selected nav blocker: %s", navigation.selectedObjectNavBlocking ? "yes" : "no");
+        ImGui::Text("Selected actors: %u", navigation.selectedActorCount);
+        if (!navigation.selectedActorSummary.empty()) {
+            ImGui::TextWrapped("%s", navigation.selectedActorSummary.c_str());
+        }
+        if (navigation.hasLastGroupDestination) {
+            ImGui::Text("Last group destination: %.2f, %.2f, %.2f",
+                navigation.lastGroupDestination.x,
+                navigation.lastGroupDestination.y,
+                navigation.lastGroupDestination.z);
+            ImGui::Text("Last group command success/failure: %u / %u",
+                navigation.lastGroupCommandSuccessCount,
+                navigation.lastGroupCommandFailureCount);
+            if (!navigation.lastGroupCommandStatus.empty()) {
+                ImGui::TextWrapped("%s", navigation.lastGroupCommandStatus.c_str());
+            }
+            if (!navigation.lastGroupCommandFailureSummary.empty()) {
+                ImGui::TextWrapped("%s", navigation.lastGroupCommandFailureSummary.c_str());
+            }
+        }
+        ImGui::Text("Current path: %s (%u points)",
+            navigation.currentPathStatus.empty() ? "<none>" : navigation.currentPathStatus.c_str(),
+            navigation.currentPathPointCount);
+        ImGui::Text("Nearest point: %s", navigation.nearestPointStatus.empty() ? "<none>" : navigation.nearestPointStatus.c_str());
+        if (navigation.hasNearestPoint) {
+            ImGui::Text("Nearest position: %.2f, %.2f, %.2f",
+                navigation.nearestPoint.x,
+                navigation.nearestPoint.y,
+                navigation.nearestPoint.z);
+        }
+        ImGui::Text("Last build: %s", navigation.lastBuildStatus.empty() ? "<none>" : navigation.lastBuildStatus.c_str());
+        if (!navigation.lastBuildMessage.empty()) {
+            ImGui::TextWrapped("%s", navigation.lastBuildMessage.c_str());
+        }
+        ImGui::Text("Last query: %s", navigation.lastQueryStatus.empty() ? "<none>" : navigation.lastQueryStatus.c_str());
+        if (!navigation.lastQueryMessage.empty()) {
+            ImGui::TextWrapped("%s", navigation.lastQueryMessage.c_str());
+        }
+        if (navigationControls) {
+            if (ImGui::Button("Rebuild Visible Nav Tiles")) {
+                navigationControls->rebuildVisibleTilesRequested = true;
+            }
+            ImGui::SliderFloat("Agent radius", &navigationControls->agent.radius, 0.1f, 2.0f);
+            ImGui::SliderFloat("Agent height", &navigationControls->agent.height, 0.5f, 4.0f);
+            ImGui::SliderFloat("Agent max slope", &navigationControls->agent.maxSlopeDegrees, 0.0f, 89.0f);
+            ImGui::SliderFloat("Agent max climb", &navigationControls->agent.maxClimb, 0.0f, 2.0f);
+            ImGui::SliderFloat("Recast cell size", &navigationControls->build.cellSize, 0.05f, 1.0f);
+            ImGui::SliderFloat("Recast cell height", &navigationControls->build.cellHeight, 0.05f, 1.0f);
+        } else {
+            ImGui::Text("Agent radius/height: %.2f / %.2f", navigation.agent.radius, navigation.agent.height);
+            ImGui::Text("Agent slope/climb: %.1f / %.2f", navigation.agent.maxSlopeDegrees, navigation.agent.maxClimb);
+            ImGui::Text("Recast cell size/height: %.2f / %.2f", navigation.build.cellSize, navigation.build.cellHeight);
+        }
         ImGui::Separator();
         ImGui::Text("Camera");
         if (cameraControls) {
