@@ -404,3 +404,14 @@ Changed:
 Rationale:
 - Open-world navigation tuning needs concrete explanations for missing navmesh, sparse portals, and failed movement commands before adding more movement behavior.
 - Diagnostics stay read-only Engine data so debug UI can explain decisions without changing pathfinding outcomes.
+
+## 2026-06-14 - Debug UI Readability Pass
+
+Changed:
+- Grouped the Dear ImGui debug window into Render, World, Navigation, Camera/Biome, Picking, and Groups tabs.
+- Set a first-use debug window size so dense controls have enough room to read.
+- Disabled renderer fog by default while keeping the fog controls available in the Render tab.
+
+Rationale:
+- The single long debug panel had become hard to scan as navigation and world-edit diagnostics grew.
+- Fog should be an opt-in atmosphere effect while terrain/navigation visibility is still being tuned.

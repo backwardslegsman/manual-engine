@@ -32,9 +32,9 @@ Keep this document current whenever subsystem ownership, data flow, or save-faci
 - Static mesh and texture loading through renderer APIs and `AssetCache`.
 - Renderer material handles with base color, normal, metallic, and roughness factors.
 - Renderer scene submission through `RenderView`, with CPU frustum culling, distance culling, render layers, render groups, draw stats, and conservative CPU batching by mesh/material.
-- Renderer atmosphere state: sky clear color, exponential fog, and directional sun settings.
+- Renderer atmosphere state: sky clear color, exponential fog, and directional sun settings. Fog is disabled by default and can be enabled from the debug UI.
 - Renderer debug draw primitives are transient per-frame submission aids for bounds, chunk borders, frustums, actor movement diagnostics, and navigation visualization.
-- Dear ImGui debug panel for renderer stats, world save/edit controls, camera, biomes, picking, interactions, terrain LOD, spatial registry, and player actor status.
+- Dear ImGui debug panel for renderer stats, world save/edit controls, camera, biomes, picking, interactions, terrain LOD, spatial registry, and player actor status, grouped into tabs so dense diagnostics stay readable.
 - Debug builds keep continuous hover picking and timing visibility. Release builds disable debug UI/draw hooks and update picking only for commands that need a fresh target.
 - Fixed-step engine loop, world object ownership, kinematic actors, reusable actor path-following state, simple blocking collision, and terrain grounding.
 - Sim/orbit camera with free and player-follow modes.

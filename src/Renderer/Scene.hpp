@@ -80,7 +80,7 @@ namespace Renderer {
         glm::vec4 skyColor{0.27f, 0.20f, 0.33f, 1.0f};
         glm::vec4 fogColor{0.42f, 0.48f, 0.56f, 1.0f};
         float fogDensity = 0.018f;
-        bool fogEnabled = true;
+        bool fogEnabled = false;
         glm::vec3 sunDirection{-0.35f, -0.85f, -0.25f};
         glm::vec3 sunColor{1.0f, 0.94f, 0.84f};
         float sunIntensity = 1.0f;

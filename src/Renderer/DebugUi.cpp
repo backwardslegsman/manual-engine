@@ -202,7 +202,10 @@ namespace Renderer::DebugUi {
             }
         };
 
+        ImGui::SetNextWindowSize(ImVec2(560.0f, 720.0f), ImGuiCond_FirstUseEver);
         ImGui::Begin("Renderer Debug");
+        if (ImGui::BeginTabBar("DebugTabs")) {
+        if (ImGui::BeginTabItem("Render")) {
         ImGui::Text("Layers");
         layerCheckbox("Terrain", RenderLayer::Terrain);
         layerCheckbox("Props", RenderLayer::Props);
@@ -261,6 +264,9 @@ namespace Renderer::DebugUi {
         ImGui::Text("Frustum culled: %u", stats.frustumCulledTerrainTiles);
         ImGui::Text("Distance culled: %u", stats.distanceCulledTerrainTiles);
         ImGui::Separator();
+        ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("World")) {
         if (worldSave) {
             ImGui::Text("World Save");
             ImGui::InputText("Save path", worldSave->path.data(), worldSave->path.size());
@@ -388,6 +394,9 @@ namespace Renderer::DebugUi {
         ImGui::Text("Objects in camera cell: %u", spatial.objectsInCurrentCell);
         ImGui::Text("Objects within %.1f: %u", spatial.nearQueryRadius, spatial.objectsNearCamera);
         ImGui::Separator();
+        ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Navigation")) {
         ImGui::Text("Navigation");
         if (!navigation.activeNavigationProfileId.empty()) {
             ImGui::Text("Profile: %s", navigation.activeNavigationProfileId.c_str());
@@ -557,6 +566,9 @@ namespace Renderer::DebugUi {
             ImGui::Text("Recast cell size/height: %.2f / %.2f", navigation.build.cellSize, navigation.build.cellHeight);
         }
         ImGui::Separator();
+        ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Camera/Biome")) {
         ImGui::Text("Camera");
         if (cameraControls) {
             int cameraMode = camera.followMode ? 1 : 0;
@@ -625,6 +637,9 @@ namespace Renderer::DebugUi {
             ImGui::Text("No biome system");
         }
         ImGui::Separator();
+        ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Picking")) {
         ImGui::Text("Debug Picking");
         ImGui::Text("Mouse: %.1f, %.1f", picking.mousePosition.x, picking.mousePosition.y);
         ImGui::Text("Ray origin: %.2f, %.2f, %.2f", picking.rayOrigin.x, picking.rayOrigin.y, picking.rayOrigin.z);
@@ -712,6 +727,9 @@ namespace Renderer::DebugUi {
             ImGui::TextWrapped("%s", interaction.status.c_str());
         }
         ImGui::Separator();
+        ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Groups")) {
         if (ImGui::CollapsingHeader("Render Groups")) {
             for (const RenderGroupDrawStats& group : stats.renderGroups) {
                 const std::string label = group.hasChunkCoord
@@ -737,6 +755,10 @@ namespace Renderer::DebugUi {
                     ImGui::TreePop();
                 }
             }
+        }
+        ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
         }
         ImGui::End();
     }
