@@ -47,7 +47,8 @@ namespace Engine {
 
         static ProceduralChunkContentConfig sampleOpenWorldConfig(
             const ObjectArchetypeCatalog& archetypes,
-            const BiomeSystem* biomes = nullptr);
+            const BiomeSystem* biomes = nullptr,
+            float chunkSize = 16.0f);
 
         void addArchetype(const ObjectArchetypeDescriptor& archetype);
         std::vector<ProceduralPropSpawn> propsForChunk(ChunkCoord coord) const;

@@ -12,7 +12,7 @@ namespace Engine {
         settings_.loadRadiusChunks = std::max(settings_.loadRadiusChunks, 0);
     }
 
-    void ChunkStreamer::update(
+    bool ChunkStreamer::update(
         const glm::vec3& centerWorldPosition,
         World& world,
         TerrainSystem& terrain,
@@ -34,9 +34,13 @@ namespace Engine {
             unloadChunk(coord, world, terrain, spatialRegistry);
         }
 
+        bool changed = !chunksToUnload.empty();
         for (ChunkCoord coord : desired) {
+            const bool wasLoaded = isLoaded(coord);
             loadChunk(coord, world, terrain, factory);
+            changed = changed || !wasLoaded;
         }
+        return changed;
     }
 
     void ChunkStreamer::loadChunk(ChunkCoord coord, World& world, TerrainSystem& terrain, const ChunkContentFactory& factory)

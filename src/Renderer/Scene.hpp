@@ -47,6 +47,11 @@ namespace Renderer {
         bool navigationCurrentPath = true;
         bool navigationNearestPoint = true;
         bool navigationBlockerBounds = false;
+        bool navigationPortals = true;
+        bool navigationConnectivityLinks = true;
+        bool worldNavigationGraphNodes = false;
+        bool worldNavigationGraphEdges = false;
+        bool worldNavigationRoute = true;
         bool cameraFrustum = false;
         bool actorDestination = true;
     };

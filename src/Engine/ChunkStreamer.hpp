@@ -26,7 +26,7 @@ namespace Engine {
     public:
         explicit ChunkStreamer(ChunkSettings settings = {});
 
-        void update(
+        bool update(
             const glm::vec3& centerWorldPosition,
             World& world,
             TerrainSystem& terrain,

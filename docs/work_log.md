@@ -161,3 +161,101 @@ Changed:
 Rationale:
 - The App loop should compose services and debug controls, not accumulate reusable movement rules.
 - Navigation and actor command APIs are now easier to extend without leaking Recast/Detour details or renderer dependencies.
+
+## 2026-06-13 - Open-World Navigation Roadmap Expansion
+
+Changed:
+- Expanded the navigation roadmap beyond near movement with chunk connectivity, coarse region graph, and hierarchical move command phases.
+- Clarified that local Recast/Detour tiles remain the precise movement layer while long-distance travel uses a strategic graph above them.
+- Expanded the deferred list for async builds, nav caches, dynamic obstacle systems, roads, off-mesh links, crowd avoidance, and long-distance unloaded simulation.
+
+Rationale:
+- Open-world-scale movement needs a hierarchy instead of one giant navmesh query.
+- Writing the next phases down now keeps upcoming work focused on connectivity and graph routing before introducing heavier runtime systems.
+
+## 2026-06-13 - Chunk Navigation Connectivity
+
+Changed:
+- Added an Engine-owned navigation connectivity system that samples loaded nav tile borders and records coarse portal metadata per chunk edge.
+- Added debug draw and Dear ImGui stats for portals, connected portals, partial chunks, blocked chunks, and camera/selected chunk connectivity summaries.
+- Rebuilt connectivity after loaded nav tile sync/rebuild while keeping chunk and nav tile lifetime unchanged.
+
+Rationale:
+- Open-world pathing needs stable chunk-to-chunk connectivity before building a coarse graph or hierarchical move command.
+- Keeping connectivity derived from public navigation queries preserves the Recast/Detour encapsulation boundary.
+
+## 2026-06-13 - Coarse Region Graph And Large Test World
+
+Changed:
+- Added `WorldNavigationGraph` with deterministic chunk nodes, weighted edges, A* route queries, and coarse route debug draw/stats.
+- Expanded the sample world profile to 96m chunks, a 7x7 loaded chunk set, a 33x33 generated graph area, larger camera bounds, and larger terrain LOD distances.
+- Kept local Recast/Detour nav tiles loaded-only while graph connectivity can be generated beyond loaded chunks.
+
+Rationale:
+- Open-world-scale navigation needs a coarse strategic layer above local Detour pathing.
+- The larger sample profile makes graph routing and chunk-scale debug behavior visible before hierarchical actor movement is added.
+
+## 2026-06-13 - Systems And Contracts Guide
+
+Changed:
+- Added `docs/system_contracts.md` listing current gameplay systems, rendering features, initialization order, and cross-system contracts.
+- Updated agent guidance to require consulting and maintaining the guide when adding features, public interfaces, or initialization dependencies.
+
+Rationale:
+- The prototype now has enough interacting systems that feature work needs one explicit contract checklist, not only roadmap notes.
+- Keeping initialization and ownership rules documented reduces accidental coupling between App, Engine, Renderer, and Assets.
+
+## 2026-06-13 - Hierarchical Move Command
+
+Changed:
+- Added actor-owned hierarchical route state above local Detour path state.
+- Routed terrain move commands through `WorldNavigationGraph` so selected actors can follow coarse route waypoints with local Detour segments.
+- Added route status, waypoint progress, final destination, and waiting/failure messages to debug display and debug draw.
+
+Rationale:
+- Open-world movement needs long commands to be decomposed into chunk-scale guidance plus precise loaded-tile pathing.
+- Keeping chunk streaming camera/App-owned makes unloaded local nav tiles an explicit waiting/failure state instead of hidden teleporting or forced streaming.
+
+## 2026-06-13 - Navigation Cache Generation Phase
+
+Changed:
+- Added Phase 12 to the navigation roadmap for generated local nav tile, chunk connectivity, and coarse graph cache artifacts.
+- Defined cache manifest/version inputs so terrain, biome, archetype, Recast, and agent setting changes invalidate derived navigation data.
+- Clarified that cache files are derived data and runtime must fall back to synchronous generation on cache misses.
+
+Rationale:
+- Open-world navigation needs a cache path before larger regions can be practical without frame-time rebuild spikes.
+- Treating cache data as derived and versioned keeps save files, authored config, and runtime persistence separate.
+
+## 2026-06-13 - Navigation Cache Implementation
+
+Changed:
+- Added `NavigationCache` for versioned local nav tile, connectivity, and world graph cache files under `generated/navigation_cache`.
+- Added plain tile byte import/export APIs to `NavigationSystem` while keeping Recast/Detour private to `Navigation.cpp`.
+- Wired App nav sync to load cache records when safe, write successful baseline builds, and expose cache controls/stats in Dear ImGui.
+
+Rationale:
+- Cached baseline nav data reduces repeat synchronous Recast work without changing chunk ownership or save files.
+- Override-aware cache bypass keeps save-backed object edits authoritative over derived baseline cache artifacts.
+
+## 2026-06-13 - Release Build Without Debug Hooks
+
+Changed:
+- Added `MANUAL_ENGINE_ENABLE_DEBUG_TOOLS`, enabled for Debug and disabled for Release.
+- Stubbed Dear ImGui debug UI calls and skipped debug primitive gathering/submission in Release builds.
+- Removed the ImGui link dependency from Release builds while preserving Debug tooling.
+
+Rationale:
+- Release builds should exercise the game/runtime path without debug UI capture, debug draw submission, or editor/debug knobs.
+- Keeping the same App call sites with no-op debug implementations avoids a separate release-only main loop.
+
+## 2026-06-13 - Dirty Runtime Updates And Release Picking
+
+Changed:
+- Added App-owned dirty flags so nav tile sync, navigation connectivity, world graph rebuilds, renderer visibility metadata, and picking run only when their inputs change.
+- Changed chunk streaming and terrain LOD updates to report whether they changed runtime state, giving App clear triggers for dependent rebuilds.
+- Gated Release picking to command-time target acquisition while preserving continuous Debug hover picking and adding debug-only frame timing stats.
+
+Rationale:
+- The larger open-world profile made repeated derived-data rebuilds the likely frame-time floor.
+- Dirty orchestration keeps the simple synchronous architecture while avoiding expensive work on stationary frames.

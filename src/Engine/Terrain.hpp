@@ -66,7 +66,7 @@ namespace Engine {
         TerrainTileHandle createTile(ChunkCoord coord, Renderer::MaterialHandle material);
         void destroyTile(TerrainTileHandle handle);
         Renderer::TerrainHandle rendererTerrain(TerrainTileHandle handle) const;
-        void updateLods(const glm::vec3& cameraPosition);
+        bool updateLods(const glm::vec3& cameraPosition);
         std::array<uint32_t, TerrainLodLevelCount> lodCounts() const;
 
         std::optional<float> sampleHeight(float worldX, float worldZ) const;

@@ -27,6 +27,7 @@ namespace Engine {
         void removePersistent(ObjectId id);
         std::optional<SavedPersistentObject> persistentObject(ObjectId id) const;
         std::vector<SavedPersistentObject> persistentObjectsForChunk(ChunkCoord chunk) const;
+        bool hasOverridesForChunk(ChunkCoord chunk) const;
 
         ObjectId allocateCustomObjectId(std::string_view archetypeId);
         uint64_t nextCustomObjectSerial() const;

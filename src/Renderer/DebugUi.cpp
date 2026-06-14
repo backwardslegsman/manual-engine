@@ -1,5 +1,11 @@
 #include "Renderer/DebugUi.hpp"
 
+#ifndef MANUAL_ENGINE_ENABLE_DEBUG_TOOLS
+#define MANUAL_ENGINE_ENABLE_DEBUG_TOOLS 1
+#endif
+
+#if MANUAL_ENGINE_ENABLE_DEBUG_TOOLS
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -218,6 +224,11 @@ namespace Renderer::DebugUi {
         ImGui::Checkbox("Navigation current path", &debugDraw.navigationCurrentPath);
         ImGui::Checkbox("Navigation nearest point", &debugDraw.navigationNearestPoint);
         ImGui::Checkbox("Navigation blocker bounds", &debugDraw.navigationBlockerBounds);
+        ImGui::Checkbox("Navigation portals", &debugDraw.navigationPortals);
+        ImGui::Checkbox("Navigation connectivity links", &debugDraw.navigationConnectivityLinks);
+        ImGui::Checkbox("World nav graph nodes", &debugDraw.worldNavigationGraphNodes);
+        ImGui::Checkbox("World nav graph edges", &debugDraw.worldNavigationGraphEdges);
+        ImGui::Checkbox("World nav route", &debugDraw.worldNavigationRoute);
         ImGui::Checkbox("Camera frustum", &debugDraw.cameraFrustum);
         ImGui::Checkbox("Actor destination", &debugDraw.actorDestination);
         ImGui::Separator();
@@ -352,6 +363,15 @@ namespace Renderer::DebugUi {
             if (!player.pathLastQueryMessage.empty()) {
                 ImGui::TextWrapped("%s", player.pathLastQueryMessage.c_str());
             }
+            ImGui::Text("Route status: %s", player.routeStatus.empty() ? "<none>" : player.routeStatus.c_str());
+            ImGui::Text("Route waypoint/count: %u / %u", player.routeCurrentWaypoint, player.routeWaypointCount);
+            ImGui::Text("Route final destination: %.2f, %.2f, %.2f",
+                player.routeFinalDestination.x,
+                player.routeFinalDestination.y,
+                player.routeFinalDestination.z);
+            if (!player.routeMessage.empty()) {
+                ImGui::TextWrapped("%s", player.routeMessage.c_str());
+            }
         } else {
             ImGui::Text("No player actor");
         }
@@ -374,6 +394,32 @@ namespace Renderer::DebugUi {
         ImGui::Text("Blocker vertices/triangles: %u / %u",
             navigation.blockerVertexCount,
             navigation.blockerTriangleCount);
+        ImGui::Text("Connectivity chunks: %u", navigation.connectivityChunkCount);
+        ImGui::Text("Connectivity portals connected/total: %u / %u",
+            navigation.connectivityConnectedPortalCount,
+            navigation.connectivityPortalCount);
+        ImGui::Text("Connectivity partial/blocked chunks: %u / %u",
+            navigation.connectivityPartialChunkCount,
+            navigation.connectivityBlockedChunkCount);
+        if (!navigation.cameraChunkConnectivitySummary.empty()) {
+            ImGui::TextWrapped("Camera chunk: %s", navigation.cameraChunkConnectivitySummary.c_str());
+        }
+        if (!navigation.selectedChunkConnectivitySummary.empty()) {
+            ImGui::TextWrapped("Selected chunk: %s", navigation.selectedChunkConnectivitySummary.c_str());
+        }
+        ImGui::Text("World graph: %s", navigation.hasWorldGraph ? "built" : "empty");
+        ImGui::Text("World graph center: %d, %d", navigation.worldGraphCenterX, navigation.worldGraphCenterZ);
+        ImGui::Text("World graph nodes/edges/blocked: %u / %u / %u",
+            navigation.worldGraphNodeCount,
+            navigation.worldGraphEdgeCount,
+            navigation.worldGraphBlockedEdgeCount);
+        ImGui::Text("Last coarse route: %s (%u chunks, %.2f cost)",
+            navigation.lastWorldRouteStatus.empty() ? "<none>" : navigation.lastWorldRouteStatus.c_str(),
+            navigation.lastWorldRouteChunkCount,
+            navigation.lastWorldRouteCost);
+        if (!navigation.lastWorldRouteMessage.empty()) {
+            ImGui::TextWrapped("%s", navigation.lastWorldRouteMessage.c_str());
+        }
         if (navigation.hasLastRebuiltChunk) {
             ImGui::Text("Last rebuilt chunk: %d, %d",
                 navigation.lastRebuiltChunkX,
@@ -419,9 +465,50 @@ namespace Renderer::DebugUi {
         if (!navigation.lastQueryMessage.empty()) {
             ImGui::TextWrapped("%s", navigation.lastQueryMessage.c_str());
         }
+        ImGui::Text("Cache identity: %s", navigation.cacheIdentity.empty() ? "<none>" : navigation.cacheIdentity.c_str());
+        ImGui::Text("Cache tiles hit/miss/stale/write: %u / %u / %u / %u",
+            navigation.cacheTileHits,
+            navigation.cacheTileMisses,
+            navigation.cacheTileStale,
+            navigation.cacheTileWrites);
+        ImGui::Text("Cache connectivity hit/miss/write: %u / %u / %u",
+            navigation.cacheConnectivityHits,
+            navigation.cacheConnectivityMisses,
+            navigation.cacheConnectivityWrites);
+        ImGui::Text("Cache graph hit/miss/write: %u / %u / %u",
+            navigation.cacheGraphHits,
+            navigation.cacheGraphMisses,
+            navigation.cacheGraphWrites);
+        if (!navigation.cacheLastPath.empty()) {
+            ImGui::TextWrapped("Cache path: %s", navigation.cacheLastPath.c_str());
+        }
+        if (!navigation.cacheLastMessage.empty()) {
+            ImGui::TextWrapped("Cache: %s", navigation.cacheLastMessage.c_str());
+        }
+        ImGui::Text("Performance ms chunk/nav/connectivity/graph: %.3f / %.3f / %.3f / %.3f",
+            navigation.chunkStreamingMs,
+            navigation.navTileSyncMs,
+            navigation.connectivityMs,
+            navigation.worldGraphMs);
+        ImGui::Text("Performance ms picking/draw: %.3f / %.3f",
+            navigation.pickingMs,
+            navigation.drawSubmissionMs);
         if (navigationControls) {
             if (ImGui::Button("Rebuild Visible Nav Tiles")) {
                 navigationControls->rebuildVisibleTilesRequested = true;
+            }
+            ImGui::Checkbox("Navigation cache enabled", &navigationControls->cacheEnabled);
+            ImGui::Checkbox("Navigation cache write-through", &navigationControls->cacheWriteThrough);
+            if (ImGui::Button("Generate Visible Nav Cache")) {
+                navigationControls->generateVisibleCacheRequested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Refresh Selected/Visible Cache")) {
+                navigationControls->refreshSelectedOrVisibleCacheRequested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Clear Cache Stats")) {
+                navigationControls->clearCacheStatsRequested = true;
             }
             ImGui::SliderFloat("Agent radius", &navigationControls->agent.radius, 0.1f, 2.0f);
             ImGui::SliderFloat("Agent height", &navigationControls->agent.height, 0.5f, 4.0f);
@@ -701,3 +788,59 @@ namespace Renderer::DebugUi {
         }
     }
 }
+
+#else
+
+namespace Renderer::DebugUi {
+    bool init(SDL_Window*)
+    {
+        return false;
+    }
+
+    void shutdown()
+    {
+    }
+
+    void processEvent(const SDL_Event&)
+    {
+    }
+
+    void beginFrame(uint16_t, uint16_t)
+    {
+    }
+
+    bool wantsMouseCapture()
+    {
+        return false;
+    }
+
+    bool wantsKeyboardCapture()
+    {
+        return false;
+    }
+
+    void showRendererDebug(
+        const SceneDrawStats&,
+        RendererDebugSettings&,
+        AtmosphereSettings&,
+        DebugDrawSettings&,
+        const TerrainLodDebugStats&,
+        const SpatialRegistryDebugStats&,
+        const NavigationDebugStats&,
+        NavigationDebugControls*,
+        const CameraDebugStats&,
+        CameraDebugControls*,
+        const BiomeDebugStats&,
+        const DebugPickingStats&,
+        const InteractionDebugStats&,
+        WorldSaveDebugControls*,
+        const PlayerActorDebugStats&)
+    {
+    }
+
+    void render(bgfx::ViewId, uint16_t, uint16_t)
+    {
+    }
+}
+
+#endif

@@ -31,9 +31,10 @@ namespace Engine {
 
     ProceduralChunkContentConfig ProceduralChunkContentConfig::sampleOpenWorldConfig(
         const ObjectArchetypeCatalog& archetypes,
-        const BiomeSystem* biomes)
+        const BiomeSystem* biomes,
+        float chunkSize)
     {
-        ProceduralChunkContentConfig config{{16.0f, biomes}};
+        ProceduralChunkContentConfig config{{chunkSize, biomes}};
         for (const ObjectArchetypeDescriptor* archetype : archetypes.all()) {
             if (archetype) {
                 config.addArchetype(*archetype);
@@ -59,11 +60,14 @@ namespace Engine {
         const BiomeDescriptor* biome = settings_.biomes ? settings_.biomes->descriptor(biomeSample.id) : nullptr;
         const float propDensity = biome ? std::clamp(biome->propDensity, 0.0f, 1.0f) : 1.0f;
 
+        const float low = settings_.chunkSize * 0.25f;
+        const float high = settings_.chunkSize * 0.75f;
+        const float center = settings_.chunkSize * 0.5f;
         const glm::vec3 anchors[] = {
-            {4.0f, 0.0f, 4.0f},
-            {12.0f, 0.0f, 4.0f},
-            {4.0f, 0.0f, 12.0f},
-            {12.0f, 0.0f, 12.0f},
+            {low, 0.0f, low},
+            {high, 0.0f, low},
+            {low, 0.0f, high},
+            {high, 0.0f, high},
         };
 
         std::vector<ProceduralPropSpawn> spawns;
@@ -95,7 +99,7 @@ namespace Engine {
                 ObjectId::proceduralProp(coord, archetype.id, BonusSlot),
                 archetype.id,
                 BonusSlot,
-                {8.0f, 0.0f, 8.0f},
+                {center, 0.0f, center},
                 archetype.scale * 1.2f,
                 archetype.localBounds,
                 archetype.terrainYOffset * 1.2f,

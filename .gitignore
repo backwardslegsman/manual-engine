@@ -38,3 +38,6 @@ Desktop.ini
 *.log
 *.dmp
 *.pdb
+
+# Generated derived data
+generated/navigation_cache/

@@ -12,6 +12,7 @@
 #include "Engine/Navigation.hpp"
 #include "Engine/Terrain.hpp"
 #include "Engine/World.hpp"
+#include "Engine/WorldNavigationGraph.hpp"
 
 namespace Engine {
     class BlockingCollisionSystem;
@@ -27,6 +28,16 @@ namespace Engine {
         Moving,
         Blocked,
         Repathing,
+        Arrived,
+        Failed,
+        Cancelled,
+    };
+
+    enum class ActorRouteStatus {
+        None,
+        Planning,
+        MovingToWaypoint,
+        WaitingForLocalTile,
         Arrived,
         Failed,
         Cancelled,
@@ -63,6 +74,14 @@ namespace Engine {
         std::string lastQueryMessage;
     };
 
+    struct ActorRouteState {
+        ActorRouteStatus status = ActorRouteStatus::None;
+        WorldNavRoute route;
+        uint32_t currentWaypointIndex = 0;
+        glm::vec3 finalDestination{};
+        std::string lastRouteMessage;
+    };
+
     struct ActorState {
         WorldObjectHandle object;
         glm::vec3 velocity{};
@@ -79,6 +98,7 @@ namespace Engine {
         glm::vec3 resolvedPosition{};
         bool hasMovementDebug = false;
         ActorPathState path;
+        ActorRouteState route;
     };
 
     class ActorController {
@@ -97,8 +117,16 @@ namespace Engine {
             const NavAgentSettings& agent,
             const World& world);
         bool setPath(ActorHandle actor, NavPath path, const glm::vec3& destination);
+        WorldNavRoute setRouteDestination(
+            ActorHandle actor,
+            const glm::vec3& destination,
+            const WorldNavigationGraph& worldGraph,
+            const NavigationSystem& navigation,
+            const NavAgentSettings& agent,
+            const World& world);
         void cancelPath(ActorHandle actor);
         void clearPath(ActorHandle actor);
+        void clearRoute(ActorHandle actor);
         void forEachActor(const std::function<void(ActorHandle, const ActorState&)>& callback) const;
 
         void fixedUpdate(ActorHandle actor, const EventQueue& events, const TerrainSystem& terrain, World& world, float dt);
@@ -141,6 +169,19 @@ namespace Engine {
             const NavigationSystem* navigation,
             const NavAgentSettings* navAgent,
             float dt);
+        NavQueryResult setPathDestinationInternal(
+            ActorHandle actor,
+            const glm::vec3& destination,
+            const NavigationSystem& navigation,
+            const NavAgentSettings& agent,
+            const World& world,
+            bool clearRouteState);
+        bool requestRouteWaypointPath(
+            ActorHandle actor,
+            ActorRecord& actorRecord,
+            const NavigationSystem& navigation,
+            const NavAgentSettings& agent,
+            const World& world);
 
         std::vector<ActorRecord> actors_;
     };

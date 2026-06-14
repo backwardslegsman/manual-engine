@@ -77,6 +77,19 @@ namespace Engine {
                 status == ActorPathStatus::Blocked ||
                 status == ActorPathStatus::Repathing;
         }
+
+        bool activeRouteStatus(ActorRouteStatus status)
+        {
+            return status == ActorRouteStatus::Planning ||
+                status == ActorRouteStatus::MovingToWaypoint ||
+                status == ActorRouteStatus::WaitingForLocalTile;
+        }
+
+        bool waitingForLoadedLocalTile(NavQueryStatus status)
+        {
+            return status == NavQueryStatus::NoTile ||
+                status == NavQueryStatus::NoNearestPoly;
+        }
     }
 
     ActorHandle ActorController::createActor(WorldObjectHandle object, ActorControllerSettings settings)
@@ -177,9 +190,24 @@ namespace Engine {
         const NavAgentSettings& agent,
         const World& world)
     {
+        return setPathDestinationInternal(actor, destination, navigation, agent, world, true);
+    }
+
+    NavQueryResult ActorController::setPathDestinationInternal(
+        ActorHandle actor,
+        const glm::vec3& destination,
+        const NavigationSystem& navigation,
+        const NavAgentSettings& agent,
+        const World& world,
+        bool clearRouteState)
+    {
         ActorRecord* actorRecord = record(actor);
         if (!actorRecord || !world.isValid(actorRecord->state.object)) {
             return {NavQueryStatus::InvalidInput, {}, {}, "Invalid actor path request."};
+        }
+
+        if (clearRouteState) {
+            actorRecord->state.route = {};
         }
 
         const std::optional<glm::vec3> currentPosition = world.position(actorRecord->state.object);
@@ -226,6 +254,65 @@ namespace Engine {
         return true;
     }
 
+    WorldNavRoute ActorController::setRouteDestination(
+        ActorHandle actor,
+        const glm::vec3& destination,
+        const WorldNavigationGraph& worldGraph,
+        const NavigationSystem& navigation,
+        const NavAgentSettings& agent,
+        const World& world)
+    {
+        ActorRecord* actorRecord = record(actor);
+        if (!actorRecord || !world.isValid(actorRecord->state.object)) {
+            return {
+                WorldNavRouteStatus::InvalidEndpoint,
+                {},
+                {},
+                0.0f,
+                "Invalid actor route request.",
+            };
+        }
+
+        const std::optional<glm::vec3> currentPosition = world.position(actorRecord->state.object);
+        if (!currentPosition) {
+            actorRecord->state.route = {};
+            actorRecord->state.route.status = ActorRouteStatus::Failed;
+            actorRecord->state.route.finalDestination = destination;
+            actorRecord->state.route.lastRouteMessage = "Actor has no world position.";
+            return {
+                WorldNavRouteStatus::InvalidEndpoint,
+                {},
+                {},
+                0.0f,
+                actorRecord->state.route.lastRouteMessage,
+            };
+        }
+
+        WorldNavRoute route = worldGraph.findRoute(*currentPosition, destination);
+        actorRecord->state.route = {};
+        actorRecord->state.route.status = ActorRouteStatus::Planning;
+        actorRecord->state.route.route = route;
+        actorRecord->state.route.currentWaypointIndex = 1;
+        actorRecord->state.route.finalDestination = destination;
+        actorRecord->state.route.lastRouteMessage = route.message;
+
+        if (route.status != WorldNavRouteStatus::Success || route.portalWaypoints.size() < 2) {
+            actorRecord->state.route.status = ActorRouteStatus::Failed;
+            actorRecord->state.path.status = ActorPathStatus::Failed;
+            actorRecord->state.path.lastQueryStatus = NavQueryStatus::NoPath;
+            actorRecord->state.path.lastQueryMessage = route.message.empty()
+                ? "World route did not return usable waypoints."
+                : route.message;
+            return route;
+        }
+
+        if (!requestRouteWaypointPath(actor, *actorRecord, navigation, agent, world)) {
+            return route;
+        }
+
+        return route;
+    }
+
     void ActorController::cancelPath(ActorHandle actor)
     {
         ActorRecord* actorRecord = record(actor);
@@ -238,6 +325,8 @@ namespace Engine {
         actorRecord->state.path.blockedTicks = 0;
         actorRecord->state.path.lastQueryStatus = NavQueryStatus::Success;
         actorRecord->state.path.lastQueryMessage = "Path cancelled.";
+        actorRecord->state.route.status = ActorRouteStatus::Cancelled;
+        actorRecord->state.route.lastRouteMessage = "Route cancelled.";
         actorRecord->blockedPathTicks = 0;
     }
 
@@ -250,6 +339,16 @@ namespace Engine {
         actorRecord->state.path = {};
         actorRecord->state.path.settings = actorRecord->settings.path;
         actorRecord->blockedPathTicks = 0;
+    }
+
+    void ActorController::clearRoute(ActorHandle actor)
+    {
+        ActorRecord* actorRecord = record(actor);
+        if (!actorRecord) {
+            return;
+        }
+        actorRecord->state.route = {};
+        clearPath(actor);
     }
 
     void ActorController::forEachActor(const std::function<void(ActorHandle, const ActorState&)>& callback) const
@@ -324,7 +423,8 @@ namespace Engine {
         const glm::vec2 axis = playerMoveAxis(events);
         glm::vec3 velocity{};
         if (hasManualMoveInput(axis)) {
-            if (actorRecord->settings.manualInputCancelsPath && activePathStatus(actorRecord->state.path.status)) {
+            if (actorRecord->settings.manualInputCancelsPath &&
+                (activePathStatus(actorRecord->state.path.status) || activeRouteStatus(actorRecord->state.route.status))) {
                 cancelPath(actor);
             }
             const glm::vec3 direction = glm::normalize(glm::vec3{axis.x, 0.0f, axis.y});
@@ -337,6 +437,21 @@ namespace Engine {
         }
 
         const glm::vec3 currentPosition = world.position(actorRecord->state.object).value_or(glm::vec3{});
+
+        if (!hasManualMoveInput(axis) &&
+            actorRecord->state.route.status == ActorRouteStatus::MovingToWaypoint &&
+            actorRecord->state.path.status == ActorPathStatus::Arrived &&
+            navigation &&
+            navAgent) {
+            ++actorRecord->state.route.currentWaypointIndex;
+            requestRouteWaypointPath(actor, *actorRecord, *navigation, *navAgent, world);
+        }
+        if (!hasManualMoveInput(axis) &&
+            actorRecord->state.route.status == ActorRouteStatus::WaitingForLocalTile &&
+            navigation &&
+            navAgent) {
+            requestRouteWaypointPath(actor, *actorRecord, *navigation, *navAgent, world);
+        }
 
         if (!hasManualMoveInput(axis) && actorRecord->state.path.status == ActorPathStatus::Moving) {
             ActorPathState& path = actorRecord->state.path;
@@ -459,9 +574,52 @@ namespace Engine {
             actorRecord->state.path.currentCorner >= actorRecord->state.path.path.points.size()) {
             actorRecord->state.path.status = ActorPathStatus::Arrived;
             actorRecord->state.velocity = {};
+            if (actorRecord->state.route.status == ActorRouteStatus::MovingToWaypoint &&
+                actorRecord->state.route.currentWaypointIndex + 1 >= actorRecord->state.route.route.portalWaypoints.size()) {
+                actorRecord->state.route.status = ActorRouteStatus::Arrived;
+                actorRecord->state.route.lastRouteMessage = "Route arrived.";
+            }
         }
         world.setPosition(actorRecord->state.object, position);
         world.setRotation(actorRecord->state.object, {0.0f, actorRecord->state.facingRadians, 0.0f});
+    }
+
+    bool ActorController::requestRouteWaypointPath(
+        ActorHandle actor,
+        ActorRecord& actorRecord,
+        const NavigationSystem& navigation,
+        const NavAgentSettings& agent,
+        const World& world)
+    {
+        ActorRouteState& route = actorRecord.state.route;
+        if (route.currentWaypointIndex >= route.route.portalWaypoints.size()) {
+            route.status = ActorRouteStatus::Arrived;
+            route.lastRouteMessage = "Route arrived.";
+            actorRecord.state.path.status = ActorPathStatus::Arrived;
+            return true;
+        }
+
+        const glm::vec3 target = route.route.portalWaypoints[route.currentWaypointIndex];
+        const NavQueryResult result = setPathDestinationInternal(actor, target, navigation, agent, world, false);
+        route.lastRouteMessage = result.message;
+        if (result.status == NavQueryStatus::Success) {
+            route.status = ActorRouteStatus::MovingToWaypoint;
+            return true;
+        }
+
+        if (waitingForLoadedLocalTile(result.status)) {
+            route.status = ActorRouteStatus::WaitingForLocalTile;
+            route.lastRouteMessage = result.message.empty()
+                ? "Waiting for loaded navigation tile for the next route waypoint."
+                : result.message;
+            return false;
+        }
+
+        route.status = ActorRouteStatus::Failed;
+        route.lastRouteMessage = result.message.empty()
+            ? "Failed to request local path to route waypoint."
+            : result.message;
+        return false;
     }
 
     ActorController::ActorRecord* ActorController::record(ActorHandle actor)

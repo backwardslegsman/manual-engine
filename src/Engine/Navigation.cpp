@@ -171,6 +171,7 @@ namespace Engine {
             NavigationTileHandle handle;
             dtTileRef tileRef = 0;
             Renderer::Aabb bounds;
+            std::vector<uint8_t> detourTileData;
             NavQueryStatus buildStatus = NavQueryStatus::Unsupported;
             std::string buildMessage;
         };
@@ -210,14 +211,14 @@ namespace Engine {
             return navMesh && navQuery;
         }
 
-        bool initializeNavMesh(const NavigationTerrainBuildData& buildData, const NavBuildSettings& settings)
+        bool initializeNavMeshForBounds(const Renderer::Aabb& bounds, const NavBuildSettings& settings)
         {
             if (navMeshReady) {
                 return true;
             }
 
-            tileWidth = std::max(buildData.bounds.max.x - buildData.bounds.min.x, 1.0f);
-            tileHeight = std::max(buildData.bounds.max.z - buildData.bounds.min.z, 1.0f);
+            tileWidth = std::max(bounds.max.x - bounds.min.x, 1.0f);
+            tileHeight = std::max(bounds.max.z - bounds.min.z, 1.0f);
 
             dtNavMeshParams params{};
             params.orig[0] = 0.0f;
@@ -237,6 +238,11 @@ namespace Engine {
 
             navMeshReady = true;
             return true;
+        }
+
+        bool initializeNavMesh(const NavigationTerrainBuildData& buildData, const NavBuildSettings& settings)
+        {
+            return initializeNavMeshForBounds(buildData.bounds, settings);
         }
     };
 
@@ -440,6 +446,9 @@ namespace Engine {
             rcFreePolyMeshDetail(detailMesh);
             return failBuild("Failed to create Detour navmesh tile data.");
         }
+        std::vector<uint8_t> detourTileData(
+            navData,
+            navData + static_cast<size_t>(std::max(navDataSize, 0)));
         rcFreePolyMesh(polyMesh);
         rcFreePolyMeshDetail(detailMesh);
 
@@ -455,12 +464,90 @@ namespace Engine {
             handle,
             tileRef,
             buildData.bounds,
+            std::move(detourTileData),
             NavQueryStatus::Success,
             "Built terrain navigation tile.",
         };
         impl_->lastBuildStatus = NavQueryStatus::Success;
         impl_->lastBuildMessage = "Built terrain navigation tile.";
         return handle;
+    }
+
+    NavigationTileHandle NavigationSystem::loadTerrainTileFromCache(const NavigationTileCacheData& cacheData)
+    {
+        if (!impl_ || !impl_->initialized()) {
+            if (impl_) {
+                impl_->lastBuildStatus = NavQueryStatus::NotInitialized;
+                impl_->lastBuildMessage = "Navigation system is not initialized.";
+            }
+            return {};
+        }
+        if (cacheData.detourTileData.empty() ||
+            cacheData.bounds.min.x > cacheData.bounds.max.x ||
+            cacheData.bounds.min.y > cacheData.bounds.max.y ||
+            cacheData.bounds.min.z > cacheData.bounds.max.z) {
+            impl_->lastBuildStatus = NavQueryStatus::InvalidInput;
+            impl_->lastBuildMessage = "Invalid navigation tile cache data.";
+            return {};
+        }
+        if (!impl_->initializeNavMeshForBounds(cacheData.bounds, settings_)) {
+            impl_->lastBuildStatus = NavQueryStatus::NotInitialized;
+            impl_->lastBuildMessage = "Failed to initialize Detour navmesh for cached tile.";
+            return {};
+        }
+
+        destroyTile(cacheData.coord);
+
+        unsigned char* navData = static_cast<unsigned char*>(dtAlloc(cacheData.detourTileData.size(), DT_ALLOC_PERM));
+        if (!navData) {
+            impl_->lastBuildStatus = NavQueryStatus::NoPath;
+            impl_->lastBuildMessage = "Failed to allocate Detour cached tile data.";
+            return {};
+        }
+        std::memcpy(navData, cacheData.detourTileData.data(), cacheData.detourTileData.size());
+
+        dtTileRef tileRef = 0;
+        const dtStatus addStatus = impl_->navMesh->addTile(
+            navData,
+            static_cast<int>(cacheData.detourTileData.size()),
+            DT_TILE_FREE_DATA,
+            0,
+            &tileRef);
+        if (dtStatusFailed(addStatus)) {
+            dtFree(navData);
+            impl_->lastBuildStatus = NavQueryStatus::InvalidInput;
+            impl_->lastBuildMessage = "Failed to add cached Detour navmesh tile.";
+            return {};
+        }
+
+        const NavigationTileHandle handle{impl_->nextTileId++};
+        impl_->tiles[cacheData.coord] = Impl::TileRecord{
+            handle,
+            tileRef,
+            cacheData.bounds,
+            cacheData.detourTileData,
+            NavQueryStatus::Success,
+            "Loaded terrain navigation tile from cache.",
+        };
+        impl_->lastBuildStatus = NavQueryStatus::Success;
+        impl_->lastBuildMessage = "Loaded terrain navigation tile from cache.";
+        return handle;
+    }
+
+    std::optional<NavigationTileCacheData> NavigationSystem::tileCacheData(ChunkCoord coord) const
+    {
+        if (!impl_) {
+            return std::nullopt;
+        }
+        const auto tileIt = impl_->tiles.find(coord);
+        if (tileIt == impl_->tiles.end() || tileIt->second.detourTileData.empty()) {
+            return std::nullopt;
+        }
+        return NavigationTileCacheData{
+            coord,
+            tileIt->second.bounds,
+            tileIt->second.detourTileData,
+        };
     }
 
     void NavigationSystem::destroyTile(ChunkCoord coord)

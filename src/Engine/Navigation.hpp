@@ -73,6 +73,12 @@ namespace Engine {
         Renderer::Aabb bounds;
     };
 
+    struct NavigationTileCacheData {
+        ChunkCoord coord;
+        Renderer::Aabb bounds;
+        std::vector<uint8_t> detourTileData;
+    };
+
     struct NavDebugLine {
         glm::vec3 a{};
         glm::vec3 b{};
@@ -95,6 +101,8 @@ namespace Engine {
         NavigationTileHandle buildTerrainTile(
             const NavigationTerrainBuildData& buildData,
             const NavAgentSettings& agent);
+        NavigationTileHandle loadTerrainTileFromCache(const NavigationTileCacheData& cacheData);
+        std::optional<NavigationTileCacheData> tileCacheData(ChunkCoord coord) const;
         // Tile lifetime mirrors loaded engine chunks, but NavigationSystem does
         // not own chunk streaming or world object lifetime.
         void destroyTile(ChunkCoord coord);

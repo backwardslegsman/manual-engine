@@ -4,6 +4,7 @@
 
 - Expose renderer resources through small handles, not raw bgfx handles, unless the API is explicitly a low-level utility.
 - Keep public headers focused on renderer contracts: resource creation, instance updates, draw submission, and shutdown.
+- Consult and update `docs/system_contracts.md` when adding renderer features, debug controls, or new Engine/Renderer interface contracts.
 - Prefer small view/context structs, such as `RenderView`, when render submission needs more camera or viewport metadata.
 - Do not let renderer code parse game-world formats directly. Use `src/Assets` import results as input.
 - Keep material/shader interfaces documented whenever adding uniforms, samplers, vertex attributes, or shader variants.

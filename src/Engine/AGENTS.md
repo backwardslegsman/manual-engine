@@ -7,6 +7,7 @@
 - Add input as a frame snapshot/state API over SDL events, not as direct polling scattered through gameplay code.
 - Keep input behavior mapped through semantic actions loaded from `assets/config/input.yaml`; engine systems should consume input action events instead of physical keys/buttons.
 - Use the simple frame `EventQueue` for new engine events until there is concrete pressure for subscriber-owned buses or multiple specialized queues.
+- Consult and update `docs/system_contracts.md` when adding public Engine systems, cross-system contracts, save-facing rules, or initialization dependencies.
 - Add camera behavior as engine-level state that produces view/projection inputs for the renderer.
 - Keep first-pass actors kinematic and terrain-grounded. Actor controllers should consume semantic input events and write through `World`, not bypass world ownership.
 - Keep actor selection and group-command helpers deterministic and renderer-independent. App may choose targets, but reusable formation and command rules belong here.

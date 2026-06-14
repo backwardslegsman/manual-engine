@@ -101,8 +101,9 @@ namespace Engine {
         return terrain ? terrain->rendererTerrain : Renderer::TerrainHandle{};
     }
 
-    void TerrainSystem::updateLods(const glm::vec3& cameraPosition)
+    bool TerrainSystem::updateLods(const glm::vec3& cameraPosition)
     {
+        bool rebuilt = false;
         for (TerrainTile& terrain : tiles_) {
             if (!terrain.alive) {
                 continue;
@@ -116,7 +117,9 @@ namespace Engine {
             Renderer::destroyTerrainTile(terrain.rendererTerrain);
             terrain.currentLod = desiredLod;
             terrain.rendererTerrain = createRendererTerrain(terrain, terrain.currentLod);
+            rebuilt = true;
         }
+        return rebuilt;
     }
 
     std::array<uint32_t, TerrainLodLevelCount> TerrainSystem::lodCounts() const

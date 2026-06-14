@@ -31,6 +31,8 @@ add_executable(manual_engine
     src/Engine/InputMapping.cpp
     src/Engine/InteractionHandlerSystem.cpp
     src/Engine/InteractionSystem.cpp
+    src/Engine/NavigationConnectivity.cpp
+    src/Engine/NavigationCache.cpp
     src/Engine/ObjectArchetype.cpp
     src/Engine/ObjectId.cpp
     src/Engine/Navigation.cpp
@@ -41,6 +43,7 @@ add_executable(manual_engine
     src/Engine/SpatialRegistry.cpp
     src/Engine/Terrain.cpp
     src/Engine/World.cpp
+    src/Engine/WorldNavigationGraph.cpp
     src/Engine/WorldObjectOverrides.cpp
     src/Engine/WorldState.cpp
     src/Engine/input.cpp
@@ -57,13 +60,18 @@ target_include_directories(manual_engine
         ${Stb_INCLUDE_DIR}
 )
 
+target_compile_definitions(manual_engine
+    PRIVATE
+        MANUAL_ENGINE_ENABLE_DEBUG_TOOLS=$<IF:$<CONFIG:Debug>,1,0>
+)
+
 target_link_libraries(manual_engine
     PRIVATE
         SDL3::SDL3
         assimp::assimp
         bgfx::bgfx
         glm::glm
-        imgui::imgui
+        $<$<CONFIG:Debug>:imgui::imgui>
         RecastNavigation::Recast
         RecastNavigation::Detour
         RecastNavigation::DetourTileCache

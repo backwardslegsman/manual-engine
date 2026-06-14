@@ -129,6 +129,20 @@ namespace Engine {
         return objects;
     }
 
+    bool WorldObjectOverrides::hasOverridesForChunk(ChunkCoord chunk) const
+    {
+        const auto persistentIt = std::ranges::find_if(persistentObjects_, [&](const auto& entry) {
+            return entry.second.chunk == chunk;
+        });
+        if (persistentIt != persistentObjects_.end()) {
+            return true;
+        }
+
+        return std::ranges::any_of(removedObjects_, [&](const auto& entry) {
+            return entry.second.chunk == chunk;
+        });
+    }
+
     ObjectId WorldObjectOverrides::allocateCustomObjectId(std::string_view archetypeId)
     {
         return ObjectId::custom(archetypeId, nextCustomObjectSerial_++);

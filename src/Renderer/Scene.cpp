@@ -1,5 +1,9 @@
 #include "Renderer/Scene.hpp"
 
+#ifndef MANUAL_ENGINE_ENABLE_DEBUG_TOOLS
+#define MANUAL_ENGINE_ENABLE_DEBUG_TOOLS 1
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -426,12 +430,17 @@ namespace {
 
     void pushDebugVertex(const glm::vec3& position, uint32_t abgr)
     {
+#if MANUAL_ENGINE_ENABLE_DEBUG_TOOLS
         g_debugLineVertices.push_back({
             position.x,
             position.y,
             position.z,
             abgr,
         });
+#else
+        (void)position;
+        (void)abgr;
+#endif
     }
 }
 
@@ -453,6 +462,7 @@ namespace Renderer {
             return false;
         }
 
+#if MANUAL_ENGINE_ENABLE_DEBUG_TOOLS
         bgfx::ShaderHandle debugVsh = loadShader("vs_debug_line.bin");
         bgfx::ShaderHandle debugFsh = loadShader("fs_debug_line.bin");
         if (!bgfx::isValid(debugVsh) || !bgfx::isValid(debugFsh)) {
@@ -468,6 +478,7 @@ namespace Renderer {
         if (!bgfx::isValid(g_debugLineProgram)) {
             return false;
         }
+#endif
 
         g_baseColorSampler = bgfx::createUniform("s_baseColor", bgfx::UniformType::Sampler);
         g_normalSampler = bgfx::createUniform("s_normalMap", bgfx::UniformType::Sampler);
@@ -1350,6 +1361,10 @@ namespace Renderer {
 
     void drawDebugPrimitives(const RenderView& view)
     {
+#if !MANUAL_ENGINE_ENABLE_DEBUG_TOOLS
+        (void)view;
+        return;
+#else
         if (!g_debugDrawSettings.enabled ||
             (view.layerMask & static_cast<uint32_t>(RenderLayer::Debug)) == 0 ||
             g_debugLineVertices.empty() ||
@@ -1374,5 +1389,6 @@ namespace Renderer {
             BGFX_STATE_PT_LINES
         );
         bgfx::submit(view.viewId, g_debugLineProgram);
+#endif
     }
 }

@@ -11,6 +11,7 @@ ManualEngine is intended to grow into a simple open world game engine. Keep chan
 - Use Dear ImGui for debug display and runtime debug knobs. Keep debug UI wiring in renderer/app composition code, not buried inside engine simulation systems.
 - Do not introduce an ECS, task graph, scripting layer, editor layer, or streaming system until a simpler interface proves insufficient.
 - Keep `docs/engine_overview.md` current when subsystem ownership or data flow changes.
+- Consult `docs/system_contracts.md` before changing cross-system behavior, and update it when adding features, public interface contracts, or initialization dependencies.
 - After each feature/refactor pass, append a short dated entry to `docs/work_log.md` describing what changed and why.
 
 ## Open World Direction
