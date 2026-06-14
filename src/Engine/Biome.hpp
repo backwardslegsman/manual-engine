@@ -25,6 +25,13 @@ namespace Engine {
         float heightScale = 1.0f;
         float rollingScale = 1.0f;
         float detailScale = 1.0f;
+        float baseHeight = 0.0f;
+        float rollingAmplitude = 1.0f;
+        float rollingFrequencyX = 0.18f;
+        float rollingFrequencyZ = 0.15f;
+        float detailAmplitude = 0.35f;
+        float detailFrequency = 0.07f;
+        float maxNavSlopeDegreesHint = 45.0f;
         float propDensity = 1.0f;
         std::vector<BiomeArchetypeWeight> archetypeWeights;
         std::array<uint8_t, 4> terrainColor{80, 190, 210, 255};

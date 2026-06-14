@@ -430,9 +430,41 @@ Avoid in V1:
 - Automatic road/gate/off-mesh link generation.
 - Full Recast visual overlays beyond simple counters and line/marker debug draw.
 
+## Stage 14: Async Terrain And Navigation Generation
+
+Status: implemented initial V1.
+
+Implemented:
+- Added `Engine::AsyncWorkQueue`, a small `std::jthread` worker queue for CPU-only jobs that return plain data.
+- Added generated terrain tile data APIs so terrain heights and navigation build geometry can be produced without creating renderer terrain resources.
+- Split local nav tile generation into worker-safe Detour tile byte creation and main-thread insertion into the live `NavigationSystem`.
+- Added generated chunk prop descriptors for deterministic terrain-grounded props, stable object IDs, override filtering, collision flags, and blocker geometry.
+- Replaced the main frame chunk update with staged App orchestration:
+  - compute desired chunk set;
+  - enqueue missing chunks;
+  - cancel pending stale chunk jobs;
+  - poll completed jobs;
+  - commit a small number of completed loads and stale unloads per frame.
+- Chunk commit still creates render groups, terrain tiles, world objects, renderer instances, spatial registry entries, and live nav tiles on the main thread.
+- Async jobs use navigation cache hits for baseline chunks when available and fall back to worker Recast generation on cache misses.
+- Added Dear ImGui diagnostics for pending/completed/stale async jobs, load/unload commit counts, and terrain/nav worker timing.
+
+Still deferred:
+- A full task graph or dependency scheduler.
+- Worker-side connectivity and world graph rebuilds.
+- Background generation for arbitrary distant cache regions.
+- Dynamic worker thread count changes at runtime.
+- Async renderer resource creation or bgfx calls.
+- Mutating live `World`, `TerrainSystem`, `NavigationSystem`, `SpatialRegistry`, or save state from workers.
+
+Acceptance:
+- Moving the camera across chunk boundaries should commit new chunks gradually instead of loading the entire changed set in one frame.
+- Loaded chunk count still converges to the configured radius.
+- Navigation tiles come from cache or worker-built Detour bytes and are inserted only on the main thread.
+- Save-backed overrides remain respected because workers consume immutable override snapshots.
+
 ## Deferred
 
-- Async navmesh generation and worker-thread build queues.
 - Fully automatic disk-backed navmesh/connectivity cache generation for arbitrary world regions.
 - Actor-driven chunk streaming requests.
 - Road networks as authored splines with road-following bias.

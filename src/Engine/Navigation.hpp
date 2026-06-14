@@ -115,6 +115,13 @@ namespace Engine {
         NavBuildSettings build;
     };
 
+    struct NavigationTileBuildResult {
+        NavQueryStatus status = NavQueryStatus::Unsupported;
+        std::string message;
+        std::optional<NavigationTileCacheData> tileData;
+        NavigationTileDiagnostics diagnostics;
+    };
+
     class NavigationSystem {
     public:
         explicit NavigationSystem(NavBuildSettings settings = {});
@@ -129,6 +136,13 @@ namespace Engine {
             const NavigationTerrainBuildData& buildData,
             const NavAgentSettings& agent);
         NavigationTileHandle loadTerrainTileFromCache(const NavigationTileCacheData& cacheData);
+        NavigationTileHandle loadTerrainTileFromCache(
+            const NavigationTileCacheData& cacheData,
+            const NavigationTileDiagnostics& diagnostics);
+        static NavigationTileBuildResult buildTerrainTileData(
+            const NavigationTerrainBuildData& buildData,
+            const NavAgentSettings& agent,
+            const NavBuildSettings& settings);
         std::optional<NavigationTileCacheData> tileCacheData(ChunkCoord coord) const;
         // Tile lifetime mirrors loaded engine chunks, but NavigationSystem does
         // not own chunk streaming or world object lifetime.

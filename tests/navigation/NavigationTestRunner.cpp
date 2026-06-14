@@ -146,6 +146,35 @@ namespace {
         return Engine::TerrainSystem(settings);
     }
 
+    Engine::BiomeSystem makeSingleBiome(float rollingAmplitude, float rollingFrequency, float detailAmplitude = 0.0f)
+    {
+        Engine::BiomeSystem biomes;
+        Engine::BiomeDescriptor descriptor;
+        descriptor.id = "test";
+        descriptor.displayName = "Test";
+        descriptor.heightScale = 1.0f;
+        descriptor.rollingScale = 1.0f;
+        descriptor.detailScale = 1.0f;
+        descriptor.rollingAmplitude = rollingAmplitude;
+        descriptor.rollingFrequencyX = rollingFrequency;
+        descriptor.rollingFrequencyZ = rollingFrequency;
+        descriptor.detailAmplitude = detailAmplitude;
+        descriptor.detailFrequency = rollingFrequency;
+        biomes.add(std::move(descriptor));
+        return biomes;
+    }
+
+    Engine::TerrainSystem makeTerrainWithBiomes(const Engine::BiomeSystem& biomes)
+    {
+        Engine::TerrainSettings settings;
+        settings.chunkSize = ChunkSize;
+        settings.resolution = Resolution;
+        settings.createRendererResources = false;
+        settings.heightScale = 1.25f;
+        settings.biomes = &biomes;
+        return Engine::TerrainSystem(settings);
+    }
+
     std::vector<float> heights(float value)
     {
         return std::vector<float>(static_cast<size_t>(Resolution) * Resolution, value);
@@ -975,6 +1004,57 @@ namespace {
             "actor command diagnostics did not record direct query status");
         ctx.expect(!state->commandDiagnostics.finalReason.empty(), "actor command diagnostics missing final reason");
     }
+
+    void terrainGenerationIsDeterministicAndContinuous(TestContext& ctx)
+    {
+        Engine::BiomeSystem biomes = Engine::BiomeSystem::sampleDefaults();
+        Engine::TerrainSystem terrain = makeTerrainWithBiomes(biomes);
+
+        const float heightA = terrain.generatedHeight(16.0f, 8.0f);
+        const float heightB = terrain.generatedHeight(16.0f, 8.0f);
+        ctx.expect(std::abs(heightA - heightB) <= 0.0001f, "generated height was not deterministic");
+
+        const Engine::TerrainTileHandle left = terrain.createTile({0, 0}, {});
+        const Engine::TerrainTileHandle right = terrain.createTile({1, 0}, {});
+        ctx.expect(left.id != UINT32_MAX && right.id != UINT32_MAX, "failed to create adjacent terrain tiles");
+        const std::optional<float> leftEdge = terrain.sampleHeight(ChunkSize, 8.0f);
+        const std::optional<float> rightEdge = terrain.sampleHeight(ChunkSize, 8.0f);
+        ctx.expect(leftEdge && rightEdge && std::abs(*leftEdge - *rightEdge) <= 0.0001f,
+            "adjacent terrain edge heights did not match");
+    }
+
+    void terrainDiagnosticsReportRampSlope(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        const Engine::TerrainTileHandle tile = terrain.createTileFromHeights({0, 0}, rampHeights(0.0f, 4.0f));
+        const Engine::NavAgentSettings agent;
+        const std::optional<Engine::TerrainTileDiagnostics> diagnostics = terrain.tileDiagnostics(tile, &agent);
+        ctx.expect(diagnostics.has_value(), "missing terrain diagnostics for ramp tile");
+        if (!diagnostics) {
+            return;
+        }
+        ctx.expect(diagnostics->maxHeight > diagnostics->minHeight, "terrain diagnostics did not report height range");
+        ctx.expect(diagnostics->maxSlopeDegrees > 0.0f, "terrain diagnostics did not report ramp slope");
+        ctx.expect(diagnostics->averageSlopeDegrees > 0.0f, "terrain diagnostics did not report average slope");
+    }
+
+    void lowerTerrainProfileReducesSlope(TestContext& ctx)
+    {
+        Engine::BiomeSystem gentleBiomes = makeSingleBiome(0.25f, 0.035f);
+        Engine::BiomeSystem steepBiomes = makeSingleBiome(1.25f, 0.12f);
+        Engine::TerrainSystem gentleTerrain = makeTerrainWithBiomes(gentleBiomes);
+        Engine::TerrainSystem steepTerrain = makeTerrainWithBiomes(steepBiomes);
+        const Engine::TerrainTileHandle gentleTile = gentleTerrain.createTile({0, 0}, {});
+        const Engine::TerrainTileHandle steepTile = steepTerrain.createTile({0, 0}, {});
+        const std::optional<Engine::TerrainTileDiagnostics> gentle = gentleTerrain.tileDiagnostics(gentleTile);
+        const std::optional<Engine::TerrainTileDiagnostics> steep = steepTerrain.tileDiagnostics(steepTile);
+        ctx.expect(gentle.has_value() && steep.has_value(), "missing terrain diagnostics for profile comparison");
+        if (!gentle || !steep) {
+            return;
+        }
+        ctx.expect(gentle->maxSlopeDegrees < steep->maxSlopeDegrees,
+            "lower terrain profile did not reduce max sampled slope");
+    }
 }
 
 int main()
@@ -1001,6 +1081,9 @@ int main()
         {"TileDiagnosticsAfterLiveBuild", tileDiagnosticsAfterLiveBuild},
         {"PortalDiagnosticsAfterConnectivityBuild", portalDiagnosticsAfterConnectivityBuild},
         {"ActorCommandDiagnosticsAfterRouteFallback", actorCommandDiagnosticsAfterRouteFallback},
+        {"TerrainGenerationIsDeterministicAndContinuous", terrainGenerationIsDeterministicAndContinuous},
+        {"TerrainDiagnosticsReportRampSlope", terrainDiagnosticsReportRampSlope},
+        {"LowerTerrainProfileReducesSlope", lowerTerrainProfileReducesSlope},
     };
 
     for (const auto& [name, test] : tests) {

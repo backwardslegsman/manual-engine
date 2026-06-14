@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 #include "Renderer/VertexLayouts.hpp"
 
@@ -9,6 +10,18 @@ namespace {
     glm::vec3 terrainNormalFromHeights(float left, float right, float down, float up, float spacing)
     {
         return glm::normalize(glm::vec3{left - right, 2.0f * spacing, down - up});
+    }
+
+    float slopeDegreesFromNormal(const glm::vec3& normal)
+    {
+        const float y = std::clamp(normal.y, -1.0f, 1.0f);
+        return glm::degrees(std::acos(y));
+    }
+
+    float triangleSlopeDegrees(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
+    {
+        const glm::vec3 normal = glm::normalize(glm::cross(b - a, c - a));
+        return slopeDegreesFromNormal(normal.y < 0.0f ? -normal : normal);
     }
 
     void pushQuad(
@@ -46,27 +59,52 @@ namespace Engine {
 
     TerrainTileHandle TerrainSystem::createTile(ChunkCoord coord, Renderer::MaterialHandle material)
     {
-        TerrainTile terrain;
-        terrain.alive = true;
-        terrain.coord = coord;
-        terrain.origin = {
+        return createTileFromGenerated(generateTileData(coord), material);
+    }
+
+    GeneratedTerrainTileData TerrainSystem::generateTileData(ChunkCoord coord) const
+    {
+        GeneratedTerrainTileData generated;
+        generated.coord = coord;
+        generated.origin = {
             static_cast<float>(coord.x) * settings_.chunkSize,
             0.0f,
             static_cast<float>(coord.z) * settings_.chunkSize,
         };
-        terrain.size = settings_.chunkSize;
-        terrain.resolution = settings_.resolution;
-        terrain.material = material;
-        terrain.biome = sampleChunkBiome(coord);
-        terrain.heights.resize(static_cast<size_t>(settings_.resolution) * settings_.resolution);
+        generated.size = settings_.chunkSize;
+        generated.resolution = settings_.resolution;
+        generated.biome = sampleChunkBiome(coord);
+        generated.heights.resize(static_cast<size_t>(settings_.resolution) * settings_.resolution);
 
         const float spacing = settings_.chunkSize / static_cast<float>(settings_.resolution - 1);
         for (uint32_t z = 0; z < settings_.resolution; ++z) {
             for (uint32_t x = 0; x < settings_.resolution; ++x) {
-                const float worldX = terrain.origin.x + static_cast<float>(x) * spacing;
-                const float worldZ = terrain.origin.z + static_cast<float>(z) * spacing;
-                terrain.heights[static_cast<size_t>(z) * settings_.resolution + x] = generatedHeight(worldX, worldZ);
+                const float worldX = generated.origin.x + static_cast<float>(x) * spacing;
+                const float worldZ = generated.origin.z + static_cast<float>(z) * spacing;
+                generated.heights[static_cast<size_t>(z) * settings_.resolution + x] = generatedHeight(worldX, worldZ);
             }
+        }
+
+        return generated;
+    }
+
+    TerrainTileHandle TerrainSystem::createTileFromGenerated(
+        const GeneratedTerrainTileData& generated,
+        Renderer::MaterialHandle material)
+    {
+        TerrainTile terrain;
+        terrain.alive = true;
+        terrain.coord = generated.coord;
+        terrain.origin = generated.origin;
+        terrain.size = generated.size;
+        terrain.resolution = generated.resolution;
+        terrain.material = material;
+        terrain.biome = generated.biome;
+        terrain.heights = generated.heights;
+        if (terrain.resolution < 2 ||
+            terrain.heights.size() != static_cast<size_t>(terrain.resolution) * terrain.resolution ||
+            terrain.size <= 0.0f) {
+            return {};
         }
 
         terrain.currentLod = 0;
@@ -279,11 +317,17 @@ namespace Engine {
         const BiomeSample sample = sampleBiome(worldX, worldZ);
         const BiomeDescriptor* biome = settings_.biomes ? settings_.biomes->descriptor(sample.id) : nullptr;
         const float heightScale = biome ? biome->heightScale : 1.0f;
-        const float rollingScale = biome ? biome->rollingScale : 1.0f;
-        const float detailScale = biome ? biome->detailScale : 1.0f;
-        const float rolling = (std::sin(worldX * 0.18f) * 0.65f + std::cos(worldZ * 0.15f) * 0.55f) * rollingScale;
-        const float detail = std::sin((worldX + worldZ) * 0.07f) * 0.35f * detailScale;
-        return (rolling + detail) * settings_.heightScale * heightScale;
+        const float baseHeight = biome ? biome->baseHeight : 0.0f;
+        const float rollingAmplitude = biome ? biome->rollingAmplitude * biome->rollingScale : 1.0f;
+        const float rollingFrequencyX = biome ? biome->rollingFrequencyX : 0.18f;
+        const float rollingFrequencyZ = biome ? biome->rollingFrequencyZ : 0.15f;
+        const float detailAmplitude = biome ? biome->detailAmplitude * biome->detailScale : 0.35f;
+        const float detailFrequency = biome ? biome->detailFrequency : 0.07f;
+        const float rolling =
+            std::sin(worldX * rollingFrequencyX) * rollingAmplitude +
+            std::cos(worldZ * rollingFrequencyZ) * rollingAmplitude;
+        const float detail = std::sin((worldX + worldZ) * detailFrequency) * detailAmplitude;
+        return baseHeight + (rolling + detail) * settings_.heightScale * heightScale;
     }
 
     BiomeSample TerrainSystem::sampleBiome(float worldX, float worldZ) const
@@ -328,6 +372,107 @@ namespace Engine {
         };
     }
 
+    std::optional<TerrainTileDiagnostics> TerrainSystem::tileDiagnostics(
+        TerrainTileHandle handle,
+        const NavAgentSettings* agent) const
+    {
+        const TerrainTile* terrain = tile(handle);
+        if (!terrain || terrain->heights.empty() || terrain->resolution < 2) {
+            return std::nullopt;
+        }
+
+        TerrainTileDiagnostics diagnostics;
+        diagnostics.coord = terrain->coord;
+        diagnostics.biomeId = terrain->biome.id;
+        diagnostics.resolution = terrain->resolution;
+        diagnostics.chunkSize = terrain->size;
+
+        const auto [minIt, maxIt] = std::minmax_element(terrain->heights.begin(), terrain->heights.end());
+        diagnostics.minHeight = *minIt;
+        diagnostics.maxHeight = *maxIt;
+        diagnostics.averageHeight =
+            std::accumulate(terrain->heights.begin(), terrain->heights.end(), 0.0f) /
+            static_cast<float>(terrain->heights.size());
+
+        const float spacing = terrain->size / static_cast<float>(terrain->resolution - 1);
+        float slopeSum = 0.0f;
+        uint32_t slopeCount = 0;
+        uint32_t walkableTriangles = 0;
+        uint32_t totalTriangles = 0;
+        const float maxWalkableSlope = agent ? std::clamp(agent->maxSlopeDegrees, 0.0f, 89.0f) : 89.0f;
+
+        for (uint32_t z = 0; z < terrain->resolution; ++z) {
+            for (uint32_t x = 0; x < terrain->resolution; ++x) {
+                const float left = tileHeightAt(*terrain, x > 0 ? x - 1 : x, z);
+                const float right = tileHeightAt(*terrain, std::min(x + 1, terrain->resolution - 1), z);
+                const float down = tileHeightAt(*terrain, x, z > 0 ? z - 1 : z);
+                const float up = tileHeightAt(*terrain, x, std::min(z + 1, terrain->resolution - 1));
+                const float slope = slopeDegreesFromNormal(terrainNormalFromHeights(left, right, down, up, spacing));
+                diagnostics.maxSlopeDegrees = std::max(diagnostics.maxSlopeDegrees, slope);
+                slopeSum += slope;
+                ++slopeCount;
+            }
+        }
+
+        for (uint32_t z = 0; z + 1 < terrain->resolution; ++z) {
+            for (uint32_t x = 0; x + 1 < terrain->resolution; ++x) {
+                const glm::vec3 topLeft{
+                    terrain->origin.x + static_cast<float>(x) * spacing,
+                    tileHeightAt(*terrain, x, z),
+                    terrain->origin.z + static_cast<float>(z) * spacing,
+                };
+                const glm::vec3 topRight{topLeft.x + spacing, tileHeightAt(*terrain, x + 1, z), topLeft.z};
+                const glm::vec3 bottomLeft{topLeft.x, tileHeightAt(*terrain, x, z + 1), topLeft.z + spacing};
+                const glm::vec3 bottomRight{topLeft.x + spacing, tileHeightAt(*terrain, x + 1, z + 1), topLeft.z + spacing};
+                const float slopeA = triangleSlopeDegrees(topLeft, bottomLeft, topRight);
+                const float slopeB = triangleSlopeDegrees(topRight, bottomLeft, bottomRight);
+                walkableTriangles += slopeA <= maxWalkableSlope ? 1u : 0u;
+                walkableTriangles += slopeB <= maxWalkableSlope ? 1u : 0u;
+                totalTriangles += 2;
+            }
+        }
+
+        diagnostics.averageSlopeDegrees = slopeCount > 0 ? slopeSum / static_cast<float>(slopeCount) : 0.0f;
+        diagnostics.navWalkableTrianglePercent = totalTriangles > 0
+            ? static_cast<float>(walkableTriangles) / static_cast<float>(totalTriangles) * 100.0f
+            : 100.0f;
+        return diagnostics;
+    }
+
+    std::vector<glm::vec3> TerrainSystem::slopeWarningSamples(
+        TerrainTileHandle handle,
+        float maxSlopeDegrees,
+        uint32_t maxSamples) const
+    {
+        std::vector<glm::vec3> samples;
+        const TerrainTile* terrain = tile(handle);
+        if (!terrain || terrain->heights.empty() || terrain->resolution < 2 || maxSamples == 0) {
+            return samples;
+        }
+
+        const float spacing = terrain->size / static_cast<float>(terrain->resolution - 1);
+        const float threshold = std::clamp(maxSlopeDegrees, 0.0f, 89.0f);
+        const uint32_t stride = std::max(1u, terrain->resolution / 16u);
+        for (uint32_t z = 0; z < terrain->resolution && samples.size() < maxSamples; z += stride) {
+            for (uint32_t x = 0; x < terrain->resolution && samples.size() < maxSamples; x += stride) {
+                const float left = tileHeightAt(*terrain, x > 0 ? x - 1 : x, z);
+                const float right = tileHeightAt(*terrain, std::min(x + 1, terrain->resolution - 1), z);
+                const float down = tileHeightAt(*terrain, x, z > 0 ? z - 1 : z);
+                const float up = tileHeightAt(*terrain, x, std::min(z + 1, terrain->resolution - 1));
+                const float slope = slopeDegreesFromNormal(terrainNormalFromHeights(left, right, down, up, spacing));
+                if (slope <= threshold) {
+                    continue;
+                }
+                samples.push_back({
+                    terrain->origin.x + static_cast<float>(x) * spacing,
+                    tileHeightAt(*terrain, x, z),
+                    terrain->origin.z + static_cast<float>(z) * spacing,
+                });
+            }
+        }
+        return samples;
+    }
+
     std::optional<NavigationTerrainBuildData> TerrainSystem::navigationBuildData(TerrainTileHandle handle) const
     {
         const TerrainTile* terrain = tile(handle);
@@ -358,6 +503,88 @@ namespace Engine {
                 const uint32_t topLeft = z * terrain->resolution + x;
                 const uint32_t topRight = topLeft + 1;
                 const uint32_t bottomLeft = (z + 1) * terrain->resolution + x;
+                const uint32_t bottomRight = bottomLeft + 1;
+                buildData.indices.push_back(topLeft);
+                buildData.indices.push_back(bottomLeft);
+                buildData.indices.push_back(topRight);
+                buildData.indices.push_back(topRight);
+                buildData.indices.push_back(bottomLeft);
+                buildData.indices.push_back(bottomRight);
+            }
+        }
+
+        return buildData;
+    }
+
+    std::optional<float> TerrainSystem::sampleGeneratedHeight(
+        const GeneratedTerrainTileData& generated,
+        float worldX,
+        float worldZ)
+    {
+        if (generated.resolution < 2 ||
+            generated.size <= 0.0f ||
+            generated.heights.size() != static_cast<size_t>(generated.resolution) * generated.resolution) {
+            return std::nullopt;
+        }
+
+        const float localX = std::clamp(worldX - generated.origin.x, 0.0f, generated.size);
+        const float localZ = std::clamp(worldZ - generated.origin.z, 0.0f, generated.size);
+        const float normalizedX = localX / generated.size * static_cast<float>(generated.resolution - 1);
+        const float normalizedZ = localZ / generated.size * static_cast<float>(generated.resolution - 1);
+        const uint32_t x0 = std::min(static_cast<uint32_t>(std::floor(normalizedX)), generated.resolution - 1);
+        const uint32_t z0 = std::min(static_cast<uint32_t>(std::floor(normalizedZ)), generated.resolution - 1);
+        const uint32_t x1 = std::min(x0 + 1, generated.resolution - 1);
+        const uint32_t z1 = std::min(z0 + 1, generated.resolution - 1);
+        const float tx = normalizedX - static_cast<float>(x0);
+        const float tz = normalizedZ - static_cast<float>(z0);
+        const auto heightAt = [&](uint32_t x, uint32_t z) {
+            return generated.heights[static_cast<size_t>(z) * generated.resolution + x];
+        };
+
+        const float h00 = heightAt(x0, z0);
+        const float h10 = heightAt(x1, z0);
+        const float h01 = heightAt(x0, z1);
+        const float h11 = heightAt(x1, z1);
+        const float hx0 = h00 + (h10 - h00) * tx;
+        const float hx1 = h01 + (h11 - h01) * tx;
+        return hx0 + (hx1 - hx0) * tz;
+    }
+
+    std::optional<NavigationTerrainBuildData> TerrainSystem::navigationBuildData(
+        const GeneratedTerrainTileData& generated)
+    {
+        if (generated.resolution < 2 ||
+            generated.size <= 0.0f ||
+            generated.heights.size() != static_cast<size_t>(generated.resolution) * generated.resolution) {
+            return std::nullopt;
+        }
+
+        const auto [minIt, maxIt] = std::minmax_element(generated.heights.begin(), generated.heights.end());
+        NavigationTerrainBuildData buildData;
+        buildData.coord = generated.coord;
+        buildData.bounds = Renderer::Aabb{
+            {generated.origin.x, *minIt, generated.origin.z},
+            {generated.origin.x + generated.size, *maxIt, generated.origin.z + generated.size},
+        };
+        buildData.vertices.reserve(static_cast<size_t>(generated.resolution) * generated.resolution);
+        buildData.indices.reserve(static_cast<size_t>(generated.resolution - 1) * (generated.resolution - 1) * 6);
+
+        const float spacing = generated.size / static_cast<float>(generated.resolution - 1);
+        for (uint32_t z = 0; z < generated.resolution; ++z) {
+            for (uint32_t x = 0; x < generated.resolution; ++x) {
+                buildData.vertices.push_back({
+                    generated.origin.x + static_cast<float>(x) * spacing,
+                    generated.heights[static_cast<size_t>(z) * generated.resolution + x],
+                    generated.origin.z + static_cast<float>(z) * spacing,
+                });
+            }
+        }
+
+        for (uint32_t z = 0; z + 1 < generated.resolution; ++z) {
+            for (uint32_t x = 0; x + 1 < generated.resolution; ++x) {
+                const uint32_t topLeft = z * generated.resolution + x;
+                const uint32_t topRight = topLeft + 1;
+                const uint32_t bottomLeft = (z + 1) * generated.resolution + x;
                 const uint32_t bottomRight = bottomLeft + 1;
                 buildData.indices.push_back(topLeft);
                 buildData.indices.push_back(bottomLeft);

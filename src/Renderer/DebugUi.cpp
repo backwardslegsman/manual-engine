@@ -222,6 +222,7 @@ namespace Renderer::DebugUi {
         ImGui::Checkbox("Collision bounds", &debugDraw.collisionBounds);
         ImGui::Checkbox("Chunk borders", &debugDraw.chunkBorders);
         ImGui::Checkbox("Terrain tile bounds", &debugDraw.terrainTileBounds);
+        ImGui::Checkbox("Terrain slope warnings", &debugDraw.terrainSlopeWarnings);
         ImGui::Checkbox("Navigation tile bounds", &debugDraw.navigationTileBounds);
         ImGui::Checkbox("Navigation mesh edges", &debugDraw.navigationMeshEdges);
         ImGui::Checkbox("Navigation current path", &debugDraw.navigationCurrentPath);
@@ -263,6 +264,27 @@ namespace Renderer::DebugUi {
         ImGui::Text("Layer/flag culled: %u", stats.layerOrFlagCulledTerrainTiles);
         ImGui::Text("Frustum culled: %u", stats.frustumCulledTerrainTiles);
         ImGui::Text("Distance culled: %u", stats.distanceCulledTerrainTiles);
+        ImGui::Separator();
+        ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Terrain")) {
+        ImGui::Text("Terrain LODs");
+        for (uint32_t index = 0; index < terrainLods.counts.size(); ++index) {
+            ImGui::Text("LOD%u: %u", index, terrainLods.counts[index]);
+        }
+        ImGui::Text("Active nav max slope: %.1f", terrainLods.activeNavMaxSlopeDegrees);
+        if (!terrainLods.cameraChunkDiagnostics.empty()) {
+            ImGui::TextWrapped("Camera chunk: %s", terrainLods.cameraChunkDiagnostics.c_str());
+        }
+        if (!terrainLods.hoveredChunkDiagnostics.empty()) {
+            ImGui::TextWrapped("Hovered chunk: %s", terrainLods.hoveredChunkDiagnostics.c_str());
+        }
+        if (!terrainLods.selectedChunkDiagnostics.empty()) {
+            ImGui::TextWrapped("Selected chunk: %s", terrainLods.selectedChunkDiagnostics.c_str());
+        }
+        if (!terrainLods.cameraBiomeGeneration.empty()) {
+            ImGui::TextWrapped("Camera biome generation: %s", terrainLods.cameraBiomeGeneration.c_str());
+        }
         ImGui::Separator();
         ImGui::EndTabItem();
         }
@@ -380,11 +402,6 @@ namespace Renderer::DebugUi {
             }
         } else {
             ImGui::Text("No player actor");
-        }
-        ImGui::Separator();
-        ImGui::Text("Terrain LODs");
-        for (uint32_t index = 0; index < terrainLods.counts.size(); ++index) {
-            ImGui::Text("LOD%u: %u", index, terrainLods.counts[index]);
         }
         ImGui::Separator();
         ImGui::Text("Spatial Registry");
@@ -526,12 +543,40 @@ namespace Renderer::DebugUi {
         ImGui::Text("Performance ms picking/draw: %.3f / %.3f",
             navigation.pickingMs,
             navigation.drawSubmissionMs);
+        ImGui::Text("Async workers/pending/completed/unloads: %u / %u / %u / %u",
+            navigation.asyncWorkerCount,
+            navigation.asyncPendingChunkJobs,
+            navigation.asyncCompletedChunks,
+            navigation.asyncPendingUnloads);
+        ImGui::Text("Async committed load/unload this frame: %u / %u",
+            navigation.asyncCommittedLoadsThisFrame,
+            navigation.asyncCommittedUnloadsThisFrame);
+        ImGui::Text("Async cancelled/stale: %u / %u",
+            navigation.asyncCancelledJobs,
+            navigation.asyncStaleJobs);
+        ImGui::Text("Async terrain avg/max ms: %.3f / %.3f",
+            navigation.asyncAverageTerrainGenerationMs,
+            navigation.asyncMaxTerrainGenerationMs);
+        ImGui::Text("Async nav avg/max ms: %.3f / %.3f",
+            navigation.asyncAverageNavigationBuildMs,
+            navigation.asyncMaxNavigationBuildMs);
         if (navigationControls) {
             if (ImGui::Button("Rebuild Visible Nav Tiles")) {
                 navigationControls->rebuildVisibleTilesRequested = true;
             }
             ImGui::Checkbox("Navigation cache enabled", &navigationControls->cacheEnabled);
             ImGui::Checkbox("Navigation cache write-through", &navigationControls->cacheWriteThrough);
+            ImGui::Checkbox("Async terrain generation", &navigationControls->asyncTerrainEnabled);
+            ImGui::Checkbox("Async navigation generation", &navigationControls->asyncNavigationEnabled);
+            int loadBudget = static_cast<int>(navigationControls->chunkLoadCommitBudget);
+            if (ImGui::SliderInt("Chunk load commits/frame", &loadBudget, 1, 8)) {
+                navigationControls->chunkLoadCommitBudget = static_cast<uint32_t>(loadBudget);
+            }
+            int unloadBudget = static_cast<int>(navigationControls->chunkUnloadCommitBudget);
+            if (ImGui::SliderInt("Chunk unload commits/frame", &unloadBudget, 1, 8)) {
+                navigationControls->chunkUnloadCommitBudget = static_cast<uint32_t>(unloadBudget);
+            }
+            ImGui::Text("Worker threads: %u (restart required to change)", navigationControls->workerThreadCount);
             if (ImGui::Button("Generate Visible Nav Cache")) {
                 navigationControls->generateVisibleCacheRequested = true;
             }

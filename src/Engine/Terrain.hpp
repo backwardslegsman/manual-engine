@@ -58,6 +58,28 @@ namespace Engine {
         BiomeSample biome;
     };
 
+    struct TerrainTileDiagnostics {
+        ChunkCoord coord;
+        std::string biomeId;
+        float minHeight = 0.0f;
+        float maxHeight = 0.0f;
+        float averageHeight = 0.0f;
+        float maxSlopeDegrees = 0.0f;
+        float averageSlopeDegrees = 0.0f;
+        float navWalkableTrianglePercent = 100.0f;
+        uint32_t resolution = 0;
+        float chunkSize = 0.0f;
+    };
+
+    struct GeneratedTerrainTileData {
+        ChunkCoord coord;
+        glm::vec3 origin{};
+        float size = 16.0f;
+        uint32_t resolution = 17;
+        std::vector<float> heights;
+        BiomeSample biome;
+    };
+
     // Owns loaded CPU heightfield tiles and their matching renderer terrain
     // tiles. Gameplay height queries always use CPU tile data; renderer LOD is
     // only a draw-mesh detail.
@@ -66,6 +88,10 @@ namespace Engine {
         explicit TerrainSystem(TerrainSettings settings = {});
 
         TerrainTileHandle createTile(ChunkCoord coord, Renderer::MaterialHandle material);
+        GeneratedTerrainTileData generateTileData(ChunkCoord coord) const;
+        TerrainTileHandle createTileFromGenerated(
+            const GeneratedTerrainTileData& generated,
+            Renderer::MaterialHandle material);
         TerrainTileHandle createTileFromHeights(
             ChunkCoord coord,
             std::span<const float> heights,
@@ -88,7 +114,20 @@ namespace Engine {
         std::optional<BiomeSample> tileBiome(TerrainTileHandle handle) const;
         std::optional<ChunkCoord> tileCoord(TerrainTileHandle handle) const;
         std::optional<Renderer::Aabb> tileWorldBounds(TerrainTileHandle handle) const;
+        std::optional<TerrainTileDiagnostics> tileDiagnostics(
+            TerrainTileHandle handle,
+            const NavAgentSettings* agent = nullptr) const;
+        std::vector<glm::vec3> slopeWarningSamples(
+            TerrainTileHandle handle,
+            float maxSlopeDegrees,
+            uint32_t maxSamples = 128) const;
         std::optional<NavigationTerrainBuildData> navigationBuildData(TerrainTileHandle handle) const;
+        static std::optional<float> sampleGeneratedHeight(
+            const GeneratedTerrainTileData& generated,
+            float worldX,
+            float worldZ);
+        static std::optional<NavigationTerrainBuildData> navigationBuildData(
+            const GeneratedTerrainTileData& generated);
         ChunkCoord coordForWorldPosition(float worldX, float worldZ) const;
 
         const TerrainSettings& settings() const;

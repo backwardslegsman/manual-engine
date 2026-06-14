@@ -8,6 +8,13 @@ biomes:
     height_scale: 0.85
     rolling_scale: 0.75
     detail_scale: 0.55
+    base_height: 0.0
+    rolling_amplitude: 0.72
+    rolling_frequency_x: 0.055
+    rolling_frequency_z: 0.047
+    detail_amplitude: 0.18
+    detail_frequency: 0.035
+    max_nav_slope_degrees_hint: 42.0
     prop_density: 1.0
     terrain_color: [80, 180, 110, 255]
     archetypes:
@@ -20,6 +27,13 @@ biomes:
     height_scale: 1.35
     rolling_scale: 1.25
     detail_scale: 1.4
+    base_height: 0.25
+    rolling_amplitude: 0.95
+    rolling_frequency_x: 0.048
+    rolling_frequency_z: 0.042
+    detail_amplitude: 0.22
+    detail_frequency: 0.032
+    max_nav_slope_degrees_hint: 38.0
     prop_density: 0.9
     terrain_color: [140, 130, 105, 255]
     archetypes:
@@ -31,6 +45,13 @@ biomes:
     height_scale: 0.6
     rolling_scale: 0.55
     detail_scale: 0.45
+    base_height: -0.15
+    rolling_amplitude: 0.45
+    rolling_frequency_x: 0.038
+    rolling_frequency_z: 0.034
+    detail_amplitude: 0.12
+    detail_frequency: 0.026
+    max_nav_slope_degrees_hint: 45.0
     prop_density: 0.45
     terrain_color: [165, 155, 105, 255]
     archetypes:
@@ -41,6 +62,13 @@ biomes:
     height_scale: 0.8
     rolling_scale: 0.7
     detail_scale: 0.65
+    base_height: 0.05
+    rolling_amplitude: 0.55
+    rolling_frequency_x: 0.044
+    rolling_frequency_z: 0.039
+    detail_amplitude: 0.14
+    detail_frequency: 0.030
+    max_nav_slope_degrees_hint: 42.0
     prop_density: 1.15
     terrain_color: [105, 165, 175, 255]
     archetypes:

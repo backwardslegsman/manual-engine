@@ -1,12 +1,14 @@
 #pragma once
 
 #include <functional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 #include <glm/glm.hpp>
 
 #include "Engine/ChunkTypes.hpp"
+#include "Engine/ObjectId.hpp"
 #include "Engine/SpatialRegistry.hpp"
 #include "Engine/Terrain.hpp"
 #include "Engine/World.hpp"
@@ -16,6 +18,24 @@ namespace Engine {
         TerrainTileHandle terrain;
         std::vector<WorldObjectHandle> objects;
         Renderer::RenderGroupHandle renderGroup;
+    };
+
+    struct GeneratedChunkProp {
+        ObjectId objectId;
+        std::string archetypeId;
+        glm::vec3 position{};
+        glm::vec3 rotation{};
+        glm::vec3 scale{1.0f};
+        Renderer::Aabb localBounds{{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}};
+        glm::vec3 angularVelocity{};
+        bool collisionEnabled = false;
+    };
+
+    struct GeneratedChunkData {
+        ChunkCoord coord;
+        GeneratedTerrainTileData terrain;
+        std::vector<GeneratedChunkProp> props;
+        std::string renderGroupName;
     };
 
     using ChunkContentFactory = std::function<ChunkContent(ChunkCoord, World&, TerrainSystem&)>;
@@ -34,6 +54,7 @@ namespace Engine {
             SpatialRegistry* spatialRegistry = nullptr
         );
         void loadChunk(ChunkCoord coord, World& world, TerrainSystem& terrain, const ChunkContentFactory& factory);
+        bool registerLoadedChunk(ChunkCoord coord, ChunkContent content);
         void unloadChunk(ChunkCoord coord, World& world, TerrainSystem& terrain, SpatialRegistry* spatialRegistry = nullptr);
         void unloadAll(World& world, TerrainSystem& terrain, SpatialRegistry* spatialRegistry = nullptr);
 

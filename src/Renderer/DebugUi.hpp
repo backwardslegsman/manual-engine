@@ -21,6 +21,11 @@ namespace Renderer::DebugUi {
 
     struct TerrainLodDebugStats {
         std::array<uint32_t, TerrainLodDebugLevelCount> counts{};
+        std::string cameraChunkDiagnostics;
+        std::string hoveredChunkDiagnostics;
+        std::string selectedChunkDiagnostics;
+        std::string cameraBiomeGeneration;
+        float activeNavMaxSlopeDegrees = 0.0f;
     };
 
     struct SpatialRegistryDebugStats {
@@ -117,6 +122,18 @@ namespace Renderer::DebugUi {
         float worldGraphMs = 0.0f;
         float pickingMs = 0.0f;
         float drawSubmissionMs = 0.0f;
+        uint32_t asyncWorkerCount = 0;
+        uint32_t asyncPendingChunkJobs = 0;
+        uint32_t asyncCompletedChunks = 0;
+        uint32_t asyncPendingUnloads = 0;
+        uint32_t asyncCancelledJobs = 0;
+        uint32_t asyncStaleJobs = 0;
+        uint32_t asyncCommittedLoadsThisFrame = 0;
+        uint32_t asyncCommittedUnloadsThisFrame = 0;
+        float asyncAverageTerrainGenerationMs = 0.0f;
+        float asyncMaxTerrainGenerationMs = 0.0f;
+        float asyncAverageNavigationBuildMs = 0.0f;
+        float asyncMaxNavigationBuildMs = 0.0f;
     };
 
     struct NavigationDebugControls {
@@ -127,6 +144,11 @@ namespace Renderer::DebugUi {
         bool clearCacheStatsRequested = false;
         bool cacheEnabled = true;
         bool cacheWriteThrough = true;
+        bool asyncTerrainEnabled = true;
+        bool asyncNavigationEnabled = true;
+        uint32_t chunkLoadCommitBudget = 1;
+        uint32_t chunkUnloadCommitBudget = 1;
+        uint32_t workerThreadCount = 1;
         uint32_t portalSamplesPerEdge = 9;
         float portalEdgeInset = 1.5f;
         float portalEdgeBandWidth = 4.0f;

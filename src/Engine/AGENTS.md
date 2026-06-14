@@ -12,7 +12,7 @@
 - Keep first-pass actors kinematic and terrain-grounded. Actor controllers should consume semantic input events and write through `World`, not bypass world ownership.
 - Keep actor selection and group-command helpers deterministic and renderer-independent. App may choose targets, but reusable formation and command rules belong here.
 - For open-world features, start with explicit chunk coordinates, load/unload calls, and simple distance-based policies.
-- Keep first-pass chunk streaming synchronous and grid-based. Chunks should own membership lists, while `World` owns object state and `Renderer` owns draw resources.
+- Keep chunk streaming grid-based and explicit. Expensive generation may run through `AsyncWorkQueue`, but loaded chunk membership and all live `World`/`Renderer`/`TerrainSystem`/`NavigationSystem` mutation must commit on the main thread.
 - Keep procedural chunk content behind small descriptor/config interfaces. App code may translate descriptors into renderer/world resources, but placement rules should not live inline in the sample loop.
 - Keep terrain as deterministic chunk-aligned heightfield tiles until there is a concrete need for authored heightmaps, terrain editing, LOD, or material splat blending.
 - Keep terrain LOD as a renderer-mesh detail owned by `TerrainSystem`; gameplay height queries must continue to use CPU terrain data, not the active render LOD.

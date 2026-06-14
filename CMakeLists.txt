@@ -23,6 +23,7 @@ add_executable(manual_engine
     src/Engine/ActorCommand.cpp
     src/Engine/ActorController.cpp
     src/Engine/ActorSelection.cpp
+    src/Engine/AsyncWorkQueue.cpp
     src/Engine/AssetCache.cpp
     src/Engine/Biome.cpp
     src/Engine/BlockingCollision.cpp
@@ -87,6 +88,7 @@ add_executable(manual_engine_navigation_tests
     tests/navigation/NavigationTestRunner.cpp
     tests/navigation/RendererStubs.cpp
     src/Engine/ActorController.cpp
+    src/Engine/AsyncWorkQueue.cpp
     src/Engine/Biome.cpp
     src/Engine/BlockingCollision.cpp
     src/Engine/ChunkTypes.cpp

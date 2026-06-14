@@ -415,3 +415,29 @@ Changed:
 Rationale:
 - The single long debug panel had become hard to scan as navigation and world-edit diagnostics grew.
 - Fog should be an opt-in atmosphere effect while terrain/navigation visibility is still being tuned.
+
+## 2026-06-14 - Terrain Generation Tuning
+
+Changed:
+- Added biome terrain-shape fields for base height, rolling/detail amplitudes, frequencies, and nav slope hints.
+- Replaced hardcoded terrain height constants with biome-configured generation while keeping old scale fields as compatibility multipliers.
+- Added CPU terrain tile diagnostics for height range, average height, max/average slope, and estimated nav-walkable triangle percent.
+- Added a Terrain debug tab and optional slope warning debug draw markers.
+- Expanded navigation tests with deterministic terrain, edge continuity, terrain diagnostics, and gentle-vs-steep profile coverage.
+
+Rationale:
+- Terrain shape is now easier to tune without recompiling, and gentler defaults should reduce isolated navmesh islands.
+- Diagnostics should make steep chunks visible before trying to solve navigation issues in Recast or route code.
+
+## 2026-06-14 - Async Terrain And Navigation Generation
+
+Changed:
+- Added `Engine::AsyncWorkQueue` for CPU-only background jobs.
+- Added generated terrain tile data and main-thread tile creation from generated data.
+- Split navigation tile generation into worker-safe Detour byte builds and main-thread live navmesh insertion.
+- Added generated chunk prop descriptors and staged App chunk streaming with pending jobs, completed load queue, stale cancellation, and per-frame load/unload commit budgets.
+- Added async streaming diagnostics and controls to the navigation debug UI.
+
+Rationale:
+- Camera movement across chunk boundaries should not synchronously generate terrain, props, Recast tiles, and destroy/create every changed chunk in one frame.
+- Keeping workers limited to immutable snapshots and plain generated data preserves the existing ownership contracts for world, renderer, terrain, spatial registry, and live navigation state.

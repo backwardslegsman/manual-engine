@@ -287,12 +287,30 @@ namespace Engine {
             return {};
         }
 
-        if (!impl_->initializeNavMesh(buildData, settings_)) {
-            impl_->lastBuildStatus = NavQueryStatus::NotInitialized;
-            impl_->lastBuildMessage = "Failed to initialize Detour navmesh.";
+        NavigationTileBuildResult result = buildTerrainTileData(buildData, agent, settings_);
+        impl_->lastBuildStatus = result.status;
+        impl_->lastBuildMessage = result.message;
+        if (result.status != NavQueryStatus::Success || !result.tileData) {
             return {};
         }
-        destroyTile(buildData.coord);
+
+        return loadTerrainTileFromCache(*result.tileData, result.diagnostics);
+    }
+
+    NavigationTileBuildResult NavigationSystem::buildTerrainTileData(
+        const NavigationTerrainBuildData& buildData,
+        const NavAgentSettings& agent,
+        const NavBuildSettings& settings)
+    {
+        NavigationTileBuildResult result;
+        result.status = NavQueryStatus::Unsupported;
+        result.message = "Navigation tile build started.";
+
+        if (!validAgent(agent) || !validBuildData(buildData)) {
+            result.status = NavQueryStatus::InvalidInput;
+            result.message = "Invalid terrain navigation build input.";
+            return result;
+        }
 
         const std::vector<glm::vec3> buildVertices = combinedVertices(buildData);
         const std::vector<uint32_t> buildIndices = combinedIndices(buildData);
@@ -313,24 +331,24 @@ namespace Engine {
         diagnostics.blockerTriangleCount = static_cast<uint32_t>(buildData.blockingIndices.size() / 3);
         diagnostics.bounds = buildData.bounds;
         diagnostics.agent = agent;
-        diagnostics.build = settings_;
+        diagnostics.build = settings;
 
         rcContext context;
         rcConfig cfg{};
-        cfg.cs = settings_.cellSize;
-        cfg.ch = settings_.cellHeight;
+        cfg.cs = std::max(settings.cellSize, 0.01f);
+        cfg.ch = std::max(settings.cellHeight, 0.01f);
         cfg.walkableSlopeAngle = std::clamp(agent.maxSlopeDegrees + 0.5f, 0.0f, 89.0f);
         cfg.walkableHeight = static_cast<int>(std::ceil(agent.height / cfg.ch));
         cfg.walkableClimb = static_cast<int>(std::floor(agent.maxClimb / cfg.ch));
         cfg.walkableRadius = static_cast<int>(std::ceil(agent.radius / cfg.cs));
-        cfg.maxEdgeLen = settings_.edgeMaxLen <= 0.0f ? 0 : static_cast<int>(settings_.edgeMaxLen / cfg.cs);
-        cfg.maxSimplificationError = settings_.edgeMaxError;
-        cfg.minRegionArea = areaSize(settings_.regionMinSize);
-        cfg.mergeRegionArea = areaSize(settings_.regionMergeSize);
-        cfg.maxVertsPerPoly = static_cast<int>(settings_.maxVertsPerPoly);
-        cfg.detailSampleDist = settings_.detailSampleDist < 0.9f ? 0.0f : cfg.cs * settings_.detailSampleDist;
-        cfg.detailSampleMaxError = cfg.ch * settings_.detailSampleMaxError;
-        cfg.borderSize = static_cast<int>(settings_.tileBorderSize);
+        cfg.maxEdgeLen = settings.edgeMaxLen <= 0.0f ? 0 : static_cast<int>(settings.edgeMaxLen / cfg.cs);
+        cfg.maxSimplificationError = settings.edgeMaxError;
+        cfg.minRegionArea = areaSize(settings.regionMinSize);
+        cfg.mergeRegionArea = areaSize(settings.regionMergeSize);
+        cfg.maxVertsPerPoly = static_cast<int>(std::clamp(settings.maxVertsPerPoly, 3u, 12u));
+        cfg.detailSampleDist = settings.detailSampleDist < 0.9f ? 0.0f : cfg.cs * settings.detailSampleDist;
+        cfg.detailSampleMaxError = cfg.ch * settings.detailSampleMaxError;
+        cfg.borderSize = static_cast<int>(settings.tileBorderSize);
         cfg.bmin[0] = buildData.bounds.min.x;
         cfg.bmin[1] = buildData.bounds.min.y;
         cfg.bmin[2] = buildData.bounds.min.z;
@@ -342,9 +360,12 @@ namespace Engine {
         diagnostics.heightfieldHeight = static_cast<uint32_t>(std::max(cfg.height, 0));
 
         auto failBuild = [&](std::string message) {
-            impl_->lastBuildStatus = NavQueryStatus::NoPath;
-            impl_->lastBuildMessage = std::move(message);
-            return NavigationTileHandle{};
+            diagnostics.status = NavQueryStatus::NoPath;
+            diagnostics.message = message;
+            result.status = NavQueryStatus::NoPath;
+            result.message = std::move(message);
+            result.diagnostics = diagnostics;
+            return result;
         };
 
         rcHeightfield* heightfield = rcAllocHeightfield();
@@ -471,37 +492,40 @@ namespace Engine {
             rcFreePolyMeshDetail(detailMesh);
             return failBuild("Failed to create Detour navmesh tile data.");
         }
-        std::vector<uint8_t> detourTileData(
+        NavigationTileCacheData tileData;
+        tileData.coord = buildData.coord;
+        tileData.bounds = buildData.bounds;
+        tileData.detourTileData.assign(
             navData,
             navData + static_cast<size_t>(std::max(navDataSize, 0)));
+        dtFree(navData);
         rcFreePolyMesh(polyMesh);
         rcFreePolyMeshDetail(detailMesh);
 
-        dtTileRef tileRef = 0;
-        const dtStatus addStatus = impl_->navMesh->addTile(navData, navDataSize, DT_TILE_FREE_DATA, 0, &tileRef);
-        if (dtStatusFailed(addStatus)) {
-            dtFree(navData);
-            return failBuild("Failed to add Detour navmesh tile.");
-        }
-
-        const NavigationTileHandle handle{impl_->nextTileId++};
         diagnostics.status = NavQueryStatus::Success;
         diagnostics.message = "Built terrain navigation tile.";
-        impl_->tiles[buildData.coord] = Impl::TileRecord{
-            handle,
-            tileRef,
-            buildData.bounds,
-            std::move(detourTileData),
-            NavQueryStatus::Success,
-            "Built terrain navigation tile.",
-            diagnostics,
-        };
-        impl_->lastBuildStatus = NavQueryStatus::Success;
-        impl_->lastBuildMessage = "Built terrain navigation tile.";
-        return handle;
+        result.status = NavQueryStatus::Success;
+        result.message = "Built terrain navigation tile.";
+        result.tileData = std::move(tileData);
+        result.diagnostics = diagnostics;
+        return result;
     }
 
     NavigationTileHandle NavigationSystem::loadTerrainTileFromCache(const NavigationTileCacheData& cacheData)
+    {
+        NavigationTileDiagnostics diagnostics;
+        diagnostics.coord = cacheData.coord;
+        diagnostics.status = NavQueryStatus::Success;
+        diagnostics.message = "Loaded terrain navigation tile from cache.";
+        diagnostics.source = NavigationTileSource::Cache;
+        diagnostics.bounds = cacheData.bounds;
+        diagnostics.build = settings_;
+        return loadTerrainTileFromCache(cacheData, diagnostics);
+    }
+
+    NavigationTileHandle NavigationSystem::loadTerrainTileFromCache(
+        const NavigationTileCacheData& cacheData,
+        const NavigationTileDiagnostics& sourceDiagnostics)
     {
         if (!impl_ || !impl_->initialized()) {
             if (impl_) {
@@ -549,24 +573,24 @@ namespace Engine {
         }
 
         const NavigationTileHandle handle{impl_->nextTileId++};
-        NavigationTileDiagnostics diagnostics;
+        NavigationTileDiagnostics diagnostics = sourceDiagnostics;
         diagnostics.coord = cacheData.coord;
         diagnostics.status = NavQueryStatus::Success;
-        diagnostics.message = "Loaded terrain navigation tile from cache.";
-        diagnostics.source = NavigationTileSource::Cache;
         diagnostics.bounds = cacheData.bounds;
-        diagnostics.build = settings_;
+        if (diagnostics.message.empty()) {
+            diagnostics.message = "Loaded terrain navigation tile.";
+        }
         impl_->tiles[cacheData.coord] = Impl::TileRecord{
             handle,
             tileRef,
             cacheData.bounds,
             cacheData.detourTileData,
             NavQueryStatus::Success,
-            "Loaded terrain navigation tile from cache.",
+            diagnostics.message,
             diagnostics,
         };
         impl_->lastBuildStatus = NavQueryStatus::Success;
-        impl_->lastBuildMessage = "Loaded terrain navigation tile from cache.";
+        impl_->lastBuildMessage = diagnostics.message;
         return handle;
     }
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <unordered_set>
 
 namespace Engine {
@@ -51,6 +52,16 @@ namespace Engine {
 
         const ChunkContent content = factory(coord, world, terrain);
         activeChunks_.insert({coord, ActiveChunk{content.terrain, content.objects, content.renderGroup}});
+    }
+
+    bool ChunkStreamer::registerLoadedChunk(ChunkCoord coord, ChunkContent content)
+    {
+        if (isLoaded(coord)) {
+            return false;
+        }
+
+        activeChunks_.insert({coord, ActiveChunk{content.terrain, std::move(content.objects), content.renderGroup}});
+        return true;
     }
 
     void ChunkStreamer::unloadChunk(ChunkCoord coord, World& world, TerrainSystem& terrain, SpatialRegistry* spatialRegistry)

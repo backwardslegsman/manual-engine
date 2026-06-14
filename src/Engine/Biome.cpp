@@ -77,6 +77,13 @@ namespace Engine {
             0.85f,
             0.75f,
             0.55f,
+            0.0f,
+            0.72f,
+            0.055f,
+            0.047f,
+            0.18f,
+            0.035f,
+            42.0f,
             1.0f,
             {{"tree_cluster", 4.0f}, {"rock", 1.0f}, {"field_marker", 0.8f}, {"camp_marker", 0.4f}},
             {80, 180, 110, 255},
@@ -87,6 +94,13 @@ namespace Engine {
             1.35f,
             1.25f,
             1.4f,
+            0.25f,
+            0.95f,
+            0.048f,
+            0.042f,
+            0.22f,
+            0.032f,
+            38.0f,
             0.9f,
             {{"rock", 5.0f}, {"tree_cluster", 0.8f}, {"field_marker", 0.6f}},
             {140, 130, 105, 255},
@@ -97,6 +111,13 @@ namespace Engine {
             0.6f,
             0.55f,
             0.45f,
+            -0.15f,
+            0.45f,
+            0.038f,
+            0.034f,
+            0.12f,
+            0.026f,
+            45.0f,
             0.45f,
             {{"rock", 1.0f}, {"field_marker", 0.8f}},
             {165, 155, 105, 255},
@@ -107,6 +128,13 @@ namespace Engine {
             0.8f,
             0.7f,
             0.65f,
+            0.05f,
+            0.55f,
+            0.044f,
+            0.039f,
+            0.14f,
+            0.030f,
+            42.0f,
             1.15f,
             {{"camp_marker", 3.0f}, {"field_marker", 2.0f}, {"tree_cluster", 1.2f}, {"rock", 1.0f}},
             {105, 165, 175, 255},
@@ -143,6 +171,13 @@ namespace Engine {
                 descriptor.heightScale = config["height_scale"].as<float>(descriptor.heightScale);
                 descriptor.rollingScale = config["rolling_scale"].as<float>(descriptor.rollingScale);
                 descriptor.detailScale = config["detail_scale"].as<float>(descriptor.detailScale);
+                descriptor.baseHeight = config["base_height"].as<float>(descriptor.baseHeight);
+                descriptor.rollingAmplitude = config["rolling_amplitude"].as<float>(descriptor.rollingAmplitude);
+                descriptor.rollingFrequencyX = config["rolling_frequency_x"].as<float>(descriptor.rollingFrequencyX);
+                descriptor.rollingFrequencyZ = config["rolling_frequency_z"].as<float>(descriptor.rollingFrequencyZ);
+                descriptor.detailAmplitude = config["detail_amplitude"].as<float>(descriptor.detailAmplitude);
+                descriptor.detailFrequency = config["detail_frequency"].as<float>(descriptor.detailFrequency);
+                descriptor.maxNavSlopeDegreesHint = config["max_nav_slope_degrees_hint"].as<float>(descriptor.maxNavSlopeDegreesHint);
                 descriptor.propDensity = config["prop_density"].as<float>(descriptor.propDensity);
                 descriptor.archetypeWeights = readArchetypeWeights(config["archetypes"]);
                 descriptor.terrainColor = readColor(config["terrain_color"], descriptor.terrainColor);
@@ -170,6 +205,12 @@ namespace Engine {
         descriptor.heightScale = std::max(descriptor.heightScale, 0.0f);
         descriptor.rollingScale = std::max(descriptor.rollingScale, 0.0f);
         descriptor.detailScale = std::max(descriptor.detailScale, 0.0f);
+        descriptor.rollingAmplitude = std::max(descriptor.rollingAmplitude, 0.0f);
+        descriptor.rollingFrequencyX = std::max(descriptor.rollingFrequencyX, 0.0f);
+        descriptor.rollingFrequencyZ = std::max(descriptor.rollingFrequencyZ, 0.0f);
+        descriptor.detailAmplitude = std::max(descriptor.detailAmplitude, 0.0f);
+        descriptor.detailFrequency = std::max(descriptor.detailFrequency, 0.0f);
+        descriptor.maxNavSlopeDegreesHint = std::clamp(descriptor.maxNavSlopeDegreesHint, 0.0f, 89.0f);
         descriptor.propDensity = std::max(descriptor.propDensity, 0.0f);
 
         const auto existing = std::ranges::find_if(biomes_, [&](const BiomeDescriptor& biome) {
