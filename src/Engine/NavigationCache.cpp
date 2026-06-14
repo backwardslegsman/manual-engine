@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <utility>
 
 #include <yaml-cpp/yaml.h>
 
@@ -135,6 +136,7 @@ namespace Engine {
             node["neighbor"] = chunkNode(portal.neighborCoord);
             node["reachable_from_center"] = portal.reachableFromChunkCenter;
             node["connected_to_loaded_neighbor"] = portal.connectedToLoadedNeighbor;
+            node["connected_neighbor_position"] = vec3Node(portal.connectedNeighborPosition);
             return node;
         }
 
@@ -146,6 +148,7 @@ namespace Engine {
             portal.neighborCoord = readChunk(node["neighbor"]);
             portal.reachableFromChunkCenter = node["reachable_from_center"].as<bool>(false);
             portal.connectedToLoadedNeighbor = node["connected_to_loaded_neighbor"].as<bool>(false);
+            portal.connectedNeighborPosition = readVec3(node["connected_neighbor_position"]);
             return portal;
         }
 
@@ -207,6 +210,7 @@ namespace Engine {
                 item["cost"] = edge.cost;
                 item["blocked"] = edge.blocked;
                 item["waypoint"] = vec3Node(edge.waypoint);
+                item["ingress_waypoint"] = vec3Node(edge.ingressWaypoint);
                 node["edges"].push_back(item);
             }
             return node;
@@ -236,6 +240,7 @@ namespace Engine {
                         item["cost"].as<float>(1.0f),
                         item["blocked"].as<bool>(false),
                         readVec3(item["waypoint"]),
+                        item["ingress_waypoint"] ? readVec3(item["ingress_waypoint"]) : readVec3(item["waypoint"]),
                     });
                 }
             }
@@ -253,6 +258,7 @@ namespace Engine {
             node["archetype_config_hash"] = manifest.archetypeConfigHash;
             node["generator_version"] = manifest.generatorVersion;
             node["identity_hash"] = manifest.identityHash;
+            node["profile_id"] = manifest.profileId;
             node["build"]["cell_size"] = manifest.build.cellSize;
             node["build"]["cell_height"] = manifest.build.cellHeight;
             node["build"]["tile_border_size"] = manifest.build.tileBorderSize;
@@ -290,6 +296,7 @@ namespace Engine {
         int32_t graphRadiusChunks,
         const NavBuildSettings& build,
         const NavAgentSettings& agent,
+        std::string profileId,
         const std::filesystem::path& biomeConfigPath,
         const std::filesystem::path& archetypeConfigPath)
     {
@@ -300,6 +307,7 @@ namespace Engine {
         manifest.graphRadiusChunks = graphRadiusChunks;
         manifest.build = build;
         manifest.agent = agent;
+        manifest.profileId = std::move(profileId);
         manifest.biomeConfigHash = hashFile(biomeConfigPath);
         manifest.archetypeConfigHash = hashFile(archetypeConfigPath);
 
@@ -310,6 +318,7 @@ namespace Engine {
                  << manifest.graphRadiusChunks << '|'
                  << manifest.biomeConfigHash << '|'
                  << manifest.archetypeConfigHash << '|'
+                 << manifest.profileId << '|'
                  << manifest.generatorVersion << '|';
         appendHashInput(identity, manifest.build);
         appendHashInput(identity, manifest.agent);

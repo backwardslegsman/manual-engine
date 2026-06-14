@@ -53,6 +53,14 @@ namespace Engine {
         {
             return static_cast<float>(std::abs(a.x - b.x) + std::abs(a.z - b.z));
         }
+
+        float xzDistance(const glm::vec3& a, const glm::vec3& b)
+        {
+            const float dx = a.x - b.x;
+            const float dz = a.z - b.z;
+            return std::sqrt(dx * dx + dz * dz);
+        }
+
     }
 
     WorldNavigationGraph::WorldNavigationGraph(WorldNavigationGraphSettings settings)
@@ -97,7 +105,8 @@ namespace Engine {
 
                 const bool blocked = edgeBlockedByLoadedConnectivity(coord, direction, loadedConnectivity);
                 const float cost = (node.traversalCost + neighborIt->second.traversalCost) * 0.5f;
-                edges_.push_back({coord, neighbor, direction, cost, blocked, waypointBetween(coord, neighbor, loadedConnectivity)});
+                std::vector<WorldNavEdge> edges = makeEdges(coord, neighbor, direction, cost, blocked, loadedConnectivity);
+                edges_.insert(edges_.end(), edges.begin(), edges.end());
             }
         }
     }
@@ -110,6 +119,21 @@ namespace Engine {
     }
 
     WorldNavRoute WorldNavigationGraph::findRoute(const glm::vec3& startWorldPosition, const glm::vec3& endWorldPosition) const
+    {
+        return findRouteInternal(startWorldPosition, endWorldPosition, false);
+    }
+
+    WorldNavRoute WorldNavigationGraph::findRouteAllowingSameChunkDetour(
+        const glm::vec3& startWorldPosition,
+        const glm::vec3& endWorldPosition) const
+    {
+        return findRouteInternal(startWorldPosition, endWorldPosition, true);
+    }
+
+    WorldNavRoute WorldNavigationGraph::findRouteInternal(
+        const glm::vec3& startWorldPosition,
+        const glm::vec3& endWorldPosition,
+        bool allowSameChunkDetour) const
     {
         WorldNavRoute route;
         if (!hasGraph_ || nodes_.empty()) {
@@ -126,8 +150,65 @@ namespace Engine {
             return route;
         }
 
+        if (start == goal && allowSameChunkDetour) {
+            const WorldNavEdge* bestExit = nullptr;
+            const WorldNavEdge* bestReturn = nullptr;
+            float bestCost = std::numeric_limits<float>::max();
+            for (const WorldNavEdge& exitEdge : edges_) {
+                if (exitEdge.from != start || exitEdge.blocked) {
+                    continue;
+                }
+                for (const WorldNavEdge& returnEdge : edges_) {
+                    if (returnEdge.from != exitEdge.to || returnEdge.to != start || returnEdge.blocked) {
+                        continue;
+                    }
+
+                    const float cost =
+                        exitEdge.cost +
+                        returnEdge.cost +
+                        xzDistance(startWorldPosition, exitEdge.waypoint) / settings_.chunkSize +
+                        xzDistance(exitEdge.ingressWaypoint, returnEdge.waypoint) / settings_.chunkSize +
+                        xzDistance(returnEdge.ingressWaypoint, endWorldPosition) / settings_.chunkSize;
+                    if (cost < bestCost) {
+                        bestCost = cost;
+                        bestExit = &exitEdge;
+                        bestReturn = &returnEdge;
+                    }
+                }
+            }
+
+            if (!bestExit || !bestReturn) {
+                route.status = WorldNavRouteStatus::NoRoute;
+                route.message = "No same-chunk detour route found.";
+                return route;
+            }
+
+            route.chunkSequence = {start, bestExit->to, start};
+            route.portalWaypoints = {
+                startWorldPosition,
+                bestExit->waypoint,
+                bestExit->ingressWaypoint,
+                bestReturn->waypoint,
+                bestReturn->ingressWaypoint,
+                endWorldPosition,
+            };
+            route.waypointChunks = {
+                start,
+                start,
+                bestExit->to,
+                bestReturn->from,
+                start,
+                goal,
+            };
+            route.totalCost = bestCost;
+            route.status = WorldNavRouteStatus::Success;
+            route.message = "Same-chunk detour route found.";
+            return route;
+        }
+
         std::priority_queue<QueueNode, std::vector<QueueNode>, std::greater<QueueNode>> frontier;
         std::unordered_map<ChunkCoord, ChunkCoord, ChunkCoordHash> cameFrom;
+        std::unordered_map<ChunkCoord, size_t, ChunkCoordHash> cameFromEdge;
         std::unordered_map<ChunkCoord, float, ChunkCoordHash> costSoFar;
         frontier.push({start, 0.0f});
         costSoFar[start] = 0.0f;
@@ -139,12 +220,20 @@ namespace Engine {
                 break;
             }
 
-            for (const WorldNavEdge& edge : edges_) {
+            for (size_t edgeIndex = 0; edgeIndex < edges_.size(); ++edgeIndex) {
+                const WorldNavEdge& edge = edges_[edgeIndex];
                 if (edge.from != current || edge.blocked) {
                     continue;
                 }
 
-                const float newCost = costSoFar[current] + edge.cost;
+                float traversalCost = edge.cost;
+                if (current == start) {
+                    traversalCost += xzDistance(startWorldPosition, edge.waypoint) / settings_.chunkSize;
+                }
+                if (edge.to == goal) {
+                    traversalCost += xzDistance(edge.ingressWaypoint, endWorldPosition) / settings_.chunkSize;
+                }
+                const float newCost = costSoFar[current] + traversalCost;
                 const auto costIt = costSoFar.find(edge.to);
                 if (costIt != costSoFar.end() && newCost >= costIt->second) {
                     continue;
@@ -152,6 +241,7 @@ namespace Engine {
 
                 costSoFar[edge.to] = newCost;
                 cameFrom[edge.to] = current;
+                cameFromEdge[edge.to] = edgeIndex;
                 frontier.push({edge.to, newCost + heuristic(edge.to, goal)});
             }
         }
@@ -169,17 +259,20 @@ namespace Engine {
         reversed.push_back(start);
         route.chunkSequence.assign(reversed.rbegin(), reversed.rend());
         route.portalWaypoints.push_back(startWorldPosition);
+        route.waypointChunks.push_back(start);
         for (size_t index = 1; index < route.chunkSequence.size(); ++index) {
-            const ChunkCoord from = route.chunkSequence[index - 1];
             const ChunkCoord to = route.chunkSequence[index];
-            const auto edgeIt = std::ranges::find_if(edges_, [&](const WorldNavEdge& edge) {
-                return edge.from == from && edge.to == to && !edge.blocked;
-            });
-            if (edgeIt != edges_.end()) {
-                route.portalWaypoints.push_back(edgeIt->waypoint);
+            const auto selectedEdgeIt = cameFromEdge.find(to);
+            if (selectedEdgeIt != cameFromEdge.end() && selectedEdgeIt->second < edges_.size()) {
+                const WorldNavEdge& edge = edges_[selectedEdgeIt->second];
+                route.portalWaypoints.push_back(edge.waypoint);
+                route.waypointChunks.push_back(edge.from);
+                route.portalWaypoints.push_back(edge.ingressWaypoint);
+                route.waypointChunks.push_back(to);
             }
         }
         route.portalWaypoints.push_back(endWorldPosition);
+        route.waypointChunks.push_back(goal);
         route.totalCost = costSoFar[goal];
         route.status = WorldNavRouteStatus::Success;
         route.message = "Coarse route found.";
@@ -314,43 +407,63 @@ namespace Engine {
         });
     }
 
-    glm::vec3 WorldNavigationGraph::waypointBetween(ChunkCoord from, ChunkCoord to, const NavigationConnectivitySystem& loadedConnectivity) const
+    std::vector<WorldNavEdge> WorldNavigationGraph::makeEdges(
+        ChunkCoord from,
+        ChunkCoord to,
+        NavEdgeDirection direction,
+        float cost,
+        bool blocked,
+        const NavigationConnectivitySystem& loadedConnectivity) const
     {
-        const NavEdgeDirection direction = directionTo(from, to);
-        if (const ChunkNavConnectivity* connectivity = loadedConnectivity.connectivity(from)) {
-            const std::vector<ChunkNavPortal>& portals = connectivity->portalsByEdge[static_cast<uint32_t>(direction)];
-            const auto portalIt = std::ranges::find_if(portals, [](const ChunkNavPortal& portal) {
-                return portal.connectedToLoadedNeighbor;
-            });
-            if (portalIt != portals.end()) {
-                return portalIt->position;
-            }
-            if (!portals.empty()) {
-                return portals.front().position;
-            }
-        }
-
+        std::vector<WorldNavEdge> result;
         glm::vec3 waypoint{
             (static_cast<float>(from.x) + 0.5f) * settings_.chunkSize,
             0.0f,
             (static_cast<float>(from.z) + 0.5f) * settings_.chunkSize,
         };
+        glm::vec3 ingressWaypoint{
+            (static_cast<float>(to.x) + 0.5f) * settings_.chunkSize,
+            0.0f,
+            (static_cast<float>(to.z) + 0.5f) * settings_.chunkSize,
+        };
+
+        if (const ChunkNavConnectivity* connectivity = loadedConnectivity.connectivity(from)) {
+            const std::vector<ChunkNavPortal>& portals = connectivity->portalsByEdge[static_cast<uint32_t>(direction)];
+            for (const ChunkNavPortal& portal : portals) {
+                if (!portal.connectedToLoadedNeighbor) {
+                    continue;
+                }
+                result.push_back({from, to, direction, cost, blocked, portal.position, portal.connectedNeighborPosition});
+            }
+            if (!result.empty()) {
+                return result;
+            }
+            if (!portals.empty()) {
+                waypoint = portals.front().position;
+            }
+        }
+
         switch (direction) {
             case NavEdgeDirection::North:
                 waypoint.z += settings_.chunkSize * 0.5f;
+                ingressWaypoint.z -= settings_.chunkSize * 0.5f;
                 break;
             case NavEdgeDirection::South:
                 waypoint.z -= settings_.chunkSize * 0.5f;
+                ingressWaypoint.z += settings_.chunkSize * 0.5f;
                 break;
             case NavEdgeDirection::East:
                 waypoint.x += settings_.chunkSize * 0.5f;
+                ingressWaypoint.x -= settings_.chunkSize * 0.5f;
                 break;
             case NavEdgeDirection::West:
                 waypoint.x -= settings_.chunkSize * 0.5f;
+                ingressWaypoint.x += settings_.chunkSize * 0.5f;
                 break;
             case NavEdgeDirection::Count:
                 break;
         }
-        return waypoint;
+        result.push_back({from, to, direction, cost, blocked, waypoint, ingressWaypoint});
+        return result;
     }
 }

@@ -90,6 +90,25 @@ namespace Engine {
             return status == NavQueryStatus::NoTile ||
                 status == NavQueryStatus::NoNearestPoly;
         }
+
+        bool canBridgeRouteSeam(
+            const glm::vec3& currentPosition,
+            const glm::vec3& requestedTarget,
+            const NavQueryResult& nearestTarget)
+        {
+            constexpr float MaxBridgeDistance = 8.0f;
+            constexpr float MaxSnapDistance = 1.25f;
+            return nearestTarget.status == NavQueryStatus::Success &&
+                xzDistanceSquared(currentPosition, requestedTarget) <= MaxBridgeDistance * MaxBridgeDistance &&
+                xzDistanceSquared(nearestTarget.point, requestedTarget) <= MaxSnapDistance * MaxSnapDistance;
+        }
+
+        bool pathEndsNear(const NavPath& path, const glm::vec3& target)
+        {
+            constexpr float MaxEndDistance = 1.5f;
+            return !path.points.empty() &&
+                xzDistanceSquared(path.points.back(), target) <= MaxEndDistance * MaxEndDistance;
+        }
     }
 
     ActorHandle ActorController::createActor(WorldObjectHandle object, ActorControllerSettings settings)
@@ -209,10 +228,17 @@ namespace Engine {
         if (clearRouteState) {
             actorRecord->state.route = {};
         }
+        actorRecord->state.commandDiagnostics.hasCommand = true;
+        actorRecord->state.commandDiagnostics.destination = destination;
+        actorRecord->state.commandDiagnostics.routeAttempted = !clearRouteState;
 
         const std::optional<glm::vec3> currentPosition = world.position(actorRecord->state.object);
         if (!currentPosition) {
             setPathFailure(actorRecord->state.path, NavQueryStatus::InvalidInput, "Actor has no world position.");
+            actorRecord->state.commandDiagnostics.directLocalStatus = NavQueryStatus::InvalidInput;
+            actorRecord->state.commandDiagnostics.directPathComplete = false;
+            actorRecord->state.commandDiagnostics.directLocalMessage = actorRecord->state.path.lastQueryMessage;
+            actorRecord->state.commandDiagnostics.finalReason = actorRecord->state.path.lastQueryMessage;
             return {NavQueryStatus::InvalidInput, {}, {}, actorRecord->state.path.lastQueryMessage};
         }
 
@@ -223,16 +249,26 @@ namespace Engine {
         NavQueryResult result = navigation.findPath(*currentPosition, destination, agent);
         actorRecord->state.path.lastQueryStatus = result.status;
         actorRecord->state.path.lastQueryMessage = result.message;
+        actorRecord->state.commandDiagnostics.directLocalStatus = result.status;
+        actorRecord->state.commandDiagnostics.directPathComplete = result.path.complete;
+        actorRecord->state.commandDiagnostics.directLocalMessage = result.message;
         if (!setPath(actor, result.path, result.path.points.empty() ? destination : result.path.points.back()) ||
-            result.status != NavQueryStatus::Success) {
+            result.status != NavQueryStatus::Success ||
+            !result.path.complete) {
             setPathFailure(
                 actorRecord->state.path,
-                result.status,
-                result.message.empty() ? "Navigation did not return a usable path." : result.message);
+                result.status == NavQueryStatus::Success ? NavQueryStatus::NoPath : result.status,
+                result.message.empty()
+                    ? "Navigation did not return a complete usable path."
+                    : result.message);
+            actorRecord->state.commandDiagnostics.finalReason = actorRecord->state.path.lastQueryMessage;
             return result;
         }
         actorRecord->state.path.lastQueryStatus = result.status;
         actorRecord->state.path.lastQueryMessage = result.message;
+        actorRecord->state.commandDiagnostics.finalReason = result.message.empty()
+            ? "Direct local path accepted."
+            : result.message;
         return result;
     }
 
@@ -268,6 +304,7 @@ namespace Engine {
                 WorldNavRouteStatus::InvalidEndpoint,
                 {},
                 {},
+                {},
                 0.0f,
                 "Invalid actor route request.",
             };
@@ -279,8 +316,16 @@ namespace Engine {
             actorRecord->state.route.status = ActorRouteStatus::Failed;
             actorRecord->state.route.finalDestination = destination;
             actorRecord->state.route.lastRouteMessage = "Actor has no world position.";
+            actorRecord->state.commandDiagnostics = {};
+            actorRecord->state.commandDiagnostics.hasCommand = true;
+            actorRecord->state.commandDiagnostics.destination = destination;
+            actorRecord->state.commandDiagnostics.routeAttempted = true;
+            actorRecord->state.commandDiagnostics.routeStatus = WorldNavRouteStatus::InvalidEndpoint;
+            actorRecord->state.commandDiagnostics.routeMessage = actorRecord->state.route.lastRouteMessage;
+            actorRecord->state.commandDiagnostics.finalReason = actorRecord->state.route.lastRouteMessage;
             return {
                 WorldNavRouteStatus::InvalidEndpoint,
+                {},
                 {},
                 {},
                 0.0f,
@@ -288,7 +333,31 @@ namespace Engine {
             };
         }
 
-        WorldNavRoute route = worldGraph.findRoute(*currentPosition, destination);
+        NavQueryResult directPath = setPathDestinationInternal(actor, destination, navigation, agent, world, false);
+        if (directPath.status == NavQueryStatus::Success && directPath.path.complete) {
+            WorldNavRoute directRoute = worldGraph.findRoute(*currentPosition, destination);
+            if (directRoute.status != WorldNavRouteStatus::Success) {
+                directRoute.status = WorldNavRouteStatus::Success;
+                directRoute.portalWaypoints = {*currentPosition, destination};
+                directRoute.totalCost = 0.0f;
+                directRoute.message = "Direct local navigation path found.";
+            }
+            actorRecord->state.route = {};
+            actorRecord->state.route.status = ActorRouteStatus::None;
+            actorRecord->state.route.route = directRoute;
+            actorRecord->state.route.finalDestination = destination;
+            actorRecord->state.route.lastRouteMessage = "Direct local navigation path found.";
+            actorRecord->state.commandDiagnostics.routeAttempted = false;
+            actorRecord->state.commandDiagnostics.routeStatus = directRoute.status;
+            actorRecord->state.commandDiagnostics.routeMessage = directRoute.message;
+            actorRecord->state.commandDiagnostics.finalReason = "Direct local navigation path found.";
+            return directRoute;
+        }
+
+        WorldNavRoute route = worldGraph.findRouteAllowingSameChunkDetour(*currentPosition, destination);
+        actorRecord->state.commandDiagnostics.routeAttempted = true;
+        actorRecord->state.commandDiagnostics.routeStatus = route.status;
+        actorRecord->state.commandDiagnostics.routeMessage = route.message;
         actorRecord->state.route = {};
         actorRecord->state.route.status = ActorRouteStatus::Planning;
         actorRecord->state.route.route = route;
@@ -303,6 +372,7 @@ namespace Engine {
             actorRecord->state.path.lastQueryMessage = route.message.empty()
                 ? "World route did not return usable waypoints."
                 : route.message;
+            actorRecord->state.commandDiagnostics.finalReason = actorRecord->state.path.lastQueryMessage;
             return route;
         }
 
@@ -327,6 +397,7 @@ namespace Engine {
         actorRecord->state.path.lastQueryMessage = "Path cancelled.";
         actorRecord->state.route.status = ActorRouteStatus::Cancelled;
         actorRecord->state.route.lastRouteMessage = "Route cancelled.";
+        actorRecord->state.commandDiagnostics.finalReason = "Command cancelled.";
         actorRecord->blockedPathTicks = 0;
     }
 
@@ -338,6 +409,7 @@ namespace Engine {
         }
         actorRecord->state.path = {};
         actorRecord->state.path.settings = actorRecord->settings.path;
+        actorRecord->state.commandDiagnostics = {};
         actorRecord->blockedPathTicks = 0;
     }
 
@@ -599,19 +671,64 @@ namespace Engine {
             return true;
         }
 
-        const glm::vec3 target = route.route.portalWaypoints[route.currentWaypointIndex];
+        const glm::vec3 requestedTarget = route.route.portalWaypoints[route.currentWaypointIndex];
+        actorRecord.state.commandDiagnostics.currentWaypointIndex = route.currentWaypointIndex;
+        actorRecord.state.commandDiagnostics.hasCurrentWaypointChunk = false;
+        actorRecord.state.commandDiagnostics.localTileAvailable = false;
+        glm::vec3 target = requestedTarget;
+        NavQueryResult nearestTarget;
+        if (route.currentWaypointIndex < route.route.waypointChunks.size()) {
+            actorRecord.state.commandDiagnostics.hasCurrentWaypointChunk = true;
+            actorRecord.state.commandDiagnostics.currentWaypointChunk = route.route.waypointChunks[route.currentWaypointIndex];
+            actorRecord.state.commandDiagnostics.localTileAvailable =
+                navigation.hasTile(route.route.waypointChunks[route.currentWaypointIndex]);
+            nearestTarget = navigation.nearestNavigablePointInTile(
+                route.route.waypointChunks[route.currentWaypointIndex],
+                requestedTarget,
+                agent);
+            if (nearestTarget.status == NavQueryStatus::Success) {
+                target = nearestTarget.point;
+            }
+        }
         const NavQueryResult result = setPathDestinationInternal(actor, target, navigation, agent, world, false);
         route.lastRouteMessage = result.message;
-        if (result.status == NavQueryStatus::Success) {
+        if (result.status == NavQueryStatus::Success && pathEndsNear(result.path, target)) {
             route.status = ActorRouteStatus::MovingToWaypoint;
+            actorRecord.state.commandDiagnostics.finalReason = "Moving to current route waypoint.";
             return true;
         }
 
-        if (waitingForLoadedLocalTile(result.status)) {
+        const std::optional<glm::vec3> currentPosition = world.position(actorRecord.state.object);
+        if (nearestTarget.status != NavQueryStatus::Success) {
+            nearestTarget = navigation.nearestNavigablePoint(target, agent);
+        }
+        if (currentPosition && canBridgeRouteSeam(*currentPosition, requestedTarget, nearestTarget)) {
+            NavPath bridgePath;
+            bridgePath.points = {*currentPosition, nearestTarget.point};
+            bridgePath.complete = true;
+            if (setPath(actor, std::move(bridgePath), nearestTarget.point)) {
+                actorRecord.state.path.lastQueryStatus = NavQueryStatus::Success;
+                actorRecord.state.path.lastQueryMessage = "Bridging adjacent chunk navigation seam.";
+                route.status = ActorRouteStatus::MovingToWaypoint;
+                route.lastRouteMessage = "Bridging adjacent chunk navigation seam.";
+                actorRecord.state.commandDiagnostics.finalReason = route.lastRouteMessage;
+                return true;
+            }
+        }
+
+        if (result.status == NavQueryStatus::Success && !pathEndsNear(result.path, target)) {
+            setPathFailure(
+                actorRecord.state.path,
+                NavQueryStatus::NoPath,
+                "Local path snapped to the wrong chunk for route waypoint.");
+        }
+
+        if (waitingForLoadedLocalTile(result.status) || waitingForLoadedLocalTile(nearestTarget.status)) {
             route.status = ActorRouteStatus::WaitingForLocalTile;
             route.lastRouteMessage = result.message.empty()
                 ? "Waiting for loaded navigation tile for the next route waypoint."
                 : result.message;
+            actorRecord.state.commandDiagnostics.finalReason = route.lastRouteMessage;
             return false;
         }
 
@@ -619,6 +736,7 @@ namespace Engine {
         route.lastRouteMessage = result.message.empty()
             ? "Failed to request local path to route waypoint."
             : result.message;
+        actorRecord.state.commandDiagnostics.finalReason = route.lastRouteMessage;
         return false;
     }
 

@@ -70,8 +70,46 @@ namespace Engine {
         }
 
         terrain.currentLod = 0;
-        terrain.rendererTerrain = createRendererTerrain(terrain, terrain.currentLod);
+        if (settings_.createRendererResources) {
+            terrain.rendererTerrain = createRendererTerrain(terrain, terrain.currentLod);
+        }
 
+        return storeTile(std::move(terrain));
+    }
+
+    TerrainTileHandle TerrainSystem::createTileFromHeights(
+        ChunkCoord coord,
+        std::span<const float> heights,
+        Renderer::MaterialHandle material)
+    {
+        const size_t expectedHeightCount = static_cast<size_t>(settings_.resolution) * settings_.resolution;
+        if (heights.size() != expectedHeightCount) {
+            return {};
+        }
+
+        TerrainTile terrain;
+        terrain.alive = true;
+        terrain.coord = coord;
+        terrain.origin = {
+            static_cast<float>(coord.x) * settings_.chunkSize,
+            0.0f,
+            static_cast<float>(coord.z) * settings_.chunkSize,
+        };
+        terrain.size = settings_.chunkSize;
+        terrain.resolution = settings_.resolution;
+        terrain.material = material;
+        terrain.biome = sampleChunkBiome(coord);
+        terrain.heights.assign(heights.begin(), heights.end());
+        terrain.currentLod = 0;
+        if (settings_.createRendererResources) {
+            terrain.rendererTerrain = createRendererTerrain(terrain, terrain.currentLod);
+        }
+
+        return storeTile(std::move(terrain));
+    }
+
+    TerrainTileHandle TerrainSystem::storeTile(TerrainTile terrain)
+    {
         for (uint32_t index = 0; index < tiles_.size(); ++index) {
             if (!tiles_[index].alive) {
                 tiles_[index] = std::move(terrain);
@@ -91,7 +129,9 @@ namespace Engine {
             return;
         }
 
-        Renderer::destroyTerrainTile(terrain->rendererTerrain);
+        if (settings_.createRendererResources) {
+            Renderer::destroyTerrainTile(terrain->rendererTerrain);
+        }
         *terrain = {};
     }
 
@@ -114,6 +154,11 @@ namespace Engine {
                 continue;
             }
 
+            if (!settings_.createRendererResources) {
+                terrain.currentLod = desiredLod;
+                rebuilt = true;
+                continue;
+            }
             Renderer::destroyTerrainTile(terrain.rendererTerrain);
             terrain.currentLod = desiredLod;
             terrain.rendererTerrain = createRendererTerrain(terrain, terrain.currentLod);

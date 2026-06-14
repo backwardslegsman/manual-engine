@@ -30,6 +30,7 @@
 #include "Engine/Navigation.hpp"
 #include "Engine/NavigationCache.hpp"
 #include "Engine/NavigationConnectivity.hpp"
+#include "Engine/NavigationProfile.hpp"
 #include "Engine/ObjectArchetype.hpp"
 #include "Engine/OrbitCamera.hpp"
 #include "Engine/PersistentObjectEditor.hpp"
@@ -286,6 +287,130 @@ namespace {
             summary += std::to_string(connectivity->portalsByEdge[index].size());
         }
         summary += connectivity->partial ? " partial" : " complete";
+        return summary;
+    }
+
+    const char* tileSourceName(Engine::NavigationTileSource source)
+    {
+        switch (source) {
+            case Engine::NavigationTileSource::Unknown:
+                return "unknown";
+            case Engine::NavigationTileSource::LiveBuild:
+                return "live build";
+            case Engine::NavigationTileSource::Cache:
+                return "cache";
+        }
+        return "unknown";
+    }
+
+    std::string makeTileDiagnosticsSummary(const std::optional<Engine::NavigationTileDiagnostics>& diagnostics)
+    {
+        if (!diagnostics) {
+            return "no tile diagnostics";
+        }
+
+        std::string summary = "chunk " +
+            std::to_string(diagnostics->coord.x) +
+            "," +
+            std::to_string(diagnostics->coord.z) +
+            " " +
+            tileSourceName(diagnostics->source) +
+            " status " +
+            navStatusName(diagnostics->status) +
+            " terrain tris " +
+            std::to_string(diagnostics->terrainTriangleCount) +
+            " walkable " +
+            std::to_string(diagnostics->walkableTerrainTriangleCount) +
+            " blockers " +
+            std::to_string(diagnostics->blockerTriangleCount) +
+            " hf " +
+            std::to_string(diagnostics->heightfieldWidth) +
+            "x" +
+            std::to_string(diagnostics->heightfieldHeight) +
+            " spans " +
+            std::to_string(diagnostics->compactSpanCount) +
+            " contours " +
+            std::to_string(diagnostics->contourCount) +
+            " polys " +
+            std::to_string(diagnostics->navPolygonCount) +
+            " detail tris " +
+            std::to_string(diagnostics->detailTriangleCount);
+        if (!diagnostics->message.empty()) {
+            summary += " - ";
+            summary += diagnostics->message;
+        }
+        return summary;
+    }
+
+    std::string makePortalDiagnosticsSummary(const Engine::ChunkPortalDiagnostics* diagnostics)
+    {
+        if (!diagnostics) {
+            return "no portal diagnostics";
+        }
+
+        std::string summary = "chunk " +
+            std::to_string(diagnostics->coord.x) +
+            "," +
+            std::to_string(diagnostics->coord.z);
+        for (uint32_t index = 0; index < Engine::NavEdgeDirectionCount; ++index) {
+            const Engine::NavigationPortalEdgeDiagnostics& edge = diagnostics->edges[index];
+            summary += " ";
+            summary += navEdgeDirectionName(static_cast<Engine::NavEdgeDirection>(index));
+            summary += "[s:";
+            summary += std::to_string(edge.sampleCount);
+            summary += " a:";
+            summary += std::to_string(edge.acceptedPortalCount);
+            summary += " c:";
+            summary += std::to_string(edge.connectedPortalCount);
+            summary += " no:";
+            summary += std::to_string(edge.rejectedNoNearestPolyCount);
+            summary += " band:";
+            summary += std::to_string(edge.rejectedEdgeBandCount);
+            summary += " reach:";
+            summary += std::to_string(edge.rejectedCenterReachabilityCount);
+            summary += " merge:";
+            summary += std::to_string(edge.mergedDuplicateCount);
+            summary += "]";
+        }
+        return summary;
+    }
+
+    std::string makeActorCommandDiagnosticsSummary(const Engine::ActorCommandDiagnostics& diagnostics)
+    {
+        if (!diagnostics.hasCommand) {
+            return "no command";
+        }
+
+        std::string summary = "direct " +
+            std::string{navStatusName(diagnostics.directLocalStatus)} +
+            (diagnostics.directPathComplete ? " complete" : " incomplete");
+        if (!diagnostics.directLocalMessage.empty()) {
+            summary += " (";
+            summary += diagnostics.directLocalMessage;
+            summary += ")";
+        }
+        if (diagnostics.routeAttempted) {
+            summary += "; route ";
+            summary += worldRouteStatusName(diagnostics.routeStatus);
+            if (!diagnostics.routeMessage.empty()) {
+                summary += " (";
+                summary += diagnostics.routeMessage;
+                summary += ")";
+            }
+        }
+        if (diagnostics.hasCurrentWaypointChunk) {
+            summary += "; waypoint ";
+            summary += std::to_string(diagnostics.currentWaypointIndex);
+            summary += " chunk ";
+            summary += std::to_string(diagnostics.currentWaypointChunk.x);
+            summary += ",";
+            summary += std::to_string(diagnostics.currentWaypointChunk.z);
+            summary += diagnostics.localTileAvailable ? " tile loaded" : " tile missing";
+        }
+        if (!diagnostics.finalReason.empty()) {
+            summary += "; ";
+            summary += diagnostics.finalReason;
+        }
         return summary;
     }
 
@@ -856,26 +981,9 @@ namespace {
                             continue;
                         }
 
-                        const Engine::ChunkNavConnectivity* neighbor =
-                            navigationConnectivity.connectivity(portal.neighborCoord);
-                        if (!neighbor) {
-                            continue;
-                        }
-
-                        const uint32_t oppositeIndex = static_cast<uint32_t>(
-                            portal.direction == Engine::NavEdgeDirection::North ? Engine::NavEdgeDirection::South :
-                            portal.direction == Engine::NavEdgeDirection::South ? Engine::NavEdgeDirection::North :
-                            portal.direction == Engine::NavEdgeDirection::East ? Engine::NavEdgeDirection::West :
-                            Engine::NavEdgeDirection::East);
-                        for (const Engine::ChunkNavPortal& neighborPortal : neighbor->portalsByEdge[oppositeIndex]) {
-                            if (!neighborPortal.connectedToLoadedNeighbor) {
-                                continue;
-                            }
-                            const glm::vec3 a = portal.position + glm::vec3{0.0f, 0.22f, 0.0f};
-                            const glm::vec3 b = neighborPortal.position + glm::vec3{0.0f, 0.22f, 0.0f};
-                            Renderer::addDebugLine(a, b, NavigationLinkColor);
-                            break;
-                        }
+                        const glm::vec3 a = portal.position + glm::vec3{0.0f, 0.22f, 0.0f};
+                        const glm::vec3 b = portal.connectedNeighborPosition + glm::vec3{0.0f, 0.22f, 0.0f};
+                        Renderer::addDebugLine(a, b, NavigationLinkColor);
                     }
                 }
             }
@@ -1203,10 +1311,14 @@ int main(int, char**)
         {896.0f, 2},
     }};
     Engine::TerrainSystem terrain(terrainSettings);
-    Engine::NavBuildSettings navBuildSettings;
-    navBuildSettings.cellSize = 0.8f;
-    navBuildSettings.cellHeight = 0.25f;
-    Engine::NavAgentSettings playerNavAgent;
+    const Engine::NavigationProfileLoadResult navigationProfileLoad =
+        Engine::loadNavigationProfileFromYaml("assets/config/navigation_profiles.yaml");
+    if (navigationProfileLoad.usedFallback) {
+        SDL_Log("Using default navigation profile: %s", navigationProfileLoad.message.c_str());
+    }
+    std::string activeNavigationProfileId = navigationProfileLoad.profile.id;
+    Engine::NavBuildSettings navBuildSettings = navigationProfileLoad.profile.build;
+    Engine::NavAgentSettings playerNavAgent = navigationProfileLoad.profile.agent;
     Engine::NavigationSystem navigation(navBuildSettings);
     Engine::NavigationConnectivitySystem navigationConnectivity;
     Engine::WorldNavigationGraph worldNavigationGraph({SampleWorldGraphRadius, SampleChunkSize});
@@ -1217,6 +1329,7 @@ int main(int, char**)
         SampleWorldGraphRadius,
         navBuildSettings,
         playerNavAgent,
+        activeNavigationProfileId,
         "assets/config/biomes.yaml",
         "assets/config/object_archetypes.yaml");
     Engine::NavigationCache navigationCache(navigationCacheSettings, navigationCacheManifest);
@@ -1230,6 +1343,7 @@ int main(int, char**)
                 SampleWorldGraphRadius,
                 navBuildSettings,
                 playerNavAgent,
+                activeNavigationProfileId,
                 "assets/config/biomes.yaml",
                 "assets/config/object_archetypes.yaml"));
         navigationCache.ensureManifest();
@@ -1240,6 +1354,11 @@ int main(int, char**)
     Renderer::DebugUi::NavigationDebugControls navigationDebugControls;
     navigationDebugControls.agent = toDebugAgentSettings(playerNavAgent);
     navigationDebugControls.build = toDebugBuildSettings(navBuildSettings);
+    navigationDebugControls.portalSamplesPerEdge = navigationConnectivity.settings().samplesPerEdge;
+    navigationDebugControls.portalEdgeInset = navigationConnectivity.settings().edgeInset;
+    navigationDebugControls.portalEdgeBandWidth = navigationConnectivity.settings().edgeBandWidth;
+    navigationDebugControls.portalMergeDistance = navigationConnectivity.settings().portalMergeDistance;
+    navigationDebugControls.portalNeighborLinkDistance = navigationConnectivity.settings().neighborLinkDistance;
     std::unordered_set<Engine::ChunkCoord, Engine::ChunkCoordHash> navigationChunks;
     NavigationBlockerStats navigationBlockerStats;
     std::optional<Engine::ChunkCoord> lastRebuiltNavigationChunk;
@@ -2332,6 +2451,7 @@ int main(int, char**)
             spatialStats.objectsNearCamera = static_cast<uint32_t>(spatialRegistry.objectsInRadius(camera.state().pivot, spatialQueryRadius).size());
             spatialStats.nearQueryRadius = spatialQueryRadius;
             Renderer::DebugUi::NavigationDebugStats navigationStats;
+            navigationStats.activeNavigationProfileId = activeNavigationProfileId;
             navigationStats.loadedTiles = static_cast<uint32_t>(navigation.tileCount());
             navigationStats.polygonEdgeCount = static_cast<uint32_t>(navigation.debugGeometry().polygonEdges.size());
             navigationStats.blockerVertexCount = navigationBlockerStats.vertices;
@@ -2344,12 +2464,33 @@ int main(int, char**)
             navigationStats.connectivityBlockedChunkCount = connectivityStats.blockedChunks;
             navigationStats.cameraChunkConnectivitySummary = makeConnectivitySummary(
                 navigationConnectivity.connectivity(terrain.coordForWorldPosition(camera.state().pivot.x, camera.state().pivot.z)));
+            const Engine::ChunkCoord cameraChunk =
+                terrain.coordForWorldPosition(camera.state().pivot.x, camera.state().pivot.z);
+            navigationStats.cameraChunkTileSummary = makeTileDiagnosticsSummary(navigation.tileDiagnostics(cameraChunk));
+            navigationStats.cameraChunkPortalSummary =
+                makePortalDiagnosticsSummary(navigationConnectivity.portalDiagnostics(cameraChunk));
+            if (debugSelection.terrainHit) {
+                navigationStats.hoveredChunkTileSummary =
+                    makeTileDiagnosticsSummary(navigation.tileDiagnostics(debugSelection.terrainHit->chunk));
+                navigationStats.hoveredChunkPortalSummary =
+                    makePortalDiagnosticsSummary(navigationConnectivity.portalDiagnostics(debugSelection.terrainHit->chunk));
+            } else if (debugSelection.hoveredObject) {
+                navigationStats.hoveredChunkTileSummary =
+                    makeTileDiagnosticsSummary(navigation.tileDiagnostics(debugSelection.hoveredObject->cell));
+                navigationStats.hoveredChunkPortalSummary =
+                    makePortalDiagnosticsSummary(navigationConnectivity.portalDiagnostics(debugSelection.hoveredObject->cell));
+            }
             if (debugSelection.selectedObject && world.isValid(debugSelection.selectedObject->object)) {
                 const std::optional<glm::vec3> selectedPosition = world.position(debugSelection.selectedObject->object);
                 if (selectedPosition) {
-                    navigationStats.selectedChunkConnectivitySummary = makeConnectivitySummary(
-                        navigationConnectivity.connectivity(
-                            terrain.coordForWorldPosition(selectedPosition->x, selectedPosition->z)));
+                    const Engine::ChunkCoord selectedChunk =
+                        terrain.coordForWorldPosition(selectedPosition->x, selectedPosition->z);
+                    navigationStats.selectedChunkConnectivitySummary =
+                        makeConnectivitySummary(navigationConnectivity.connectivity(selectedChunk));
+                    navigationStats.selectedChunkTileSummary =
+                        makeTileDiagnosticsSummary(navigation.tileDiagnostics(selectedChunk));
+                    navigationStats.selectedChunkPortalSummary =
+                        makePortalDiagnosticsSummary(navigationConnectivity.portalDiagnostics(selectedChunk));
                 }
             }
             const Engine::WorldNavigationGraphStats graphStats = worldNavigationGraph.stats();
@@ -2391,6 +2532,16 @@ int main(int, char**)
                     navigationStats.selectedActorSummary += "/";
                     navigationStats.selectedActorSummary += actorRouteStatusName(actorState->route.status);
                     navigationStats.selectedActorSummary += "]";
+                    if (navigationStats.selectedActorCommandSummary.empty()) {
+                        navigationStats.selectedActorCommandSummary =
+                            makeActorCommandDiagnosticsSummary(actorState->commandDiagnostics);
+                    }
+                }
+            }
+            if (navigationStats.selectedActorCommandSummary.empty()) {
+                if (const std::optional<Engine::ActorState> playerState = actors.state(playerActor)) {
+                    navigationStats.selectedActorCommandSummary =
+                        makeActorCommandDiagnosticsSummary(playerState->commandDiagnostics);
                 }
             }
             if (lastGroupCommandDestination) {
@@ -2511,6 +2662,20 @@ int main(int, char**)
             processNavigationDirty();
             cancelCommandedActorPaths();
             worldSaveControls.status = "Rebuilt visible navigation tiles.";
+        }
+        if (navigationDebugControls.rebuildConnectivityRequested) {
+            navigationDebugControls.rebuildConnectivityRequested = false;
+            Engine::NavigationConnectivitySettings settings = navigationConnectivity.settings();
+            settings.samplesPerEdge = std::max(navigationDebugControls.portalSamplesPerEdge, 1u);
+            settings.edgeInset = navigationDebugControls.portalEdgeInset;
+            settings.edgeBandWidth = navigationDebugControls.portalEdgeBandWidth;
+            settings.portalMergeDistance = navigationDebugControls.portalMergeDistance;
+            settings.neighborLinkDistance = navigationDebugControls.portalNeighborLinkDistance;
+            navigationConnectivity.setSettings(settings);
+            navigationConnectivityDirty = true;
+            worldGraphDirty = true;
+            processNavigationDirty();
+            worldSaveControls.status = "Rebuilt navigation connectivity and graph.";
         }
         if (navigationDebugControls.clearCacheStatsRequested) {
             navigationDebugControls.clearCacheStatsRequested = false;

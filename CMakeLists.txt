@@ -15,6 +15,8 @@ find_package(recastnavigation CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(yaml-cpp CONFIG REQUIRED)
 
+enable_testing()
+
 add_executable(manual_engine
     src/App/main.cpp
     src/Assets/Assimp/Importer.cpp
@@ -33,6 +35,7 @@ add_executable(manual_engine
     src/Engine/InteractionSystem.cpp
     src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationCache.cpp
+    src/Engine/NavigationProfile.cpp
     src/Engine/ObjectArchetype.cpp
     src/Engine/ObjectId.cpp
     src/Engine/Navigation.cpp
@@ -79,6 +82,39 @@ target_link_libraries(manual_engine
         RecastNavigation::DebugUtils
         yaml-cpp::yaml-cpp
 )
+
+add_executable(manual_engine_navigation_tests
+    tests/navigation/NavigationTestRunner.cpp
+    tests/navigation/RendererStubs.cpp
+    src/Engine/ActorController.cpp
+    src/Engine/Biome.cpp
+    src/Engine/BlockingCollision.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/EventQueue.cpp
+    src/Engine/NavigationConnectivity.cpp
+    src/Engine/NavigationProfile.cpp
+    src/Engine/ObjectId.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/SpatialRegistry.cpp
+    src/Engine/Terrain.cpp
+    src/Engine/World.cpp
+    src/Engine/WorldNavigationGraph.cpp
+)
+
+target_include_directories(manual_engine_navigation_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_navigation_tests
+    PRIVATE
+        glm::glm
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_navigation_tests COMMAND manual_engine_navigation_tests)
 
 set(SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/src")
 set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/dx11")

@@ -27,6 +27,7 @@ namespace Engine {
         float cost = 1.0f;
         bool blocked = false;
         glm::vec3 waypoint{};
+        glm::vec3 ingressWaypoint{};
     };
 
     enum class WorldNavRouteStatus {
@@ -40,6 +41,7 @@ namespace Engine {
         WorldNavRouteStatus status = WorldNavRouteStatus::NoGraph;
         std::vector<ChunkCoord> chunkSequence;
         std::vector<glm::vec3> portalWaypoints;
+        std::vector<ChunkCoord> waypointChunks;
         float totalCost = 0.0f;
         std::string message;
     };
@@ -75,6 +77,7 @@ namespace Engine {
         void clear();
 
         WorldNavRoute findRoute(const glm::vec3& startWorldPosition, const glm::vec3& endWorldPosition) const;
+        WorldNavRoute findRouteAllowingSameChunkDetour(const glm::vec3& startWorldPosition, const glm::vec3& endWorldPosition) const;
         const WorldNavNode* node(ChunkCoord coord) const;
         const std::vector<WorldNavEdge>& edges() const;
         const std::unordered_map<ChunkCoord, WorldNavNode, ChunkCoordHash>& nodes() const;
@@ -88,7 +91,17 @@ namespace Engine {
         glm::vec3 centerForChunk(ChunkCoord coord, const TerrainSystem& terrain) const;
         float costForChunk(ChunkCoord coord, const TerrainSystem& terrain) const;
         bool edgeBlockedByLoadedConnectivity(ChunkCoord from, NavEdgeDirection direction, const NavigationConnectivitySystem& loadedConnectivity) const;
-        glm::vec3 waypointBetween(ChunkCoord from, ChunkCoord to, const NavigationConnectivitySystem& loadedConnectivity) const;
+        std::vector<WorldNavEdge> makeEdges(
+            ChunkCoord from,
+            ChunkCoord to,
+            NavEdgeDirection direction,
+            float cost,
+            bool blocked,
+            const NavigationConnectivitySystem& loadedConnectivity) const;
+        WorldNavRoute findRouteInternal(
+            const glm::vec3& startWorldPosition,
+            const glm::vec3& endWorldPosition,
+            bool allowSameChunkDetour) const;
 
         WorldNavigationGraphSettings settings_;
         ChunkCoord centerChunk_{};

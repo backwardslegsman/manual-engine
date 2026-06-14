@@ -57,6 +57,12 @@ namespace Renderer::DebugUi {
         uint32_t connectivityBlockedChunkCount = 0;
         std::string cameraChunkConnectivitySummary;
         std::string selectedChunkConnectivitySummary;
+        std::string hoveredChunkTileSummary;
+        std::string cameraChunkTileSummary;
+        std::string selectedChunkTileSummary;
+        std::string hoveredChunkPortalSummary;
+        std::string cameraChunkPortalSummary;
+        std::string selectedChunkPortalSummary;
         uint32_t worldGraphNodeCount = 0;
         uint32_t worldGraphEdgeCount = 0;
         uint32_t worldGraphBlockedEdgeCount = 0;
@@ -88,6 +94,8 @@ namespace Renderer::DebugUi {
         glm::vec3 nearestPoint{};
         std::string currentPathStatus;
         uint32_t currentPathPointCount = 0;
+        std::string selectedActorCommandSummary;
+        std::string activeNavigationProfileId;
         NavigationAgentDebugSettings agent;
         NavigationBuildDebugSettings build;
         std::string cacheIdentity;
@@ -115,9 +123,15 @@ namespace Renderer::DebugUi {
         bool rebuildVisibleTilesRequested = false;
         bool generateVisibleCacheRequested = false;
         bool refreshSelectedOrVisibleCacheRequested = false;
+        bool rebuildConnectivityRequested = false;
         bool clearCacheStatsRequested = false;
         bool cacheEnabled = true;
         bool cacheWriteThrough = true;
+        uint32_t portalSamplesPerEdge = 9;
+        float portalEdgeInset = 1.5f;
+        float portalEdgeBandWidth = 4.0f;
+        float portalMergeDistance = 2.0f;
+        float portalNeighborLinkDistance = 6.0f;
         NavigationAgentDebugSettings agent;
         NavigationBuildDebugSettings build;
     };

@@ -88,6 +88,33 @@ namespace Engine {
         std::vector<NavDebugLine> polygonEdges;
     };
 
+    enum class NavigationTileSource {
+        Unknown,
+        LiveBuild,
+        Cache,
+    };
+
+    struct NavigationTileDiagnostics {
+        ChunkCoord coord;
+        NavQueryStatus status = NavQueryStatus::Unsupported;
+        std::string message;
+        NavigationTileSource source = NavigationTileSource::Unknown;
+        uint32_t terrainVertexCount = 0;
+        uint32_t terrainTriangleCount = 0;
+        uint32_t blockerVertexCount = 0;
+        uint32_t blockerTriangleCount = 0;
+        uint32_t walkableTerrainTriangleCount = 0;
+        uint32_t heightfieldWidth = 0;
+        uint32_t heightfieldHeight = 0;
+        uint32_t compactSpanCount = 0;
+        uint32_t contourCount = 0;
+        uint32_t navPolygonCount = 0;
+        uint32_t detailTriangleCount = 0;
+        Renderer::Aabb bounds;
+        NavAgentSettings agent;
+        NavBuildSettings build;
+    };
+
     class NavigationSystem {
     public:
         explicit NavigationSystem(NavBuildSettings settings = {});
@@ -112,10 +139,13 @@ namespace Engine {
         size_t tileCount() const;
         NavigationDebugGeometry debugGeometry() const;
         NavigationDebugGeometry debugGeometry(ChunkCoord coord) const;
+        std::optional<NavigationTileDiagnostics> tileDiagnostics(ChunkCoord coord) const;
+        std::vector<NavigationTileDiagnostics> allTileDiagnostics() const;
 
         // Queries operate only on currently loaded nav tiles. Callers should
         // treat NoTile/NoNearestPoly/NoPath as normal gameplay outcomes.
         NavQueryResult nearestNavigablePoint(glm::vec3 point, const NavAgentSettings& agent) const;
+        NavQueryResult nearestNavigablePointInTile(ChunkCoord coord, glm::vec3 point, const NavAgentSettings& agent) const;
         NavQueryResult findPath(glm::vec3 start, glm::vec3 end, const NavAgentSettings& agent) const;
         bool isNavigable(glm::vec3 point, const NavAgentSettings& agent) const;
         NavQueryStatus lastBuildStatus() const;

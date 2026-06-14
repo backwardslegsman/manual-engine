@@ -389,6 +389,9 @@ namespace Renderer::DebugUi {
         ImGui::Text("Objects within %.1f: %u", spatial.nearQueryRadius, spatial.objectsNearCamera);
         ImGui::Separator();
         ImGui::Text("Navigation");
+        if (!navigation.activeNavigationProfileId.empty()) {
+            ImGui::Text("Profile: %s", navigation.activeNavigationProfileId.c_str());
+        }
         ImGui::Text("Loaded tiles: %u", navigation.loadedTiles);
         ImGui::Text("Polygon edges: %u", navigation.polygonEdgeCount);
         ImGui::Text("Blocker vertices/triangles: %u / %u",
@@ -406,6 +409,24 @@ namespace Renderer::DebugUi {
         }
         if (!navigation.selectedChunkConnectivitySummary.empty()) {
             ImGui::TextWrapped("Selected chunk: %s", navigation.selectedChunkConnectivitySummary.c_str());
+        }
+        if (!navigation.cameraChunkTileSummary.empty()) {
+            ImGui::TextWrapped("Camera tile: %s", navigation.cameraChunkTileSummary.c_str());
+        }
+        if (!navigation.hoveredChunkTileSummary.empty()) {
+            ImGui::TextWrapped("Hovered tile: %s", navigation.hoveredChunkTileSummary.c_str());
+        }
+        if (!navigation.selectedChunkTileSummary.empty()) {
+            ImGui::TextWrapped("Selected tile: %s", navigation.selectedChunkTileSummary.c_str());
+        }
+        if (!navigation.cameraChunkPortalSummary.empty()) {
+            ImGui::TextWrapped("Camera portals: %s", navigation.cameraChunkPortalSummary.c_str());
+        }
+        if (!navigation.hoveredChunkPortalSummary.empty()) {
+            ImGui::TextWrapped("Hovered portals: %s", navigation.hoveredChunkPortalSummary.c_str());
+        }
+        if (!navigation.selectedChunkPortalSummary.empty()) {
+            ImGui::TextWrapped("Selected portals: %s", navigation.selectedChunkPortalSummary.c_str());
         }
         ImGui::Text("World graph: %s", navigation.hasWorldGraph ? "built" : "empty");
         ImGui::Text("World graph center: %d, %d", navigation.worldGraphCenterX, navigation.worldGraphCenterZ);
@@ -431,6 +452,9 @@ namespace Renderer::DebugUi {
         ImGui::Text("Selected actors: %u", navigation.selectedActorCount);
         if (!navigation.selectedActorSummary.empty()) {
             ImGui::TextWrapped("%s", navigation.selectedActorSummary.c_str());
+        }
+        if (!navigation.selectedActorCommandSummary.empty()) {
+            ImGui::TextWrapped("Selected command: %s", navigation.selectedActorCommandSummary.c_str());
         }
         if (navigation.hasLastGroupDestination) {
             ImGui::Text("Last group destination: %.2f, %.2f, %.2f",
@@ -510,12 +534,23 @@ namespace Renderer::DebugUi {
             if (ImGui::Button("Clear Cache Stats")) {
                 navigationControls->clearCacheStatsRequested = true;
             }
+            if (ImGui::Button("Rebuild Connectivity")) {
+                navigationControls->rebuildConnectivityRequested = true;
+            }
             ImGui::SliderFloat("Agent radius", &navigationControls->agent.radius, 0.1f, 2.0f);
             ImGui::SliderFloat("Agent height", &navigationControls->agent.height, 0.5f, 4.0f);
             ImGui::SliderFloat("Agent max slope", &navigationControls->agent.maxSlopeDegrees, 0.0f, 89.0f);
             ImGui::SliderFloat("Agent max climb", &navigationControls->agent.maxClimb, 0.0f, 2.0f);
             ImGui::SliderFloat("Recast cell size", &navigationControls->build.cellSize, 0.05f, 1.0f);
             ImGui::SliderFloat("Recast cell height", &navigationControls->build.cellHeight, 0.05f, 1.0f);
+            int samplesPerEdge = static_cast<int>(navigationControls->portalSamplesPerEdge);
+            if (ImGui::SliderInt("Portal samples per edge", &samplesPerEdge, 1, 33)) {
+                navigationControls->portalSamplesPerEdge = static_cast<uint32_t>(samplesPerEdge);
+            }
+            ImGui::SliderFloat("Portal edge inset", &navigationControls->portalEdgeInset, 0.0f, 16.0f);
+            ImGui::SliderFloat("Portal edge band width", &navigationControls->portalEdgeBandWidth, 0.1f, 24.0f);
+            ImGui::SliderFloat("Portal merge distance", &navigationControls->portalMergeDistance, 0.0f, 12.0f);
+            ImGui::SliderFloat("Portal neighbor link distance", &navigationControls->portalNeighborLinkDistance, 0.1f, 24.0f);
         } else {
             ImGui::Text("Agent radius/height: %.2f / %.2f", navigation.agent.radius, navigation.agent.height);
             ImGui::Text("Agent slope/climb: %.1f / %.2f", navigation.agent.maxSlopeDegrees, navigation.agent.maxClimb);

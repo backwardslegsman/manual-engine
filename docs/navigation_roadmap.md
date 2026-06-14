@@ -350,6 +350,86 @@ Avoid in V1:
 - Compression or archive packaging unless file size becomes a real problem.
 - Save-file coupling; cache is derived data and can be deleted/regenerated.
 
+## Phase 13 - Navigation Diagnostics And Tuning
+
+Status: implemented for first-pass diagnostics and tuning controls.
+
+Add focused debug visibility for why navmesh geometry, portals, and paths succeed or fail. This phase should not add new movement behavior; it should make the existing Recast/Detour, portal, cache, and graph decisions inspectable enough to tune the open-world terrain profile.
+
+Goal:
+- Explain missing navmesh geometry on hills, cliffs, ridges, and chunk seams.
+- Explain why a click command failed: no tile, no nearest polygon, partial local path, blocked coarse edge, missing portal, unloaded local waypoint tile, or actor collision failure.
+- Make portal density and route selection tunable without editing code.
+- Keep diagnostics debug-only and separate from save/gameplay state.
+
+Implemented tile diagnostics:
+- Per loaded chunk:
+  - nav tile build status/message;
+  - source terrain triangle count;
+  - static blocker triangle count;
+  - Recast walkable triangle count;
+  - compact span count, contour count, polygon count, detail triangle count where available;
+  - tile bounds and agent/build settings used;
+  - tile source: live build or cache load.
+- Dear ImGui shows camera, hovered, and selected chunk tile summaries.
+
+Implemented portal diagnostics:
+- Runtime debug controls for:
+  - samples per edge;
+  - edge inset;
+  - edge band width;
+  - portal merge distance;
+  - neighbor link distance.
+- Track per chunk edge:
+  - sampled candidates;
+  - candidates rejected by no nearest polygon;
+  - candidates rejected by edge-band distance;
+  - candidates rejected by center reachability;
+  - accepted portals;
+  - merged duplicates;
+  - connected portals.
+- Dear ImGui can rebuild connectivity and graph without rebuilding Detour tiles.
+
+Implemented path/query diagnostics:
+- Store the last movement command analysis:
+  - direct local query status and completeness;
+  - whether hierarchical route was attempted;
+  - current waypoint chunk and local tile availability;
+  - actor command final reason.
+- Dear ImGui shows the selected actor command summary, falling back to the player command when no actors are selected.
+
+Implemented nav profiles:
+- Added `assets/config/navigation_profiles.yaml` with one active YAML-defined agent/build profile:
+  - profile ID;
+  - radius;
+  - height;
+  - max slope;
+  - max climb;
+  - cell size;
+  - cell height.
+- The active profile ID is included in the navigation cache manifest identity and shown in the debug UI.
+
+Still deferred:
+- Debug draw for every rejected portal sample and direct local path attempt.
+- Multiple simultaneous nav profiles/agent classes.
+- Async nav generation, DetourCrowd, terrain editing, and automatic off-mesh links.
+- Keep multi-agent simultaneous navmesh generation deferred.
+
+Acceptance:
+- Looking at the debug UI should answer why a steep hilltop, ridge, or portal edge is missing navmesh.
+- Changing portal debug settings and rebuilding visible connectivity changes visible portal counts predictably.
+- A failed click command reports whether failure came from local nav, coarse graph, unloaded tile, or actor collision.
+- Cache/debug stats identify whether observed data came from a cache hit or a live rebuild.
+- Debug-only diagnostics do not change save files or gameplay state.
+
+Avoid in V1:
+- New pathfinding behavior.
+- Async/profiling worker infrastructure.
+- Multiple simultaneous agent-class navmeshes.
+- Terrain editing tools.
+- Automatic road/gate/off-mesh link generation.
+- Full Recast visual overlays beyond simple counters and line/marker debug draw.
+
 ## Deferred
 
 - Async navmesh generation and worker-thread build queues.

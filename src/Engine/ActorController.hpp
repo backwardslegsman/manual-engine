@@ -82,6 +82,22 @@ namespace Engine {
         std::string lastRouteMessage;
     };
 
+    struct ActorCommandDiagnostics {
+        bool hasCommand = false;
+        glm::vec3 destination{};
+        NavQueryStatus directLocalStatus = NavQueryStatus::Unsupported;
+        bool directPathComplete = false;
+        std::string directLocalMessage;
+        bool routeAttempted = false;
+        WorldNavRouteStatus routeStatus = WorldNavRouteStatus::NoGraph;
+        std::string routeMessage;
+        uint32_t currentWaypointIndex = 0;
+        bool hasCurrentWaypointChunk = false;
+        ChunkCoord currentWaypointChunk{};
+        bool localTileAvailable = false;
+        std::string finalReason;
+    };
+
     struct ActorState {
         WorldObjectHandle object;
         glm::vec3 velocity{};
@@ -99,6 +115,7 @@ namespace Engine {
         bool hasMovementDebug = false;
         ActorPathState path;
         ActorRouteState route;
+        ActorCommandDiagnostics commandDiagnostics;
     };
 
     class ActorController {

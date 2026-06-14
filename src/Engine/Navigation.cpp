@@ -174,6 +174,7 @@ namespace Engine {
             std::vector<uint8_t> detourTileData;
             NavQueryStatus buildStatus = NavQueryStatus::Unsupported;
             std::string buildMessage;
+            NavigationTileDiagnostics diagnostics;
         };
 
         dtNavMesh* navMesh = nullptr;
@@ -301,11 +302,24 @@ namespace Engine {
         const int triCount = static_cast<int>(buildIndices.size() / 3);
         const int terrainTriCount = static_cast<int>(buildData.indices.size() / 3);
 
+        NavigationTileDiagnostics diagnostics;
+        diagnostics.coord = buildData.coord;
+        diagnostics.status = NavQueryStatus::Unsupported;
+        diagnostics.message = "Navigation tile build started.";
+        diagnostics.source = NavigationTileSource::LiveBuild;
+        diagnostics.terrainVertexCount = static_cast<uint32_t>(buildData.vertices.size());
+        diagnostics.terrainTriangleCount = static_cast<uint32_t>(buildData.indices.size() / 3);
+        diagnostics.blockerVertexCount = static_cast<uint32_t>(buildData.blockingVertices.size());
+        diagnostics.blockerTriangleCount = static_cast<uint32_t>(buildData.blockingIndices.size() / 3);
+        diagnostics.bounds = buildData.bounds;
+        diagnostics.agent = agent;
+        diagnostics.build = settings_;
+
         rcContext context;
         rcConfig cfg{};
         cfg.cs = settings_.cellSize;
         cfg.ch = settings_.cellHeight;
-        cfg.walkableSlopeAngle = std::clamp(agent.maxSlopeDegrees, 0.0f, 89.0f);
+        cfg.walkableSlopeAngle = std::clamp(agent.maxSlopeDegrees + 0.5f, 0.0f, 89.0f);
         cfg.walkableHeight = static_cast<int>(std::ceil(agent.height / cfg.ch));
         cfg.walkableClimb = static_cast<int>(std::floor(agent.maxClimb / cfg.ch));
         cfg.walkableRadius = static_cast<int>(std::ceil(agent.radius / cfg.cs));
@@ -324,6 +338,8 @@ namespace Engine {
         cfg.bmax[1] = buildData.bounds.max.y;
         cfg.bmax[2] = buildData.bounds.max.z;
         rcCalcGridSize(cfg.bmin, cfg.bmax, cfg.cs, &cfg.width, &cfg.height);
+        diagnostics.heightfieldWidth = static_cast<uint32_t>(std::max(cfg.width, 0));
+        diagnostics.heightfieldHeight = static_cast<uint32_t>(std::max(cfg.height, 0));
 
         auto failBuild = [&](std::string message) {
             impl_->lastBuildStatus = NavQueryStatus::NoPath;
@@ -343,13 +359,18 @@ namespace Engine {
         if (terrainTriCount > 0) {
             rcMarkWalkableTriangles(&context, cfg.walkableSlopeAngle, verts.data(), vertCount, tris.data(), terrainTriCount, triangleAreas.data());
             rcClearUnwalkableTriangles(&context, cfg.walkableSlopeAngle, verts.data(), vertCount, tris.data(), terrainTriCount, triangleAreas.data());
+            diagnostics.walkableTerrainTriangleCount = static_cast<uint32_t>(std::count_if(
+                triangleAreas.begin(),
+                triangleAreas.begin() + terrainTriCount,
+                [](unsigned char area) {
+                    return area != RC_NULL_AREA;
+                }));
         }
         if (!rcRasterizeTriangles(&context, verts.data(), vertCount, tris.data(), triangleAreas.data(), triCount, *heightfield, cfg.walkableClimb)) {
             rcFreeHeightField(heightfield);
             return failBuild("Failed to rasterize terrain triangles.");
         }
 
-        rcFilterLowHangingWalkableObstacles(&context, cfg.walkableClimb, *heightfield);
         rcFilterLedgeSpans(&context, cfg.walkableHeight, cfg.walkableClimb, *heightfield);
         rcFilterWalkableLowHeightSpans(&context, cfg.walkableHeight, *heightfield);
 
@@ -362,6 +383,7 @@ namespace Engine {
             return failBuild("Failed to build compact heightfield.");
         }
         rcFreeHeightField(heightfield);
+        diagnostics.compactSpanCount = static_cast<uint32_t>(std::max(compactHeightfield->spanCount, 0));
 
         if (!rcErodeWalkableArea(&context, cfg.walkableRadius, *compactHeightfield) ||
             !rcBuildDistanceField(&context, *compactHeightfield) ||
@@ -378,6 +400,7 @@ namespace Engine {
             }
             return failBuild("Failed to build Recast contours.");
         }
+        diagnostics.contourCount = static_cast<uint32_t>(std::max(contours->nconts, 0));
 
         rcPolyMesh* polyMesh = rcAllocPolyMesh();
         if (!polyMesh || !rcBuildPolyMesh(&context, *contours, cfg.maxVertsPerPoly, *polyMesh)) {
@@ -389,6 +412,7 @@ namespace Engine {
             return failBuild("Failed to build Recast polygon mesh.");
         }
         rcFreeContourSet(contours);
+        diagnostics.navPolygonCount = static_cast<uint32_t>(std::max(polyMesh->npolys, 0));
 
         rcPolyMeshDetail* detailMesh = rcAllocPolyMeshDetail();
         if (!detailMesh || !rcBuildPolyMeshDetail(&context, *polyMesh, *compactHeightfield, cfg.detailSampleDist, cfg.detailSampleMaxError, *detailMesh)) {
@@ -400,6 +424,7 @@ namespace Engine {
             return failBuild("Failed to build Recast detail mesh.");
         }
         rcFreeCompactHeightfield(compactHeightfield);
+        diagnostics.detailTriangleCount = static_cast<uint32_t>(std::max(detailMesh->ntris, 0));
 
         if (polyMesh->nverts == 0 || polyMesh->npolys == 0) {
             rcFreePolyMesh(polyMesh);
@@ -460,6 +485,8 @@ namespace Engine {
         }
 
         const NavigationTileHandle handle{impl_->nextTileId++};
+        diagnostics.status = NavQueryStatus::Success;
+        diagnostics.message = "Built terrain navigation tile.";
         impl_->tiles[buildData.coord] = Impl::TileRecord{
             handle,
             tileRef,
@@ -467,6 +494,7 @@ namespace Engine {
             std::move(detourTileData),
             NavQueryStatus::Success,
             "Built terrain navigation tile.",
+            diagnostics,
         };
         impl_->lastBuildStatus = NavQueryStatus::Success;
         impl_->lastBuildMessage = "Built terrain navigation tile.";
@@ -521,6 +549,13 @@ namespace Engine {
         }
 
         const NavigationTileHandle handle{impl_->nextTileId++};
+        NavigationTileDiagnostics diagnostics;
+        diagnostics.coord = cacheData.coord;
+        diagnostics.status = NavQueryStatus::Success;
+        diagnostics.message = "Loaded terrain navigation tile from cache.";
+        diagnostics.source = NavigationTileSource::Cache;
+        diagnostics.bounds = cacheData.bounds;
+        diagnostics.build = settings_;
         impl_->tiles[cacheData.coord] = Impl::TileRecord{
             handle,
             tileRef,
@@ -528,6 +563,7 @@ namespace Engine {
             cacheData.detourTileData,
             NavQueryStatus::Success,
             "Loaded terrain navigation tile from cache.",
+            diagnostics,
         };
         impl_->lastBuildStatus = NavQueryStatus::Success;
         impl_->lastBuildMessage = "Loaded terrain navigation tile from cache.";
@@ -634,6 +670,33 @@ namespace Engine {
         return geometry;
     }
 
+    std::optional<NavigationTileDiagnostics> NavigationSystem::tileDiagnostics(ChunkCoord coord) const
+    {
+        if (!impl_) {
+            return std::nullopt;
+        }
+        const auto tileIt = impl_->tiles.find(coord);
+        return tileIt == impl_->tiles.end()
+            ? std::nullopt
+            : std::optional<NavigationTileDiagnostics>{tileIt->second.diagnostics};
+    }
+
+    std::vector<NavigationTileDiagnostics> NavigationSystem::allTileDiagnostics() const
+    {
+        std::vector<NavigationTileDiagnostics> result;
+        if (!impl_) {
+            return result;
+        }
+        result.reserve(impl_->tiles.size());
+        for (const auto& [_, tile] : impl_->tiles) {
+            result.push_back(tile.diagnostics);
+        }
+        std::ranges::sort(result, [](const NavigationTileDiagnostics& lhs, const NavigationTileDiagnostics& rhs) {
+            return lhs.coord.x == rhs.coord.x ? lhs.coord.z < rhs.coord.z : lhs.coord.x < rhs.coord.x;
+        });
+        return result;
+    }
+
     NavQueryResult NavigationSystem::nearestNavigablePoint(glm::vec3 point, const NavAgentSettings& agent) const
     {
         if (!impl_ || !impl_->initialized()) {
@@ -683,6 +746,88 @@ namespace Engine {
         }
 
         NavQueryResult result = makeResult(NavQueryStatus::Success, "Found nearest navigable point.", {nearestPoint[0], nearestPoint[1], nearestPoint[2]});
+        impl_->lastQueryStatus = result.status;
+        impl_->lastQueryMessage = result.message;
+        return result;
+    }
+
+    NavQueryResult NavigationSystem::nearestNavigablePointInTile(
+        ChunkCoord coord,
+        glm::vec3 point,
+        const NavAgentSettings& agent) const
+    {
+        if (!impl_ || !impl_->initialized()) {
+            NavQueryResult result = makeResult(NavQueryStatus::NotInitialized, "Navigation system is not initialized.", point);
+            if (impl_) {
+                impl_->lastQueryStatus = result.status;
+                impl_->lastQueryMessage = result.message;
+            }
+            return result;
+        }
+        if (!finiteVec3(point) || !validAgent(agent)) {
+            NavQueryResult result = makeResult(NavQueryStatus::InvalidInput, "Invalid tile nearest-point query input.", point);
+            impl_->lastQueryStatus = result.status;
+            impl_->lastQueryMessage = result.message;
+            return result;
+        }
+        const auto tileIt = impl_->tiles.find(coord);
+        if (tileIt == impl_->tiles.end()) {
+            NavQueryResult result = makeResult(NavQueryStatus::NoTile, "Requested navigation tile is not loaded.", point);
+            impl_->lastQueryStatus = result.status;
+            impl_->lastQueryMessage = result.message;
+            return result;
+        }
+        if (!impl_->navMeshReady) {
+            NavQueryResult result = makeResult(NavQueryStatus::NotInitialized, "Detour navmesh is not initialized.", point);
+            impl_->lastQueryStatus = result.status;
+            impl_->lastQueryMessage = result.message;
+            return result;
+        }
+
+        const dtMeshTile* tile = impl_->navMesh->getTileByRef(tileIt->second.tileRef);
+        if (!tile || !tile->header || tile->header->polyCount <= 0) {
+            NavQueryResult result = makeResult(NavQueryStatus::NoNearestPoly, "Requested navigation tile has no polygons.", point);
+            impl_->lastQueryStatus = result.status;
+            impl_->lastQueryMessage = result.message;
+            return result;
+        }
+
+        const std::array<float, 3> center{point.x, point.y, point.z};
+        const dtPolyRef baseRef = impl_->navMesh->getPolyRefBase(tile);
+        float bestDistanceSquared = std::numeric_limits<float>::max();
+        glm::vec3 bestPoint{};
+        bool found = false;
+        for (int polyIndex = 0; polyIndex < tile->header->polyCount; ++polyIndex) {
+            const dtPoly& poly = tile->polys[polyIndex];
+            if ((poly.flags & 1u) == 0u) {
+                continue;
+            }
+            const dtPolyRef ref = baseRef | static_cast<dtPolyRef>(polyIndex);
+            float closest[3]{};
+            bool overPoly = false;
+            if (dtStatusFailed(impl_->navQuery->closestPointOnPoly(ref, center.data(), closest, &overPoly))) {
+                continue;
+            }
+
+            const float dx = closest[0] - point.x;
+            const float dy = closest[1] - point.y;
+            const float dz = closest[2] - point.z;
+            const float distanceSquared = dx * dx + dy * dy + dz * dz;
+            if (distanceSquared < bestDistanceSquared) {
+                bestDistanceSquared = distanceSquared;
+                bestPoint = {closest[0], closest[1], closest[2]};
+                found = true;
+            }
+        }
+
+        if (!found) {
+            NavQueryResult result = makeResult(NavQueryStatus::NoNearestPoly, "No nearest polygon found in requested navigation tile.", point);
+            impl_->lastQueryStatus = result.status;
+            impl_->lastQueryMessage = result.message;
+            return result;
+        }
+
+        NavQueryResult result = makeResult(NavQueryStatus::Success, "Found nearest navigable point in requested tile.", bestPoint);
         impl_->lastQueryStatus = result.status;
         impl_->lastQueryMessage = result.message;
         return result;
@@ -742,6 +887,20 @@ namespace Engine {
         };
         const std::array<float, 3> startPoint{start.x, start.y, start.z};
         const std::array<float, 3> endPoint{end.x, end.y, end.z};
+        constexpr float TileContainmentTolerance = 0.25f;
+        auto coordForPoint = [&](const glm::vec3& point) -> std::optional<ChunkCoord> {
+            for (const auto& [coord, tile] : impl_->tiles) {
+                if (point.x >= tile.bounds.min.x - TileContainmentTolerance &&
+                    point.x <= tile.bounds.max.x + TileContainmentTolerance &&
+                    point.z >= tile.bounds.min.z - TileContainmentTolerance &&
+                    point.z <= tile.bounds.max.z + TileContainmentTolerance) {
+                    return coord;
+                }
+            }
+            return std::nullopt;
+        };
+        const std::optional<ChunkCoord> startCoord = coordForPoint(start);
+        const std::optional<ChunkCoord> endCoord = coordForPoint(end);
         dtPolyRef startRef = 0;
         dtPolyRef endRef = 0;
         float nearestStartPoint[3]{};
@@ -809,6 +968,77 @@ namespace Engine {
             });
         }
         result.path.complete = pathPolys[pathPolyCount - 1] == endRef;
+        if (result.path.complete && startCoord && endCoord && *startCoord == *endCoord) {
+            const auto startTileIt = impl_->tiles.find(*startCoord);
+            const dtMeshTile* expectedTile = startTileIt == impl_->tiles.end()
+                ? nullptr
+                : impl_->navMesh->getTileByRef(startTileIt->second.tileRef);
+            for (int index = 0; expectedTile && index < pathPolyCount; ++index) {
+                const dtMeshTile* pathTile = nullptr;
+                const dtPoly* pathPoly = nullptr;
+                if (dtStatusFailed(impl_->navMesh->getTileAndPolyByRef(pathPolys[index], &pathTile, &pathPoly)) ||
+                    pathTile != expectedTile) {
+                    result.path.complete = false;
+                    result.message = "Same-tile path requires leaving the tile.";
+                    break;
+                }
+            }
+        }
+        if (!result.path.complete) {
+            constexpr float SeamInset = 0.75f;
+            constexpr float MaxSeamSnapDistance = 2.5f;
+            if (startCoord && endCoord) {
+                const int32_t deltaX = endCoord->x - startCoord->x;
+                const int32_t deltaZ = endCoord->z - startCoord->z;
+                const bool adjacent = std::abs(deltaX) + std::abs(deltaZ) == 1;
+                const auto startTileIt = impl_->tiles.find(*startCoord);
+                const auto endTileIt = impl_->tiles.find(*endCoord);
+                if (adjacent && startTileIt != impl_->tiles.end() && endTileIt != impl_->tiles.end()) {
+                    glm::vec3 sourceSeam = end;
+                    glm::vec3 targetSeam = end;
+                    if (deltaX > 0) {
+                        sourceSeam = {startTileIt->second.bounds.max.x - SeamInset, end.y, end.z};
+                        targetSeam = {endTileIt->second.bounds.min.x + SeamInset, end.y, end.z};
+                    } else if (deltaX < 0) {
+                        sourceSeam = {startTileIt->second.bounds.min.x + SeamInset, end.y, end.z};
+                        targetSeam = {endTileIt->second.bounds.max.x - SeamInset, end.y, end.z};
+                    } else if (deltaZ > 0) {
+                        sourceSeam = {end.x, end.y, startTileIt->second.bounds.max.z - SeamInset};
+                        targetSeam = {end.x, end.y, endTileIt->second.bounds.min.z + SeamInset};
+                    } else if (deltaZ < 0) {
+                        sourceSeam = {end.x, end.y, startTileIt->second.bounds.min.z + SeamInset};
+                        targetSeam = {end.x, end.y, endTileIt->second.bounds.max.z - SeamInset};
+                    }
+
+                    const NavQueryResult sourceSnap = nearestNavigablePointInTile(*startCoord, sourceSeam, agent);
+                    const NavQueryResult targetSnap = nearestNavigablePointInTile(*endCoord, targetSeam, agent);
+                    const NavQueryResult endSnap = nearestNavigablePointInTile(*endCoord, end, agent);
+                    auto closeEnough = [](const glm::vec3& a, const glm::vec3& b, float maxDistance) {
+                        const float dx = a.x - b.x;
+                        const float dz = a.z - b.z;
+                        return dx * dx + dz * dz <= maxDistance * maxDistance;
+                    };
+                    const bool climbAllowed =
+                        std::abs(targetSnap.point.y - sourceSnap.point.y) <= agent.maxClimb + settings_.cellHeight;
+                    if (sourceSnap.status == NavQueryStatus::Success &&
+                        targetSnap.status == NavQueryStatus::Success &&
+                        endSnap.status == NavQueryStatus::Success &&
+                        closeEnough(sourceSnap.point, sourceSeam, MaxSeamSnapDistance) &&
+                        closeEnough(targetSnap.point, targetSeam, MaxSeamSnapDistance) &&
+                        closeEnough(endSnap.point, end, MaxSeamSnapDistance) &&
+                        climbAllowed) {
+                        result.path.points.clear();
+                        result.path.points.push_back(nearestStart.point);
+                        result.path.points.push_back(sourceSnap.point);
+                        result.path.points.push_back(targetSnap.point);
+                        result.path.points.push_back(endSnap.point);
+                        result.path.complete = true;
+                        result.point = nearestStart.point;
+                        result.message = "Found navigation path using adjacent tile seam bridge.";
+                    }
+                }
+            }
+        }
         impl_->lastQueryStatus = result.status;
         impl_->lastQueryMessage = result.message;
         return result;

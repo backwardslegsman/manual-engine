@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -30,6 +31,7 @@ namespace Engine {
         uint32_t resolution = 33;
         float heightScale = 2.0f;
         float skirtDepth = 2.0f;
+        bool createRendererResources = true;
         // Optional external biome rules. The caller owns this system and must
         // keep it alive for the TerrainSystem lifetime.
         const BiomeSystem* biomes = nullptr;
@@ -64,6 +66,10 @@ namespace Engine {
         explicit TerrainSystem(TerrainSettings settings = {});
 
         TerrainTileHandle createTile(ChunkCoord coord, Renderer::MaterialHandle material);
+        TerrainTileHandle createTileFromHeights(
+            ChunkCoord coord,
+            std::span<const float> heights,
+            Renderer::MaterialHandle material = {});
         void destroyTile(TerrainTileHandle handle);
         Renderer::TerrainHandle rendererTerrain(TerrainTileHandle handle) const;
         bool updateLods(const glm::vec3& cameraPosition);
@@ -90,6 +96,7 @@ namespace Engine {
     private:
         TerrainTile* tile(TerrainTileHandle handle);
         const TerrainTile* tile(TerrainTileHandle handle) const;
+        TerrainTileHandle storeTile(TerrainTile terrain);
         const TerrainTile* tileForCoord(ChunkCoord coord) const;
         float tileHeightAt(const TerrainTile& tile, uint32_t x, uint32_t z) const;
         uint32_t chooseLod(const TerrainTile& tile, const glm::vec3& cameraPosition) const;

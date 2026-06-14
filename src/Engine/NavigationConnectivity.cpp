@@ -99,6 +99,7 @@ namespace Engine {
         const NavAgentSettings& agent)
     {
         connectivity_.clear();
+        diagnostics_.clear();
 
         for (ChunkCoord coord : loadedNavChunks) {
             if (!navigation.hasTile(coord)) {
@@ -114,21 +115,30 @@ namespace Engine {
             connectivity.coord = coord;
             connectivity.biomeId = terrain.sampleChunkBiome(coord).id;
             connectivity.traversalCost = std::max(0.0f, bounds->max.x - bounds->min.x);
+            ChunkPortalDiagnostics diagnostics;
+            diagnostics.coord = coord;
 
             for (uint32_t directionIndex = 0; directionIndex < NavEdgeDirectionCount; ++directionIndex) {
                 const NavEdgeDirection direction = static_cast<NavEdgeDirection>(directionIndex);
                 std::vector<ChunkNavPortal>& portals = connectivity.portalsByEdge[directionIndex];
+                NavigationPortalEdgeDiagnostics& edgeDiagnostics = diagnostics.edges[directionIndex];
                 const uint32_t samples = std::max(settings_.samplesPerEdge, 1u);
                 for (uint32_t sample = 0; sample < samples; ++sample) {
+                    ++edgeDiagnostics.sampleCount;
                     const float t = samples == 1
                         ? 0.5f
                         : static_cast<float>(sample) / static_cast<float>(samples - 1);
                     std::optional<ChunkNavPortal> portal =
-                        buildPortalSample(coord, direction, t, *bounds, navigation, terrain, agent);
-                    if (!portal || shouldMergePortal(portals, portal->position)) {
+                        buildPortalSample(coord, direction, t, *bounds, navigation, terrain, agent, edgeDiagnostics);
+                    if (!portal) {
+                        continue;
+                    }
+                    if (shouldMergePortal(portals, portal->position)) {
+                        ++edgeDiagnostics.mergedDuplicateCount;
                         continue;
                     }
                     portals.push_back(*portal);
+                    ++edgeDiagnostics.acceptedPortalCount;
                 }
             }
 
@@ -139,6 +149,7 @@ namespace Engine {
                 }
             }
             connectivity.partial = edgeCountWithPortals < NavEdgeDirectionCount;
+            diagnostics_.emplace(coord, diagnostics);
             connectivity_.emplace(coord, std::move(connectivity));
         }
 
@@ -148,11 +159,22 @@ namespace Engine {
     void NavigationConnectivitySystem::clear()
     {
         connectivity_.clear();
+        diagnostics_.clear();
     }
 
     const NavigationConnectivitySettings& NavigationConnectivitySystem::settings() const
     {
         return settings_;
+    }
+
+    void NavigationConnectivitySystem::setSettings(NavigationConnectivitySettings settings)
+    {
+        settings.samplesPerEdge = std::max(settings.samplesPerEdge, 1u);
+        settings.edgeInset = std::max(settings.edgeInset, 0.0f);
+        settings.edgeBandWidth = std::max(settings.edgeBandWidth, 0.0f);
+        settings.portalMergeDistance = std::max(settings.portalMergeDistance, 0.0f);
+        settings.neighborLinkDistance = std::max(settings.neighborLinkDistance, 0.0f);
+        settings_ = settings;
     }
 
     const std::unordered_map<ChunkCoord, ChunkNavConnectivity, ChunkCoordHash>& NavigationConnectivitySystem::all() const
@@ -164,6 +186,17 @@ namespace Engine {
     {
         const auto connectivityIt = connectivity_.find(coord);
         return connectivityIt == connectivity_.end() ? nullptr : &connectivityIt->second;
+    }
+
+    const ChunkPortalDiagnostics* NavigationConnectivitySystem::portalDiagnostics(ChunkCoord coord) const
+    {
+        const auto diagnosticsIt = diagnostics_.find(coord);
+        return diagnosticsIt == diagnostics_.end() ? nullptr : &diagnosticsIt->second;
+    }
+
+    const std::unordered_map<ChunkCoord, ChunkPortalDiagnostics, ChunkCoordHash>& NavigationConnectivitySystem::allPortalDiagnostics() const
+    {
+        return diagnostics_;
     }
 
     NavigationConnectivityCacheData NavigationConnectivitySystem::cacheData() const
@@ -182,8 +215,20 @@ namespace Engine {
     void NavigationConnectivitySystem::loadCacheData(const NavigationConnectivityCacheData& cacheData)
     {
         connectivity_.clear();
+        diagnostics_.clear();
         for (const ChunkNavConnectivity& connectivity : cacheData.chunks) {
             connectivity_[connectivity.coord] = connectivity;
+            ChunkPortalDiagnostics diagnostics;
+            diagnostics.coord = connectivity.coord;
+            for (uint32_t edge = 0; edge < NavEdgeDirectionCount; ++edge) {
+                diagnostics.edges[edge].acceptedPortalCount = static_cast<uint32_t>(connectivity.portalsByEdge[edge].size());
+                for (const ChunkNavPortal& portal : connectivity.portalsByEdge[edge]) {
+                    if (portal.connectedToLoadedNeighbor) {
+                        ++diagnostics.edges[edge].connectedPortalCount;
+                    }
+                }
+            }
+            diagnostics_[connectivity.coord] = diagnostics;
         }
     }
 
@@ -219,7 +264,8 @@ namespace Engine {
         const Renderer::Aabb& bounds,
         const NavigationSystem& navigation,
         const TerrainSystem& terrain,
-        const NavAgentSettings& agent) const
+        const NavAgentSettings& agent,
+        NavigationPortalEdgeDiagnostics& diagnostics) const
     {
         glm::vec3 sample{};
         switch (direction) {
@@ -241,13 +287,18 @@ namespace Engine {
         sample.y = terrain.sampleHeight(sample.x, sample.z).value_or((bounds.min.y + bounds.max.y) * 0.5f);
 
         NavQueryResult nearest = navigation.nearestNavigablePoint(sample, agent);
-        if (nearest.status != NavQueryStatus::Success ||
-            !insideEdgeBand(nearest.point, direction, bounds, settings_.edgeBandWidth)) {
+        if (nearest.status != NavQueryStatus::Success) {
+            ++diagnostics.rejectedNoNearestPolyCount;
+            return std::nullopt;
+        }
+        if (!insideEdgeBand(nearest.point, direction, bounds, settings_.edgeBandWidth)) {
+            ++diagnostics.rejectedEdgeBandCount;
             return std::nullopt;
         }
 
         const NavQueryResult path = navigation.findPath(chunkCenter(bounds, terrain), nearest.point, agent);
         if (path.status != NavQueryStatus::Success || path.path.points.empty()) {
+            ++diagnostics.rejectedCenterReachabilityCount;
             return std::nullopt;
         }
 
@@ -286,10 +337,37 @@ namespace Engine {
 
                     std::vector<ChunkNavPortal>& neighborPortals =
                         neighborIt->second.portalsByEdge[edgeIndex(opposite(direction))];
+                    ChunkNavPortal* bestNeighbor = nullptr;
+                    float bestDistanceSquared = linkDistanceSquared;
                     for (ChunkNavPortal& neighborPortal : neighborPortals) {
-                        if (xzDistanceSquared(portal.position, neighborPortal.position) <= linkDistanceSquared) {
-                            portal.connectedToLoadedNeighbor = true;
-                            neighborPortal.connectedToLoadedNeighbor = true;
+                        const float distanceSquared = xzDistanceSquared(portal.position, neighborPortal.position);
+                        if (distanceSquared <= bestDistanceSquared) {
+                            bestDistanceSquared = distanceSquared;
+                            bestNeighbor = &neighborPortal;
+                        }
+                    }
+                    if (!bestNeighbor) {
+                        continue;
+                    }
+
+                    const bool portalWasConnected = portal.connectedToLoadedNeighbor;
+                    portal.connectedToLoadedNeighbor = true;
+                    portal.connectedNeighborPosition = bestNeighbor->position;
+                    if (!portalWasConnected) {
+                        if (const auto diagnosticsIt = diagnostics_.find(connectivity.coord); diagnosticsIt != diagnostics_.end()) {
+                            ++diagnosticsIt->second.edges[directionIndex].connectedPortalCount;
+                        }
+                    }
+                    const bool neighborWasConnected = bestNeighbor->connectedToLoadedNeighbor;
+                    if (!bestNeighbor->connectedToLoadedNeighbor ||
+                        xzDistanceSquared(bestNeighbor->position, portal.position) <
+                            xzDistanceSquared(bestNeighbor->position, bestNeighbor->connectedNeighborPosition)) {
+                        bestNeighbor->connectedToLoadedNeighbor = true;
+                        bestNeighbor->connectedNeighborPosition = portal.position;
+                    }
+                    if (!neighborWasConnected && bestNeighbor->connectedToLoadedNeighbor) {
+                        if (const auto diagnosticsIt = diagnostics_.find(neighborIt->second.coord); diagnosticsIt != diagnostics_.end()) {
+                            ++diagnosticsIt->second.edges[edgeIndex(opposite(direction))].connectedPortalCount;
                         }
                     }
                 }

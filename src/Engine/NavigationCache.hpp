@@ -23,9 +23,10 @@ namespace Engine {
         int32_t graphRadiusChunks = 16;
         NavBuildSettings build;
         NavAgentSettings agent;
+        std::string profileId = "default";
         std::string biomeConfigHash;
         std::string archetypeConfigHash;
-        std::string generatorVersion = "navigation_phase_12_v1";
+        std::string generatorVersion = "navigation_phase_12_v5_multi_portal_edges";
         std::string identityHash;
     };
 
@@ -56,6 +57,7 @@ namespace Engine {
             int32_t graphRadiusChunks,
             const NavBuildSettings& build,
             const NavAgentSettings& agent,
+            std::string profileId,
             const std::filesystem::path& biomeConfigPath,
             const std::filesystem::path& archetypeConfigPath);
         static std::string hashFile(const std::filesystem::path& path);
