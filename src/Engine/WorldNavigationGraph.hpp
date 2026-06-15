@@ -47,8 +47,8 @@ namespace Engine {
     };
 
     struct WorldNavigationGraphSettings {
-        int32_t graphRadiusChunks = 16;
-        float chunkSize = 96.0f;
+        int32_t graphRadiusChunks = 64;
+        float chunkSize = 24.0f;
     };
 
     struct WorldNavigationGraphStats {

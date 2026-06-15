@@ -31,6 +31,7 @@ add_executable(manual_engine
     src/Engine/ChunkTypes.cpp
     src/Engine/EventQueue.cpp
     src/Engine/FixedStepLoop.cpp
+    src/Engine/FrameBudget.cpp
     src/Engine/InputMapping.cpp
     src/Engine/InteractionHandlerSystem.cpp
     src/Engine/InteractionSystem.cpp
@@ -93,6 +94,7 @@ add_executable(manual_engine_navigation_tests
     src/Engine/BlockingCollision.cpp
     src/Engine/ChunkTypes.cpp
     src/Engine/EventQueue.cpp
+    src/Engine/FrameBudget.cpp
     src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationProfile.cpp
     src/Engine/ObjectId.cpp

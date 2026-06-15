@@ -529,20 +529,65 @@ namespace Renderer::DebugUi {
             navigation.cacheGraphHits,
             navigation.cacheGraphMisses,
             navigation.cacheGraphWrites);
+        ImGui::Text("Runtime nav cache hit/miss/load-fail this frame: %u / %u / %u",
+            navigation.navTileCacheHitsThisFrame,
+            navigation.navTileCacheMissesThisFrame,
+            navigation.navTileCacheLoadFailuresThisFrame);
+        ImGui::Text("Runtime nav worker queued/completed/failed this frame: %u / %u / %u",
+            navigation.navTileWorkerBuildsQueuedThisFrame,
+            navigation.navTileWorkerBuildsCompletedThisFrame,
+            navigation.navTileWorkerBuildsFailedThisFrame);
+        ImGui::Text("Runtime nav chunks ready/pending/failed: %u / %u / %u",
+            navigation.navTileReadyChunks,
+            navigation.navTilePendingChunks,
+            navigation.navTileFailedChunks);
+        ImGui::Text("Nav sync processed/deferred chunks: %u / %u",
+            navigation.navTileSyncChunksThisFrame,
+            navigation.navTileSyncDeferredChunks);
+        ImGui::Text("Connectivity processed/deferred chunks: %u / %u",
+            navigation.connectivityChunksThisFrame,
+            navigation.connectivityDeferredChunks);
         if (!navigation.cacheLastPath.empty()) {
             ImGui::TextWrapped("Cache path: %s", navigation.cacheLastPath.c_str());
         }
         if (!navigation.cacheLastMessage.empty()) {
             ImGui::TextWrapped("Cache: %s", navigation.cacheLastMessage.c_str());
         }
-        ImGui::Text("Performance ms chunk/nav/connectivity/graph: %.3f / %.3f / %.3f / %.3f",
-            navigation.chunkStreamingMs,
-            navigation.navTileSyncMs,
-            navigation.connectivityMs,
-            navigation.worldGraphMs);
-        ImGui::Text("Performance ms picking/draw: %.3f / %.3f",
-            navigation.pickingMs,
-            navigation.drawSubmissionMs);
+        ImGui::Text("CPU probes");
+        ImGui::Text("Previous full frame CPU: %.3f ms", navigation.previousFrameCpuMs);
+        if (ImGui::BeginTable("CpuProbeTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("System");
+            ImGui::TableSetupColumn("ms");
+            ImGui::TableSetupColumn("System");
+            ImGui::TableSetupColumn("ms");
+            ImGui::TableHeadersRow();
+            const auto row = [](const char* leftName, float leftMs, const char* rightName, float rightMs) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(leftName);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%.3f", leftMs);
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted(rightName);
+                ImGui::TableSetColumnIndex(3);
+                ImGui::Text("%.3f", rightMs);
+            };
+            row("SDL/Input events", navigation.eventPollingMs, "Input mapping", navigation.inputMappingMs);
+            row("Camera update", navigation.cameraUpdateMs, "Chunk streaming", navigation.chunkStreamingMs);
+            row("Terrain LOD", navigation.terrainLodMs, "Budget drain", navigation.budgetDrainMs);
+            row("Nav tile sync", navigation.navTileSyncMs, "Connectivity", navigation.connectivityMs);
+            row("World graph", navigation.worldGraphMs, "Fixed updates", navigation.fixedUpdateMs);
+            row("World sync", navigation.worldSyncMs, "Picking", navigation.pickingMs);
+            row("Nearest nav point", navigation.nearestNavigationPointMs, "Interactions/commands", navigation.interactionMs);
+            row("Debug enqueue", navigation.debugPrimitiveEnqueueMs, "Scene draw", navigation.drawSubmissionMs);
+            row("Debug draw", navigation.debugPrimitiveDrawMs, "Debug UI build", navigation.debugUiBuildMs);
+            row("Debug UI render", navigation.debugUiRenderMs, "bgfx frame", navigation.bgfxFrameMs);
+            row("Post-frame requests", navigation.postFrameRequestsMs, "", 0.0f);
+            ImGui::EndTable();
+        }
+        ImGui::Text("Terrain LOD rebuilds this frame/pending: %u / %u",
+            navigation.terrainLodRebuildsThisFrame,
+            navigation.terrainLodPendingRebuilds);
         ImGui::Text("Async workers/pending/completed/unloads: %u / %u / %u / %u",
             navigation.asyncWorkerCount,
             navigation.asyncPendingChunkJobs,
@@ -560,6 +605,29 @@ namespace Renderer::DebugUi {
         ImGui::Text("Async nav avg/max ms: %.3f / %.3f",
             navigation.asyncAverageNavigationBuildMs,
             navigation.asyncMaxNavigationBuildMs);
+        ImGui::Text("Frame budget used/budget/overrun ms: %.3f / %.3f / %.3f",
+            navigation.frameBudgetUsedMs,
+            navigation.frameBudgetMs,
+            navigation.frameBudgetOverrunMs);
+        ImGui::Text("Frame budget items run/deferred/pending: %u / %u / %u",
+            navigation.frameBudgetItemsRun,
+            navigation.frameBudgetItemsDeferred,
+            navigation.mainThreadPendingWorkItems);
+        ImGui::Text("Slowest budget item: %.3f ms %s",
+            navigation.slowestBudgetItemMs,
+            navigation.slowestBudgetItemLabel.empty() ? "<none>" : navigation.slowestBudgetItemLabel.c_str());
+        ImGui::Text("Budget ms stream/nav/derived/debug/general: %.3f / %.3f / %.3f / %.3f / %.3f",
+            navigation.frameBudgetCategoryMs[0],
+            navigation.frameBudgetCategoryMs[1],
+            navigation.frameBudgetCategoryMs[2],
+            navigation.frameBudgetCategoryMs[3],
+            navigation.frameBudgetCategoryMs[4]);
+        ImGui::Text("Long frames > %.1f ms: %u", navigation.longFrameThresholdMs, navigation.longFrameCount);
+        if (!navigation.lastLongFrameSummary.empty()) {
+            ImGui::TextWrapped("Last long frame: %.3f ms - %s",
+                navigation.lastLongFrameMs,
+                navigation.lastLongFrameSummary.c_str());
+        }
         if (navigationControls) {
             if (ImGui::Button("Rebuild Visible Nav Tiles")) {
                 navigationControls->rebuildVisibleTilesRequested = true;
@@ -568,13 +636,27 @@ namespace Renderer::DebugUi {
             ImGui::Checkbox("Navigation cache write-through", &navigationControls->cacheWriteThrough);
             ImGui::Checkbox("Async terrain generation", &navigationControls->asyncTerrainEnabled);
             ImGui::Checkbox("Async navigation generation", &navigationControls->asyncNavigationEnabled);
-            int loadBudget = static_cast<int>(navigationControls->chunkLoadCommitBudget);
-            if (ImGui::SliderInt("Chunk load commits/frame", &loadBudget, 1, 8)) {
-                navigationControls->chunkLoadCommitBudget = static_cast<uint32_t>(loadBudget);
+            ImGui::Checkbox("Main thread frame budget", &navigationControls->mainThreadBudgetEnabled);
+            ImGui::SliderFloat("Main thread budget ms", &navigationControls->mainThreadBudgetMs, 0.0f, 16.0f);
+            int propBatch = static_cast<int>(navigationControls->propSpawnBatchSize);
+            if (ImGui::SliderInt("Prop spawns per budget item", &propBatch, 1, 64)) {
+                navigationControls->propSpawnBatchSize = static_cast<uint32_t>(propBatch);
             }
-            int unloadBudget = static_cast<int>(navigationControls->chunkUnloadCommitBudget);
-            if (ImGui::SliderInt("Chunk unload commits/frame", &unloadBudget, 1, 8)) {
-                navigationControls->chunkUnloadCommitBudget = static_cast<uint32_t>(unloadBudget);
+            int terrainLodRebuilds = static_cast<int>(navigationControls->terrainLodRebuildsPerFrame);
+            if (ImGui::SliderInt("Terrain LOD rebuilds per frame", &terrainLodRebuilds, 0, 32)) {
+                navigationControls->terrainLodRebuildsPerFrame = static_cast<uint32_t>(terrainLodRebuilds);
+            }
+            int navSyncChunks = static_cast<int>(navigationControls->navTileSyncChunksPerFrame);
+            if (ImGui::SliderInt("Nav sync chunks per frame", &navSyncChunks, 1, 64)) {
+                navigationControls->navTileSyncChunksPerFrame = static_cast<uint32_t>(navSyncChunks);
+            }
+            int connectivityChunks = static_cast<int>(navigationControls->connectivityChunksPerFrame);
+            if (ImGui::SliderInt("Connectivity chunks per frame", &connectivityChunks, 1, 64)) {
+                navigationControls->connectivityChunksPerFrame = static_cast<uint32_t>(connectivityChunks);
+            }
+            int graphThreshold = static_cast<int>(navigationControls->worldGraphRecenterThresholdChunks);
+            if (ImGui::SliderInt("Graph recenter threshold chunks", &graphThreshold, 1, 32)) {
+                navigationControls->worldGraphRecenterThresholdChunks = static_cast<uint32_t>(graphThreshold);
             }
             ImGui::Text("Worker threads: %u (restart required to change)", navigationControls->workerThreadCount);
             if (ImGui::Button("Generate Visible Nav Cache")) {
@@ -610,6 +692,7 @@ namespace Renderer::DebugUi {
             ImGui::Text("Agent slope/climb: %.1f / %.2f", navigation.agent.maxSlopeDegrees, navigation.agent.maxClimb);
             ImGui::Text("Recast cell size/height: %.2f / %.2f", navigation.build.cellSize, navigation.build.cellHeight);
         }
+        ImGui::Text("Navigation source resolution: %u", navigation.navigationResolution);
         ImGui::Separator();
         ImGui::EndTabItem();
         }
@@ -849,11 +932,9 @@ namespace Renderer::DebugUi {
             std::memcpy(vertexBuffer.data, commandList->VtxBuffer.Data, vertexCount * sizeof(ImDrawVert));
             std::memcpy(indexBuffer.data, commandList->IdxBuffer.Data, indexCount * sizeof(ImDrawIdx));
 
-            uint32_t indexOffset = 0;
             for (const ImDrawCmd& command : commandList->CmdBuffer) {
                 if (command.UserCallback) {
                     command.UserCallback(commandList, &command);
-                    indexOffset += command.ElemCount;
                     continue;
                 }
 
@@ -862,7 +943,6 @@ namespace Renderer::DebugUi {
                 const float clipMaxX = (command.ClipRect.z - clipOffset.x) * framebufferScale.x;
                 const float clipMaxY = (command.ClipRect.w - clipOffset.y) * framebufferScale.y;
                 if (clipMaxX <= clipMinX || clipMaxY <= clipMinY) {
-                    indexOffset += command.ElemCount;
                     continue;
                 }
 
@@ -871,21 +951,20 @@ namespace Renderer::DebugUi {
                 const uint16_t clipWidth = static_cast<uint16_t>(std::clamp(clipMaxX, 0.0f, static_cast<float>(width)) - clipX);
                 const uint16_t clipHeight = static_cast<uint16_t>(std::clamp(clipMaxY, 0.0f, static_cast<float>(height)) - clipY);
                 if (clipWidth == 0 || clipHeight == 0) {
-                    indexOffset += command.ElemCount;
                     continue;
                 }
 
                 bgfx::setScissor(clipX, clipY, clipWidth, clipHeight);
                 bgfx::setTexture(0, g_imguiTextureSampler, g_fontTexture);
                 bgfx::setVertexBuffer(0, &vertexBuffer, command.VtxOffset, vertexCount - command.VtxOffset);
-                bgfx::setIndexBuffer(&indexBuffer, indexOffset + command.IdxOffset, command.ElemCount);
+                // ImDrawCmd offsets are already relative to this command list.
+                bgfx::setIndexBuffer(&indexBuffer, command.IdxOffset, command.ElemCount);
                 bgfx::setState(
                     BGFX_STATE_WRITE_RGB |
                     BGFX_STATE_WRITE_A |
                     BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA)
                 );
                 bgfx::submit(viewId, g_imguiProgram);
-                indexOffset += command.ElemCount;
             }
         }
     }

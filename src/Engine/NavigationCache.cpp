@@ -1,5 +1,6 @@
 #include "Engine/NavigationCache.hpp"
 
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <iomanip>
@@ -254,6 +255,7 @@ namespace Engine {
             node["format_version"] = manifest.formatVersion;
             node["chunk_size"] = manifest.chunkSize;
             node["graph_radius_chunks"] = manifest.graphRadiusChunks;
+            node["navigation_resolution"] = manifest.navigationResolution;
             node["biome_config_hash"] = manifest.biomeConfigHash;
             node["archetype_config_hash"] = manifest.archetypeConfigHash;
             node["generator_version"] = manifest.generatorVersion;
@@ -294,6 +296,7 @@ namespace Engine {
         const NavigationCacheSettings& settings,
         float chunkSize,
         int32_t graphRadiusChunks,
+        uint32_t navigationResolution,
         const NavBuildSettings& build,
         const NavAgentSettings& agent,
         std::string profileId,
@@ -305,6 +308,7 @@ namespace Engine {
         manifest.formatVersion = settings.formatVersion;
         manifest.chunkSize = chunkSize;
         manifest.graphRadiusChunks = graphRadiusChunks;
+        manifest.navigationResolution = std::max(navigationResolution, 2u);
         manifest.build = build;
         manifest.agent = agent;
         manifest.profileId = std::move(profileId);
@@ -316,6 +320,7 @@ namespace Engine {
                  << manifest.formatVersion << '|'
                  << manifest.chunkSize << '|'
                  << manifest.graphRadiusChunks << '|'
+                 << manifest.navigationResolution << '|'
                  << manifest.biomeConfigHash << '|'
                  << manifest.archetypeConfigHash << '|'
                  << manifest.profileId << '|'

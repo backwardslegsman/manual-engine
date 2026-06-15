@@ -100,8 +100,27 @@ namespace Engine {
     {
         connectivity_.clear();
         diagnostics_.clear();
+        rebuildChunks(loadedNavChunks, navigation, terrain, agent);
+    }
 
-        for (ChunkCoord coord : loadedNavChunks) {
+    void NavigationConnectivitySystem::rebuildChunk(
+        ChunkCoord coord,
+        const NavigationSystem& navigation,
+        const TerrainSystem& terrain,
+        const NavAgentSettings& agent)
+    {
+        rebuildChunks(std::span<const ChunkCoord>{&coord, 1}, navigation, terrain, agent);
+    }
+
+    void NavigationConnectivitySystem::rebuildChunks(
+        std::span<const ChunkCoord> coords,
+        const NavigationSystem& navigation,
+        const TerrainSystem& terrain,
+        const NavAgentSettings& agent)
+    {
+        for (ChunkCoord coord : coords) {
+            connectivity_.erase(coord);
+            diagnostics_.erase(coord);
             if (!navigation.hasTile(coord)) {
                 continue;
             }
@@ -153,6 +172,18 @@ namespace Engine {
             connectivity_.emplace(coord, std::move(connectivity));
         }
 
+        markLoadedNeighborConnections();
+    }
+
+    void NavigationConnectivitySystem::removeChunk(ChunkCoord coord)
+    {
+        connectivity_.erase(coord);
+        diagnostics_.erase(coord);
+        markLoadedNeighborConnections();
+    }
+
+    void NavigationConnectivitySystem::relinkChunkAndNeighbors(ChunkCoord)
+    {
         markLoadedNeighborConnections();
     }
 

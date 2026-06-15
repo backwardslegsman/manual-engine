@@ -259,12 +259,12 @@ Planned data:
 - route result with chunk sequence and portal targets
 
 V1 behavior:
-- Construct an in-memory `33x33` graph around the active graph center.
+- Construct an in-memory `129x129` graph around the active graph center.
 - Run A* over chunk nodes from source chunk to destination chunk.
 - Use deterministic cost inputs: distance, terrain roughness/biome cost, and loaded connectivity blocked-edge state.
 - Return a route made of chunk coords and portal/world-space waypoint targets.
 - Add debug draw for graph nodes, graph edges, and the last coarse route separate from the local Detour path.
-- Use a larger test profile: `96m` chunks, `7x7` loaded chunks, expanded terrain LOD distances, and wider camera bounds.
+- Use the current test profile: `24m` chunks, a `25x25` loaded chunk set, a `129x129` generated graph area, expanded terrain LOD distances, and wider camera bounds. This keeps the approximate world-space coverage from the earlier `96m` chunk profile while making each individual chunk/nav tile smaller.
 
 Acceptance:
 - A route can be planned across generated chunks without building every local nav tile at once.
@@ -418,6 +418,27 @@ Still deferred:
 Acceptance:
 - Looking at the debug UI should answer why a steep hilltop, ridge, or portal edge is missing navmesh.
 - Changing portal debug settings and rebuilding visible connectivity changes visible portal counts predictably.
+
+## Runtime Optimization - Cache/Worker-First Nav Tiles
+
+Status: implemented as a runtime hitch reduction pass after Stage 13.
+
+Goal:
+- Keep visual chunk streaming responsive by preventing normal frame flow from synchronously building Recast tiles.
+- Make cached Detour tile bytes the preferred baseline path, with worker Recast generation only on cache misses or live override chunks.
+- Reduce Recast source geometry independently from terrain render/gameplay resolution.
+
+Implemented:
+- Runtime nav tile records track missing, pending, ready, failed, and dirty chunk states.
+- Normal nav sync reconciles loaded chunks, inserts cache hits, and enqueues worker tile builds instead of calling live Recast builds on the main thread.
+- Terrain now exposes a separate navigation source resolution; the active navigation profile defaults this to `17`.
+- Cache manifest identity includes navigation source resolution.
+- Connectivity can rebuild changed chunks and neighbors incrementally after tile insert/destroy events.
+
+Still deferred:
+- Fully async cache file IO.
+- Incremental world graph algorithms beyond coalesced graph rebuilds.
+- Actor-driven streaming requests for pending route tiles.
 - A failed click command reports whether failure came from local nav, coarse graph, unloaded tile, or actor collision.
 - Cache/debug stats identify whether observed data came from a cache hit or a live rebuild.
 - Debug-only diagnostics do not change save files or gameplay state.

@@ -15,8 +15,8 @@ namespace Renderer::DebugUi {
     struct RendererDebugSettings {
         uint32_t layerMask = static_cast<uint32_t>(RenderLayer::All);
         bool enableDistanceCulling = true;
-        float propMaxDrawDistance = 0.0f;
-        float terrainMaxDrawDistance = 0.0f;
+        float propMaxDrawDistance = 160.0f;
+        float terrainMaxDrawDistance = 280.0f;
     };
 
     struct TerrainLodDebugStats {
@@ -103,6 +103,7 @@ namespace Renderer::DebugUi {
         std::string activeNavigationProfileId;
         NavigationAgentDebugSettings agent;
         NavigationBuildDebugSettings build;
+        uint32_t navigationResolution = 0;
         std::string cacheIdentity;
         uint32_t cacheTileHits = 0;
         uint32_t cacheTileMisses = 0;
@@ -114,14 +115,45 @@ namespace Renderer::DebugUi {
         uint32_t cacheGraphHits = 0;
         uint32_t cacheGraphMisses = 0;
         uint32_t cacheGraphWrites = 0;
+        uint32_t navTileCacheHitsThisFrame = 0;
+        uint32_t navTileCacheMissesThisFrame = 0;
+        uint32_t navTileCacheLoadFailuresThisFrame = 0;
+        uint32_t navTileWorkerBuildsQueuedThisFrame = 0;
+        uint32_t navTileWorkerBuildsCompletedThisFrame = 0;
+        uint32_t navTileWorkerBuildsFailedThisFrame = 0;
+        uint32_t navTileReadyChunks = 0;
+        uint32_t navTilePendingChunks = 0;
+        uint32_t navTileFailedChunks = 0;
+        uint32_t navTileSyncChunksThisFrame = 0;
+        uint32_t navTileSyncDeferredChunks = 0;
+        uint32_t connectivityChunksThisFrame = 0;
+        uint32_t connectivityDeferredChunks = 0;
         std::string cacheLastPath;
         std::string cacheLastMessage;
+        float previousFrameCpuMs = 0.0f;
+        float eventPollingMs = 0.0f;
+        float inputMappingMs = 0.0f;
+        float cameraUpdateMs = 0.0f;
         float chunkStreamingMs = 0.0f;
+        float terrainLodMs = 0.0f;
+        uint32_t terrainLodRebuildsThisFrame = 0;
+        uint32_t terrainLodPendingRebuilds = 0;
+        float budgetDrainMs = 0.0f;
         float navTileSyncMs = 0.0f;
         float connectivityMs = 0.0f;
         float worldGraphMs = 0.0f;
+        float fixedUpdateMs = 0.0f;
+        float worldSyncMs = 0.0f;
         float pickingMs = 0.0f;
+        float nearestNavigationPointMs = 0.0f;
+        float interactionMs = 0.0f;
+        float debugPrimitiveEnqueueMs = 0.0f;
         float drawSubmissionMs = 0.0f;
+        float debugPrimitiveDrawMs = 0.0f;
+        float debugUiBuildMs = 0.0f;
+        float debugUiRenderMs = 0.0f;
+        float bgfxFrameMs = 0.0f;
+        float postFrameRequestsMs = 0.0f;
         uint32_t asyncWorkerCount = 0;
         uint32_t asyncPendingChunkJobs = 0;
         uint32_t asyncCompletedChunks = 0;
@@ -134,6 +166,19 @@ namespace Renderer::DebugUi {
         float asyncMaxTerrainGenerationMs = 0.0f;
         float asyncAverageNavigationBuildMs = 0.0f;
         float asyncMaxNavigationBuildMs = 0.0f;
+        float frameBudgetMs = 0.0f;
+        float frameBudgetUsedMs = 0.0f;
+        float frameBudgetOverrunMs = 0.0f;
+        uint32_t frameBudgetItemsRun = 0;
+        uint32_t frameBudgetItemsDeferred = 0;
+        uint32_t mainThreadPendingWorkItems = 0;
+        std::array<float, 5> frameBudgetCategoryMs{};
+        float slowestBudgetItemMs = 0.0f;
+        std::string slowestBudgetItemLabel;
+        float longFrameThresholdMs = 50.0f;
+        uint32_t longFrameCount = 0;
+        float lastLongFrameMs = 0.0f;
+        std::string lastLongFrameSummary;
     };
 
     struct NavigationDebugControls {
@@ -143,11 +188,16 @@ namespace Renderer::DebugUi {
         bool rebuildConnectivityRequested = false;
         bool clearCacheStatsRequested = false;
         bool cacheEnabled = true;
-        bool cacheWriteThrough = true;
+        bool cacheWriteThrough = false;
         bool asyncTerrainEnabled = true;
         bool asyncNavigationEnabled = true;
-        uint32_t chunkLoadCommitBudget = 1;
-        uint32_t chunkUnloadCommitBudget = 1;
+        bool mainThreadBudgetEnabled = true;
+        float mainThreadBudgetMs = 2.0f;
+        uint32_t propSpawnBatchSize = 8;
+        uint32_t terrainLodRebuildsPerFrame = 1;
+        uint32_t navTileSyncChunksPerFrame = 8;
+        uint32_t connectivityChunksPerFrame = 8;
+        uint32_t worldGraphRecenterThresholdChunks = 8;
         uint32_t workerThreadCount = 1;
         uint32_t portalSamplesPerEdge = 9;
         float portalEdgeInset = 1.5f;

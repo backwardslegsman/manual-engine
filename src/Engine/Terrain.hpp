@@ -29,6 +29,7 @@ namespace Engine {
     struct TerrainSettings {
         float chunkSize = 16.0f;
         uint32_t resolution = 33;
+        uint32_t navigationResolution = 17;
         float heightScale = 2.0f;
         float skirtDepth = 2.0f;
         bool createRendererResources = true;
@@ -80,6 +81,13 @@ namespace Engine {
         BiomeSample biome;
     };
 
+    struct TerrainLodUpdateResult {
+        uint32_t rebuiltCount = 0;
+        uint32_t pendingCount = 0;
+
+        bool rebuiltAny() const { return rebuiltCount > 0; }
+    };
+
     // Owns loaded CPU heightfield tiles and their matching renderer terrain
     // tiles. Gameplay height queries always use CPU tile data; renderer LOD is
     // only a draw-mesh detail.
@@ -89,9 +97,13 @@ namespace Engine {
 
         TerrainTileHandle createTile(ChunkCoord coord, Renderer::MaterialHandle material);
         GeneratedTerrainTileData generateTileData(ChunkCoord coord) const;
+        TerrainTileHandle createCpuTileFromGenerated(
+            const GeneratedTerrainTileData& generated,
+            Renderer::MaterialHandle material);
         TerrainTileHandle createTileFromGenerated(
             const GeneratedTerrainTileData& generated,
             Renderer::MaterialHandle material);
+        Renderer::TerrainHandle ensureRendererTerrain(TerrainTileHandle handle);
         TerrainTileHandle createTileFromHeights(
             ChunkCoord coord,
             std::span<const float> heights,
@@ -99,6 +111,7 @@ namespace Engine {
         void destroyTile(TerrainTileHandle handle);
         Renderer::TerrainHandle rendererTerrain(TerrainTileHandle handle) const;
         bool updateLods(const glm::vec3& cameraPosition);
+        TerrainLodUpdateResult updateLodsBudgeted(const glm::vec3& cameraPosition, uint32_t maxRebuilds);
         std::array<uint32_t, TerrainLodLevelCount> lodCounts() const;
 
         std::optional<float> sampleHeight(float worldX, float worldZ) const;
@@ -122,12 +135,18 @@ namespace Engine {
             float maxSlopeDegrees,
             uint32_t maxSamples = 128) const;
         std::optional<NavigationTerrainBuildData> navigationBuildData(TerrainTileHandle handle) const;
+        std::optional<NavigationTerrainBuildData> navigationBuildData(
+            TerrainTileHandle handle,
+            uint32_t navigationResolution) const;
         static std::optional<float> sampleGeneratedHeight(
             const GeneratedTerrainTileData& generated,
             float worldX,
             float worldZ);
         static std::optional<NavigationTerrainBuildData> navigationBuildData(
             const GeneratedTerrainTileData& generated);
+        static std::optional<NavigationTerrainBuildData> navigationBuildData(
+            const GeneratedTerrainTileData& generated,
+            uint32_t navigationResolution);
         ChunkCoord coordForWorldPosition(float worldX, float worldZ) const;
 
         const TerrainSettings& settings() const;

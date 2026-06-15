@@ -19,14 +19,15 @@ namespace Engine {
     struct NavigationCacheManifest {
         std::string worldId = "sample";
         uint32_t formatVersion = 1;
-        float chunkSize = 96.0f;
-        int32_t graphRadiusChunks = 16;
+        float chunkSize = 24.0f;
+        int32_t graphRadiusChunks = 64;
+        uint32_t navigationResolution = 17;
         NavBuildSettings build;
         NavAgentSettings agent;
         std::string profileId = "default";
         std::string biomeConfigHash;
         std::string archetypeConfigHash;
-        std::string generatorVersion = "navigation_phase_12_v5_multi_portal_edges";
+        std::string generatorVersion = "navigation_phase_12_v6_async_runtime_tiles";
         std::string identityHash;
     };
 
@@ -55,6 +56,7 @@ namespace Engine {
             const NavigationCacheSettings& settings,
             float chunkSize,
             int32_t graphRadiusChunks,
+            uint32_t navigationResolution,
             const NavBuildSettings& build,
             const NavAgentSettings& agent,
             std::string profileId,

@@ -1,12 +1,17 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -15,6 +20,7 @@
 #include "Engine/ActorController.hpp"
 #include "Engine/BlockingCollision.hpp"
 #include "Engine/EventQueue.hpp"
+#include "Engine/FrameBudget.hpp"
 #include "Engine/NavigationConnectivity.hpp"
 #include "Engine/SpatialRegistry.hpp"
 #include "Engine/Terrain.hpp"
@@ -210,6 +216,94 @@ namespace {
     float riseForSlopeDegrees(float degrees, float run)
     {
         return std::tan(glm::radians(degrees)) * run;
+    }
+
+    struct ProfileSample {
+        std::string name;
+        uint32_t count = 0;
+        double totalMs = 0.0;
+        double maxMs = 0.0;
+
+        double averageMs() const
+        {
+            return count > 0 ? totalMs / static_cast<double>(count) : 0.0;
+        }
+    };
+
+    struct ProfileReport {
+        std::vector<ProfileSample> samples;
+
+        ProfileSample& sample(std::string_view name)
+        {
+            const auto found = std::ranges::find_if(samples, [&](const ProfileSample& sample) {
+                return sample.name == name;
+            });
+            if (found != samples.end()) {
+                return *found;
+            }
+            samples.push_back({std::string{name}});
+            return samples.back();
+        }
+
+        template <typename Function>
+        auto measure(std::string_view name, Function&& function)
+        {
+            const auto start = std::chrono::steady_clock::now();
+            if constexpr (std::is_void_v<std::invoke_result_t<Function>>) {
+                std::forward<Function>(function)();
+                record(name, start);
+            } else {
+                auto result = std::forward<Function>(function)();
+                record(name, start);
+                return result;
+            }
+        }
+
+        void record(std::string_view name, std::chrono::steady_clock::time_point start)
+        {
+            const auto end = std::chrono::steady_clock::now();
+            const double ms = std::chrono::duration<double, std::milli>(end - start).count();
+            ProfileSample& entry = sample(name);
+            ++entry.count;
+            entry.totalMs += ms;
+            entry.maxMs = std::max(entry.maxMs, ms);
+        }
+
+        std::vector<ProfileSample> rankedByTotal() const
+        {
+            std::vector<ProfileSample> ranked = samples;
+            std::ranges::sort(ranked, [](const ProfileSample& lhs, const ProfileSample& rhs) {
+                return lhs.totalMs > rhs.totalMs;
+            });
+            return ranked;
+        }
+
+        std::string toString() const
+        {
+            std::ostringstream output;
+            output << "Navigation CPU profile\n";
+            output << std::left << std::setw(34) << "bucket"
+                   << std::right << std::setw(8) << "count"
+                   << std::setw(14) << "total ms"
+                   << std::setw(14) << "avg ms"
+                   << std::setw(14) << "max ms" << '\n';
+            for (const ProfileSample& sample : rankedByTotal()) {
+                output << std::left << std::setw(34) << sample.name
+                       << std::right << std::setw(8) << sample.count
+                       << std::setw(14) << std::fixed << std::setprecision(3) << sample.totalMs
+                       << std::setw(14) << sample.averageMs()
+                       << std::setw(14) << sample.maxMs << '\n';
+            }
+            return output.str();
+        }
+    };
+
+    void writeProfileReport(std::string_view filename, const ProfileReport& report)
+    {
+        std::ofstream file{std::string{filename}};
+        if (file) {
+            file << report.toString();
+        }
     }
 
     std::vector<float> rampForSlopeDegrees(float degrees, float startHeight = 0.0f)
@@ -1055,6 +1149,241 @@ namespace {
         ctx.expect(gentle->maxSlopeDegrees < steep->maxSlopeDegrees,
             "lower terrain profile did not reduce max sampled slope");
     }
+
+    void navigationResolutionReducesBuildGeometry(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        const Engine::TerrainTileHandle tile = terrain.createTileFromHeights({0, 0}, heights(0.0f));
+        const std::optional<Engine::NavigationTerrainBuildData> full = terrain.navigationBuildData(tile, Resolution);
+        const std::optional<Engine::NavigationTerrainBuildData> reduced = terrain.navigationBuildData(tile, 9);
+        ctx.expect(full.has_value() && reduced.has_value(), "missing navigation build data for resolution comparison");
+        if (!full || !reduced) {
+            return;
+        }
+        ctx.expect(reduced->vertices.size() < full->vertices.size(), "reduced nav resolution did not reduce vertex count");
+        ctx.expect(reduced->indices.size() < full->indices.size(), "reduced nav resolution did not reduce index count");
+    }
+
+    void frameBudgetDefersNormalWorkWhenExhausted(TestContext& ctx)
+    {
+        Engine::FrameBudget budget;
+        budget.beginFrame({0.0f, true});
+        bool ran = false;
+        const bool accepted = budget.run(
+            Engine::BudgetCategory::General,
+            "normal",
+            Engine::BudgetPriority::Normal,
+            [&]() {
+                ran = true;
+            });
+        ctx.expect(!accepted, "normal work was accepted with zero frame budget");
+        ctx.expect(!ran, "normal work ran with zero frame budget");
+        ctx.expect(budget.stats().itemsDeferred == 1, "deferred count did not include rejected normal work");
+    }
+
+    void frameBudgetRunsCriticalWorkWithOverrun(TestContext& ctx)
+    {
+        Engine::FrameBudget budget;
+        budget.beginFrame({0.0f, true});
+        bool ran = false;
+        const bool accepted = budget.run(
+            Engine::BudgetCategory::NavigationCommit,
+            "critical",
+            Engine::BudgetPriority::Critical,
+            [&]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                ran = true;
+            });
+        ctx.expect(accepted, "critical work was rejected with zero frame budget");
+        ctx.expect(ran, "critical work did not run");
+        ctx.expect(budget.stats().itemsRun == 1, "critical work did not increment run count");
+        ctx.expect(budget.stats().overrunMs > 0.0f, "critical work did not record budget overrun");
+    }
+
+    void mainThreadWorkQueuePreservesDeferredWork(TestContext& ctx)
+    {
+        Engine::MainThreadWorkQueue queue;
+        uint32_t ran = 0;
+        queue.enqueue({Engine::BudgetCategory::General, Engine::BudgetPriority::Normal, "first", [&]() { ++ran; }});
+        queue.enqueue({Engine::BudgetCategory::General, Engine::BudgetPriority::Normal, "second", [&]() { ++ran; }});
+
+        Engine::FrameBudget blockedBudget;
+        blockedBudget.beginFrame({0.0f, true});
+        queue.drain(blockedBudget);
+        ctx.expect(ran == 0, "queue ran normal work with exhausted budget");
+        ctx.expect(queue.pendingCount() == 2, "queue did not preserve deferred work");
+
+        Engine::FrameBudget openBudget;
+        openBudget.beginFrame({1.0f, false});
+        queue.drain(openBudget);
+        ctx.expect(ran == 2, "queue did not drain deferred work after budget opened");
+        ctx.expect(queue.pendingCount() == 0, "queue still had pending work after open drain");
+    }
+
+    void navigationCpuProfileReport(TestContext& ctx)
+    {
+        ProfileReport profile;
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationSystem navigation;
+        Engine::NavAgentSettings agent;
+        std::vector<Engine::ChunkCoord> loadedChunks;
+        loadedChunks.reserve(25);
+
+        for (int32_t z = -2; z <= 2; ++z) {
+            for (int32_t x = -2; x <= 2; ++x) {
+                const Engine::ChunkCoord coord{x, z};
+                const Engine::TerrainTileHandle tile = profile.measure("terrain cpu tile creation", [&]() {
+                    return terrain.createTileFromHeights(coord, heights(0.0f));
+                });
+                ctx.expect(tile.id != UINT32_MAX, "profile failed to create terrain tile");
+                if (tile.id == UINT32_MAX) {
+                    continue;
+                }
+
+                std::optional<Engine::NavigationTerrainBuildData> buildData =
+                    profile.measure("navigation build data extraction", [&]() {
+                        return terrain.navigationBuildData(tile);
+                    });
+                ctx.expect(buildData.has_value(), "profile failed to extract navigation build data");
+                if (!buildData) {
+                    continue;
+                }
+
+                if ((x + z) % 3 == 0) {
+                    const float minX = static_cast<float>(x) * ChunkSize + 6.0f;
+                    const float minZ = static_cast<float>(z) * ChunkSize + 6.0f;
+                    profile.measure("blocker geometry append", [&]() {
+                        appendAabbBlocker(*buildData, {{minX, -0.5f, minZ}, {minX + 2.0f, 2.0f, minZ + 2.0f}});
+                    });
+                }
+
+                const Engine::NavigationTileHandle navTile = profile.measure("recast terrain tile build", [&]() {
+                    return navigation.buildTerrainTile(*buildData, agent);
+                });
+                ctx.expect(navTile.id != UINT32_MAX, "profile failed to build navigation tile");
+                if (navTile.id != UINT32_MAX) {
+                    loadedChunks.push_back(coord);
+                }
+            }
+        }
+
+        std::vector<Engine::NavigationTileCacheData> cachedTiles;
+        cachedTiles.reserve(loadedChunks.size());
+        for (Engine::ChunkCoord coord : loadedChunks) {
+            std::optional<Engine::NavigationTileCacheData> tile = profile.measure("detour tile cache export", [&]() {
+                return navigation.tileCacheData(coord);
+            });
+            ctx.expect(tile.has_value(), "profile failed to export Detour tile cache data");
+            if (tile) {
+                cachedTiles.push_back(*tile);
+            }
+        }
+
+        Engine::NavigationSystem cachedNavigation;
+        for (const Engine::NavigationTileCacheData& tile : cachedTiles) {
+            const Engine::NavigationTileHandle handle = profile.measure("detour tile cache insert", [&]() {
+                return cachedNavigation.loadTerrainTileFromCache(tile);
+            });
+            ctx.expect(handle.id != UINT32_MAX, "profile failed to insert cached Detour tile data");
+        }
+
+        Engine::NavigationConnectivitySystem connectivity;
+        profile.measure("connectivity rebuild", [&]() {
+            connectivity.rebuild(loadedChunks, navigation, terrain, agent);
+        });
+        ctx.expect(connectivity.stats().chunkCount > 0, "profile connectivity rebuild produced no chunks");
+        const std::vector<Engine::ChunkCoord> dirtyConnectivityChunks{{0, 0}, {1, 0}, {0, 1}, {-1, 0}, {0, -1}};
+        profile.measure("connectivity incremental rebuild", [&]() {
+            connectivity.rebuildChunks(dirtyConnectivityChunks, navigation, terrain, agent);
+        });
+
+        Engine::WorldNavigationGraph graph({4, ChunkSize});
+        profile.measure("world graph rebuild", [&]() {
+            graph.rebuild({0, 0}, terrain, connectivity);
+        });
+        ctx.expect(graph.stats().hasGraph, "profile world graph rebuild produced no graph");
+
+        for (uint32_t index = 0; index < 16; ++index) {
+            const float offset = 2.0f + static_cast<float>(index % 4) * 4.0f;
+            const glm::vec3 point{-ChunkSize + offset, 0.0f, -ChunkSize + offset};
+            const Engine::NavQueryResult nearest = profile.measure("nearest nav query", [&]() {
+                return navigation.nearestNavigablePoint(point, agent);
+            });
+            ctx.expect(nearest.status == Engine::NavQueryStatus::Success, "profile nearest nav query failed");
+        }
+
+        for (uint32_t index = 0; index < 8; ++index) {
+            const glm::vec3 start{-30.0f + static_cast<float>(index), 0.0f, -30.0f};
+            const glm::vec3 end{30.0f, 0.0f, 30.0f - static_cast<float>(index)};
+            const Engine::NavQueryResult path = profile.measure("detour path query", [&]() {
+                return navigation.findPath(start, end, agent);
+            });
+            ctx.expect(path.status == Engine::NavQueryStatus::Success, "profile detour path query failed");
+        }
+
+        const Engine::WorldNavRoute route = profile.measure("coarse graph route query", [&]() {
+            return graph.findRoute({-30.0f, 0.0f, -30.0f}, {30.0f, 0.0f, 30.0f});
+        });
+        ctx.expect(route.status == Engine::WorldNavRouteStatus::Success, "profile coarse graph route failed");
+
+        Engine::World world;
+        Engine::ActorController actors;
+        Engine::ActorControllerSettings actorSettings;
+        actorSettings.collisionEnabled = false;
+        actorSettings.groundOffset = 0.0f;
+        const Engine::ActorHandle actor = createActorAt(actors, world, terrain, {-30.0f, 0.0f, -30.0f}, actorSettings);
+        profile.measure("actor route command", [&]() {
+            actors.setRouteDestination(actor, {30.0f, 0.0f, 30.0f}, graph, navigation, agent, world);
+        });
+        profile.measure("actor fixed updates", [&]() {
+            (void)simulate(actors, actor, terrain, world, {30.0f, 0.0f, 30.0f}, 180, nullptr, nullptr, &navigation, &agent);
+        });
+
+        Engine::TerrainSettings fullTerrainSettings;
+        fullTerrainSettings.chunkSize = ChunkSize;
+        fullTerrainSettings.resolution = 33;
+        fullTerrainSettings.navigationResolution = 17;
+        fullTerrainSettings.createRendererResources = false;
+        Engine::TerrainSystem fullTerrain(fullTerrainSettings);
+        std::vector<float> fullHeights(static_cast<size_t>(33) * 33, 0.0f);
+        const Engine::TerrainTileHandle fullTile = fullTerrain.createTileFromHeights({10, 10}, fullHeights);
+        const std::optional<Engine::NavigationTerrainBuildData> fullBuildData =
+            profile.measure("full 33 nav build data extraction", [&]() {
+                return fullTerrain.navigationBuildData(fullTile, 33);
+            });
+        const std::optional<Engine::NavigationTerrainBuildData> reducedBuildData =
+            profile.measure("reduced 17 nav build data extraction", [&]() {
+                return fullTerrain.navigationBuildData(fullTile, 17);
+            });
+        ctx.expect(fullBuildData.has_value() && reducedBuildData.has_value(),
+            "profile failed to extract full/reduced nav build data");
+        if (fullBuildData && reducedBuildData) {
+            Engine::NavigationSystem fullSourceNavigation;
+            const Engine::NavigationTileBuildResult fullResult = profile.measure("recast full 33 source tile build", [&]() {
+                return Engine::NavigationSystem::buildTerrainTileData(*fullBuildData, agent, fullSourceNavigation.settings());
+            });
+            Engine::NavigationSystem reducedSourceNavigation;
+            const Engine::NavigationTileBuildResult reducedResult = profile.measure("recast reduced 17 source tile build", [&]() {
+                return Engine::NavigationSystem::buildTerrainTileData(*reducedBuildData, agent, reducedSourceNavigation.settings());
+            });
+            ctx.expect(fullResult.status == Engine::NavQueryStatus::Success,
+                "profile full-source Recast build failed");
+            ctx.expect(reducedResult.status == Engine::NavQueryStatus::Success,
+                "profile reduced-source Recast build failed");
+            ctx.expect(reducedBuildData->vertices.size() < fullBuildData->vertices.size(),
+                "profile reduced source did not have fewer vertices");
+        }
+
+        const std::string report = profile.toString();
+        writeProfileReport("navigation_cpu_profile.txt", profile);
+        std::cout << report;
+
+        const std::vector<ProfileSample> ranked = profile.rankedByTotal();
+        ctx.expect(!ranked.empty(), "profile did not record any samples");
+        if (!ranked.empty()) {
+            ctx.expect(ranked.front().totalMs >= ranked.back().totalMs, "profile ranking was not sorted by total time");
+        }
+    }
 }
 
 int main()
@@ -1084,6 +1413,11 @@ int main()
         {"TerrainGenerationIsDeterministicAndContinuous", terrainGenerationIsDeterministicAndContinuous},
         {"TerrainDiagnosticsReportRampSlope", terrainDiagnosticsReportRampSlope},
         {"LowerTerrainProfileReducesSlope", lowerTerrainProfileReducesSlope},
+        {"NavigationResolutionReducesBuildGeometry", navigationResolutionReducesBuildGeometry},
+        {"FrameBudgetDefersNormalWorkWhenExhausted", frameBudgetDefersNormalWorkWhenExhausted},
+        {"FrameBudgetRunsCriticalWorkWithOverrun", frameBudgetRunsCriticalWorkWithOverrun},
+        {"MainThreadWorkQueuePreservesDeferredWork", mainThreadWorkQueuePreservesDeferredWork},
+        {"NavigationCpuProfileReport", navigationCpuProfileReport},
     };
 
     for (const auto& [name, test] : tests) {

@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <deque>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -30,6 +31,7 @@
 #include "Engine/ChunkStreamer.hpp"
 #include "Engine/EventQueue.hpp"
 #include "Engine/FixedStepLoop.hpp"
+#include "Engine/FrameBudget.hpp"
 #include "Engine/InputMapping.hpp"
 #include "Engine/InteractionHandlerSystem.hpp"
 #include "Engine/InteractionSystem.hpp"
@@ -67,9 +69,9 @@ namespace {
     constexpr float DestinationClickDragThresholdPixels = 6.0f;
     constexpr float ActorSelectionDragThresholdPixels = 6.0f;
     constexpr float FormationSpacing = 1.5f;
-    constexpr float SampleChunkSize = 96.0f;
-    constexpr int32_t SampleChunkLoadRadius = 3;
-    constexpr int32_t SampleWorldGraphRadius = 16;
+    constexpr float SampleChunkSize = 24.0f;
+    constexpr int32_t SampleChunkLoadRadius = 12;
+    constexpr int32_t SampleWorldGraphRadius = 64;
 
     template <typename Function>
     float measureMilliseconds(Function&& function)
@@ -81,18 +83,96 @@ namespace {
     }
 
     struct FramePerformanceTimings {
+        float previousFrameCpuMs = 0.0f;
+        float eventPollingMs = 0.0f;
+        float inputMappingMs = 0.0f;
+        float cameraUpdateMs = 0.0f;
         float chunkStreamingMs = 0.0f;
+        float terrainLodMs = 0.0f;
+        float budgetDrainMs = 0.0f;
         float navTileSyncMs = 0.0f;
         float connectivityMs = 0.0f;
         float worldGraphMs = 0.0f;
+        float fixedUpdateMs = 0.0f;
+        float worldSyncMs = 0.0f;
         float pickingMs = 0.0f;
+        float nearestNavigationPointMs = 0.0f;
+        float interactionMs = 0.0f;
+        float debugPrimitiveEnqueueMs = 0.0f;
         float drawSubmissionMs = 0.0f;
+        float debugPrimitiveDrawMs = 0.0f;
+        float debugUiBuildMs = 0.0f;
+        float debugUiRenderMs = 0.0f;
+        float bgfxFrameMs = 0.0f;
+        float postFrameRequestsMs = 0.0f;
     };
 
     struct NavigationSyncResult {
         bool tileSetChanged = false;
         bool blockerStatsUpdated = false;
+        bool hasMoreWork = false;
+        uint32_t processedChunks = 0;
+        uint32_t deferredChunks = 0;
     };
+
+    struct ConnectivityRebuildResult {
+        bool hasMoreWork = false;
+        uint32_t processedChunks = 0;
+        uint32_t deferredChunks = 0;
+    };
+
+    struct LongFrameDiagnostics {
+        float thresholdMs = 50.0f;
+        uint32_t count = 0;
+        float lastFrameMs = 0.0f;
+        std::string lastSummary;
+    };
+
+    std::string_view budgetCategoryName(Engine::BudgetCategory category)
+    {
+        switch (category) {
+            case Engine::BudgetCategory::StreamingCommit:
+                return "streaming";
+            case Engine::BudgetCategory::NavigationCommit:
+                return "navigation";
+            case Engine::BudgetCategory::DerivedRebuild:
+                return "derived";
+            case Engine::BudgetCategory::Debug:
+                return "debug";
+            case Engine::BudgetCategory::General:
+                return "general";
+            case Engine::BudgetCategory::Count:
+                break;
+        }
+        return "unknown";
+    }
+
+    std::string makeLongFrameSummary(
+        const FramePerformanceTimings& timings,
+        const Engine::FrameBudgetStats& budgetStats,
+        uint32_t pendingMainThreadWork)
+    {
+        char buffer[1024]{};
+        std::snprintf(
+            buffer,
+            sizeof(buffer),
+            "bgfx %.2f, budget %.2f, navSync %.2f, conn %.2f, graph %.2f, draw %.2f, debugUi %.2f/%.2f, "
+            "post %.2f, slow item %.2fms [%s] %s, pending work %u",
+            timings.bgfxFrameMs,
+            timings.budgetDrainMs,
+            timings.navTileSyncMs,
+            timings.connectivityMs,
+            timings.worldGraphMs,
+            timings.drawSubmissionMs,
+            timings.debugUiBuildMs,
+            timings.debugUiRenderMs,
+            timings.postFrameRequestsMs,
+            budgetStats.slowestItemMs,
+            budgetCategoryName(budgetStats.slowestItemCategory).data(),
+            budgetStats.slowestItemLabel.empty() ? "<none>" : budgetStats.slowestItemLabel.c_str(),
+            pendingMainThreadWork);
+        return buffer;
+    }
 
     struct RuntimeObjectArchetypeVisual {
         std::string id;
@@ -121,10 +201,55 @@ namespace {
         float navigationBuildMs = 0.0f;
     };
 
+    enum class RuntimeNavTileState {
+        Missing,
+        CachePending,
+        BuildPending,
+        Ready,
+        Failed,
+        Dirty,
+    };
+
+    enum class RuntimeNavTileDirtyReason : uint32_t {
+        None = 0,
+        TerrainOrSettingsChanged = 1u << 0,
+        BlockersChanged = 1u << 1,
+        CacheMiss = 1u << 2,
+        CacheStale = 1u << 3,
+        ManualRebuild = 1u << 4,
+    };
+
+    struct RuntimeNavTileRecord {
+        RuntimeNavTileState state = RuntimeNavTileState::Missing;
+        uint32_t dirtyReasons = static_cast<uint32_t>(RuntimeNavTileDirtyReason::None);
+        Engine::AsyncJobHandle pendingJob;
+        std::string message;
+    };
+
+    struct NavigationWorkerBuildResult {
+        Engine::ChunkCoord coord;
+        Engine::NavigationTileBuildResult build;
+        NavigationBlockerStats blockerStats;
+        float buildMs = 0.0f;
+        bool writeCache = false;
+    };
+
+    struct RuntimeNavigationStats {
+        uint32_t cacheHitsThisFrame = 0;
+        uint32_t cacheMissesThisFrame = 0;
+        uint32_t cacheLoadFailuresThisFrame = 0;
+        uint32_t workerBuildsQueuedThisFrame = 0;
+        uint32_t workerBuildsCompletedThisFrame = 0;
+        uint32_t workerBuildsFailedThisFrame = 0;
+    };
+
     struct AsyncStreamingState {
         std::unordered_map<Engine::ChunkCoord, Engine::AsyncJobHandle, Engine::ChunkCoordHash> pendingLoads;
         std::deque<GeneratedChunkLoadResult> completedLoads;
+        std::deque<NavigationWorkerBuildResult> completedNavigationBuilds;
         std::deque<Engine::ChunkCoord> pendingUnloads;
+        std::unordered_set<Engine::ChunkCoord, Engine::ChunkCoordHash> committingLoads;
+        std::unordered_set<Engine::ChunkCoord, Engine::ChunkCoordHash> unloadingChunks;
         std::unordered_set<Engine::ChunkCoord, Engine::ChunkCoordHash> desiredChunks;
         uint32_t cancelledJobs = 0;
         uint32_t staleJobs = 0;
@@ -145,6 +270,112 @@ namespace {
             maxTerrainGenerationMs = std::max(maxTerrainGenerationMs, terrainMs);
             maxNavigationBuildMs = std::max(maxNavigationBuildMs, navMs);
         }
+    };
+
+    enum class ChunkCommitPhase {
+        CreateRenderGroup,
+        CreateCpuTerrainTile,
+        CreateTerrainRenderer,
+        SpawnPropsBatch,
+        InsertNavigationTile,
+        FinalizeMetadata,
+        Done,
+    };
+
+    std::string_view chunkCommitPhaseName(ChunkCommitPhase phase)
+    {
+        switch (phase) {
+            case ChunkCommitPhase::CreateRenderGroup:
+                return "create render group";
+            case ChunkCommitPhase::CreateCpuTerrainTile:
+                return "create cpu terrain";
+            case ChunkCommitPhase::CreateTerrainRenderer:
+                return "create terrain renderer";
+            case ChunkCommitPhase::SpawnPropsBatch:
+                return "spawn prop batch";
+            case ChunkCommitPhase::InsertNavigationTile:
+                return "insert nav tile";
+            case ChunkCommitPhase::FinalizeMetadata:
+                return "finalize metadata";
+            case ChunkCommitPhase::Done:
+                return "done";
+        }
+        return "unknown";
+    }
+
+    Engine::BudgetCategory chunkCommitPhaseCategory(ChunkCommitPhase phase)
+    {
+        return phase == ChunkCommitPhase::InsertNavigationTile
+            ? Engine::BudgetCategory::NavigationCommit
+            : Engine::BudgetCategory::StreamingCommit;
+    }
+
+    Engine::BudgetPriority chunkCommitPhasePriority(ChunkCommitPhase phase)
+    {
+        switch (phase) {
+            case ChunkCommitPhase::CreateRenderGroup:
+            case ChunkCommitPhase::CreateCpuTerrainTile:
+            case ChunkCommitPhase::CreateTerrainRenderer:
+            case ChunkCommitPhase::FinalizeMetadata:
+                return Engine::BudgetPriority::High;
+            case ChunkCommitPhase::InsertNavigationTile:
+                return Engine::BudgetPriority::Normal;
+            case ChunkCommitPhase::SpawnPropsBatch:
+            case ChunkCommitPhase::Done:
+                return Engine::BudgetPriority::Low;
+        }
+        return Engine::BudgetPriority::Normal;
+    }
+
+    enum class ChunkUnloadPhase {
+        RemoveNavigation,
+        DestroyPropsBatch,
+        DestroyTerrain,
+        DestroyRenderGroup,
+        FinalizeMetadata,
+        Done,
+    };
+
+    std::string_view chunkUnloadPhaseName(ChunkUnloadPhase phase)
+    {
+        switch (phase) {
+            case ChunkUnloadPhase::RemoveNavigation:
+                return "remove navigation";
+            case ChunkUnloadPhase::DestroyPropsBatch:
+                return "destroy props";
+            case ChunkUnloadPhase::DestroyTerrain:
+                return "destroy terrain";
+            case ChunkUnloadPhase::DestroyRenderGroup:
+                return "destroy render group";
+            case ChunkUnloadPhase::FinalizeMetadata:
+                return "finalize unload";
+            case ChunkUnloadPhase::Done:
+                return "done";
+        }
+        return "unknown";
+    }
+
+    Engine::BudgetCategory chunkUnloadPhaseCategory(ChunkUnloadPhase phase)
+    {
+        return phase == ChunkUnloadPhase::RemoveNavigation
+            ? Engine::BudgetCategory::NavigationCommit
+            : Engine::BudgetCategory::StreamingCommit;
+    }
+
+    struct PendingChunkCommit {
+        GeneratedChunkLoadResult generated;
+        Engine::ChunkContent content;
+        ChunkCommitPhase phase = ChunkCommitPhase::CreateRenderGroup;
+        size_t nextPropIndex = 0;
+        bool registered = false;
+        bool cancelled = false;
+    };
+
+    struct PendingChunkUnload {
+        Engine::ChunkCoord coord;
+        Engine::ChunkContent content;
+        ChunkUnloadPhase phase = ChunkUnloadPhase::RemoveNavigation;
+        size_t nextObjectIndex = 0;
     };
 
     bool validBounds(const Renderer::Aabb& bounds)
@@ -377,6 +608,8 @@ namespace {
             tileSourceName(diagnostics->source) +
             " status " +
             navStatusName(diagnostics->status) +
+            " source res " +
+            std::to_string(diagnostics->sourceResolution) +
             " terrain tris " +
             std::to_string(diagnostics->terrainTriangleCount) +
             " walkable " +
@@ -1421,6 +1654,7 @@ int main(int, char**)
     Engine::TerrainSettings terrainSettings;
     terrainSettings.chunkSize = SampleChunkSize;
     terrainSettings.resolution = 33;
+    terrainSettings.navigationResolution = 17;
     terrainSettings.heightScale = 1.25f;
     terrainSettings.biomes = &biomes;
     terrainSettings.lodLevels = {{
@@ -1431,7 +1665,6 @@ int main(int, char**)
         {576.0f, 3},
         {896.0f, 2},
     }};
-    Engine::TerrainSystem terrain(terrainSettings);
     const Engine::NavigationProfileLoadResult navigationProfileLoad =
         Engine::loadNavigationProfileFromYaml("assets/config/navigation_profiles.yaml");
     if (navigationProfileLoad.usedFallback) {
@@ -1440,6 +1673,8 @@ int main(int, char**)
     std::string activeNavigationProfileId = navigationProfileLoad.profile.id;
     Engine::NavBuildSettings navBuildSettings = navigationProfileLoad.profile.build;
     Engine::NavAgentSettings playerNavAgent = navigationProfileLoad.profile.agent;
+    terrainSettings.navigationResolution = navigationProfileLoad.profile.navigationResolution;
+    Engine::TerrainSystem terrain(terrainSettings);
     Engine::NavigationSystem navigation(navBuildSettings);
     Engine::NavigationConnectivitySystem navigationConnectivity;
     Engine::WorldNavigationGraph worldNavigationGraph({SampleWorldGraphRadius, SampleChunkSize});
@@ -1448,6 +1683,7 @@ int main(int, char**)
         navigationCacheSettings,
         SampleChunkSize,
         SampleWorldGraphRadius,
+        terrainSettings.navigationResolution,
         navBuildSettings,
         playerNavAgent,
         activeNavigationProfileId,
@@ -1462,6 +1698,7 @@ int main(int, char**)
                 navigationCacheSettings,
                 SampleChunkSize,
                 SampleWorldGraphRadius,
+                terrainSettings.navigationResolution,
                 navBuildSettings,
                 playerNavAgent,
                 activeNavigationProfileId,
@@ -1473,9 +1710,21 @@ int main(int, char**)
     Engine::ChunkCoord currentWorldGraphCenter;
     bool hasWorldGraphCenter = false;
     Engine::AsyncWorkQueue asyncWork;
+    Engine::FrameBudget frameBudget;
+    Engine::MainThreadWorkQueue mainThreadWork;
+    Engine::FrameBudgetSettings frameBudgetSettings;
     AsyncStreamingState asyncStreaming;
-    uint32_t chunkLoadCommitBudget = 1;
-    uint32_t chunkUnloadCommitBudget = 1;
+    std::vector<std::shared_ptr<PendingChunkUnload>> activeChunkUnloads;
+    uint32_t propSpawnBatchSize = 8;
+    uint32_t terrainLodRebuildsPerFrame = 1;
+    Engine::TerrainLodUpdateResult lastTerrainLodUpdate;
+    uint32_t navTileSyncChunksPerFrame = 8;
+    uint32_t connectivityChunksPerFrame = 8;
+    uint32_t worldGraphRecenterThresholdChunks = 8;
+    uint32_t lastNavTileSyncChunksProcessed = 0;
+    uint32_t lastNavTileSyncChunksDeferred = 0;
+    uint32_t lastConnectivityChunksProcessed = 0;
+    uint32_t lastConnectivityChunksDeferred = 0;
     bool asyncTerrainEnabled = true;
     bool asyncNavigationEnabled = true;
     Renderer::DebugUi::NavigationDebugControls navigationDebugControls;
@@ -1487,13 +1736,21 @@ int main(int, char**)
     navigationDebugControls.portalMergeDistance = navigationConnectivity.settings().portalMergeDistance;
     navigationDebugControls.portalNeighborLinkDistance = navigationConnectivity.settings().neighborLinkDistance;
     navigationDebugControls.workerThreadCount = asyncWork.workerCount();
-    navigationDebugControls.chunkLoadCommitBudget = chunkLoadCommitBudget;
-    navigationDebugControls.chunkUnloadCommitBudget = chunkUnloadCommitBudget;
+    navigationDebugControls.mainThreadBudgetEnabled = frameBudgetSettings.enabled;
+    navigationDebugControls.mainThreadBudgetMs = frameBudgetSettings.maxMainThreadWorkMs;
+    navigationDebugControls.propSpawnBatchSize = propSpawnBatchSize;
+    navigationDebugControls.terrainLodRebuildsPerFrame = terrainLodRebuildsPerFrame;
+    navigationDebugControls.navTileSyncChunksPerFrame = navTileSyncChunksPerFrame;
+    navigationDebugControls.connectivityChunksPerFrame = connectivityChunksPerFrame;
+    navigationDebugControls.worldGraphRecenterThresholdChunks = worldGraphRecenterThresholdChunks;
     navigationDebugControls.asyncTerrainEnabled = asyncTerrainEnabled;
     navigationDebugControls.asyncNavigationEnabled = asyncNavigationEnabled;
     std::unordered_set<Engine::ChunkCoord, Engine::ChunkCoordHash> navigationChunks;
+    std::unordered_map<Engine::ChunkCoord, RuntimeNavTileRecord, Engine::ChunkCoordHash> runtimeNavTiles;
+    RuntimeNavigationStats runtimeNavigationStats;
     NavigationBlockerStats navigationBlockerStats;
     std::optional<Engine::ChunkCoord> lastRebuiltNavigationChunk;
+    LongFrameDiagnostics longFrameDiagnostics;
     Engine::WorldObjectHandle playerObject;
     Engine::ActorHandle playerActor;
     std::vector<Engine::ActorHandle> demoActors;
@@ -1526,6 +1783,11 @@ int main(int, char**)
     bool worldGraphDirty = true;
     bool debugVisibilityDirty = true;
     bool pickingDirty = true;
+    std::unordered_set<Engine::ChunkCoord, Engine::ChunkCoordHash> navigationConnectivityDirtyChunks;
+    bool navigationTilesWorkQueued = false;
+    bool navigationConnectivityWorkQueued = false;
+    bool worldGraphWorkQueued = false;
+    bool debugVisibilityWorkQueued = false;
     FramePerformanceTimings frameTimings;
     const auto cancelCommandedActorPaths = [&]() {
         actors.cancelPath(playerActor);
@@ -1672,7 +1934,9 @@ int main(int, char**)
                 }
 
                 std::optional<Engine::NavigationTerrainBuildData> buildData =
-                    Engine::TerrainSystem::navigationBuildData(result.chunk.terrain);
+                    Engine::TerrainSystem::navigationBuildData(
+                        result.chunk.terrain,
+                        workerTerrainSettings.navigationResolution);
                 if (!buildData) {
                     return;
                 }
@@ -1817,86 +2081,263 @@ int main(int, char**)
 
             return content;
         };
-    const auto commitGeneratedChunk = [&](GeneratedChunkLoadResult& generated) {
-        if (chunkStreamer.isLoaded(generated.chunk.coord)) {
-            return false;
+    std::function<void()> recomputeNavigationBlockerStats;
+    const auto cleanupPendingChunkCommit = [&](const std::shared_ptr<PendingChunkCommit>& pending) {
+        for (Engine::WorldObjectHandle object : pending->content.objects) {
+            spatialRegistry.remove(object);
+            world.destroyObjectAndRendererInstance(object);
         }
-
-        Engine::ChunkContent content;
-        Renderer::RenderGroupDescriptor groupDescriptor;
-        groupDescriptor.name = generated.chunk.renderGroupName;
-        groupDescriptor.hasChunkCoord = true;
-        groupDescriptor.chunkX = generated.chunk.coord.x;
-        groupDescriptor.chunkZ = generated.chunk.coord.z;
-        content.renderGroup = Renderer::createRenderGroup(groupDescriptor);
-
-        const Renderer::MaterialHandle terrainMaterial = terrainMaterialForBiome(generated.chunk.terrain.biome.id);
-        content.terrain = terrain.createTileFromGenerated(generated.chunk.terrain, terrainMaterial);
-        const Renderer::TerrainHandle rendererTerrain = terrain.rendererTerrain(content.terrain);
-        Renderer::setTerrainMaterial(rendererTerrain, terrainMaterial);
-        Renderer::setTerrainRenderLayer(rendererTerrain, Renderer::RenderLayer::Terrain);
-        Renderer::setTerrainVisibilityFlags(rendererTerrain, Renderer::VisibilityFlags::Visible);
-        Renderer::setTerrainMaxDrawDistance(rendererTerrain, debugSettings.terrainMaxDrawDistance);
-        Renderer::setTerrainRenderGroup(rendererTerrain, content.renderGroup);
-
-        content.objects.reserve(generated.chunk.props.size());
-        for (const Engine::GeneratedChunkProp& prop : generated.chunk.props) {
-            const RuntimeObjectArchetypeVisual* visual = findVisual(archetypeVisuals, prop.archetypeId);
-            if (!visual || visual->mesh.handle.id == UINT32_MAX) {
-                continue;
-            }
-
-            const Engine::WorldObjectHandle object = world.createObject(prop.objectId);
-            const Renderer::MeshInstanceHandle instance = Renderer::createInstance(visual->mesh.handle);
-            Renderer::setInstanceMaterial(instance, visual->material);
-            Renderer::setInstanceRenderLayer(instance, Renderer::RenderLayer::Props);
-            Renderer::setInstanceVisibilityFlags(instance, Renderer::VisibilityFlags::Visible);
-            Renderer::setInstanceMaxDrawDistance(instance, debugSettings.propMaxDrawDistance);
-            Renderer::setInstanceRenderGroup(instance, content.renderGroup);
-            world.attachRendererInstance(object, instance);
-            world.setPosition(object, prop.position);
-            world.setRotation(object, prop.rotation);
-            world.setScale(object, prop.scale);
-            world.setAngularVelocity(object, prop.angularVelocity);
-            world.setLocalBounds(object, prop.localBounds);
-            world.setCollisionEnabled(object, prop.collisionEnabled);
-            spatialRegistry.insert(object, prop.position);
-            content.objects.push_back(object);
-        }
-
-        if (!chunkStreamer.registerLoadedChunk(generated.chunk.coord, content)) {
-            for (Engine::WorldObjectHandle object : content.objects) {
-                spatialRegistry.remove(object);
-                world.destroyObjectAndRendererInstance(object);
-            }
-            terrain.destroyTile(content.terrain);
-            Renderer::destroyRenderGroup(content.renderGroup);
-            return false;
-        }
-
-        if (generated.navigation &&
-            generated.navigation->status == Engine::NavQueryStatus::Success &&
-            generated.navigation->tileData) {
-            const Engine::NavigationTileHandle handle =
-                navigation.loadTerrainTileFromCache(*generated.navigation->tileData, generated.navigation->diagnostics);
-            if (handle.id != UINT32_MAX) {
-                navigationChunks.insert(generated.chunk.coord);
-                lastRebuiltNavigationChunk = generated.chunk.coord;
-                navigationConnectivityDirty = true;
-                worldGraphDirty = true;
-                if (navigationDebugControls.cacheEnabled &&
-                    navigationDebugControls.cacheWriteThrough &&
-                    generated.navigation->diagnostics.source != Engine::NavigationTileSource::Cache &&
-                    !objectOverrides.hasOverridesForChunk(generated.chunk.coord)) {
-                    navigationCache.writeTile(*generated.navigation->tileData);
+        pending->content.objects.clear();
+        navigation.destroyTile(pending->generated.chunk.coord);
+        navigationChunks.erase(pending->generated.chunk.coord);
+        terrain.destroyTile(pending->content.terrain);
+        Renderer::destroyRenderGroup(pending->content.renderGroup);
+        asyncStreaming.committingLoads.erase(pending->generated.chunk.coord);
+    };
+    std::function<void(std::shared_ptr<PendingChunkCommit>)> scheduleChunkCommitPhase;
+    scheduleChunkCommitPhase = [&](std::shared_ptr<PendingChunkCommit> pending) {
+        const Engine::ChunkCoord coord = pending->generated.chunk.coord;
+        const ChunkCommitPhase scheduledPhase = pending->phase;
+        const auto category = chunkCommitPhaseCategory(scheduledPhase);
+        const auto priority = chunkCommitPhasePriority(scheduledPhase);
+        const std::string label =
+            "chunk " + std::to_string(coord.x) + "," + std::to_string(coord.z) + " " +
+            std::string(chunkCommitPhaseName(scheduledPhase));
+        mainThreadWork.enqueue(Engine::MainThreadWorkItem{
+            category,
+            priority,
+            label,
+            [&, pending, scheduledPhase]() {
+                const Engine::ChunkCoord commitCoord = pending->generated.chunk.coord;
+                if (!asyncStreaming.desiredChunks.contains(commitCoord) || chunkStreamer.isLoaded(commitCoord)) {
+                    cleanupPendingChunkCommit(pending);
+                    return;
                 }
-            }
+                if (pending->phase != scheduledPhase) {
+                    return;
+                }
+
+                switch (pending->phase) {
+                    case ChunkCommitPhase::CreateRenderGroup: {
+                        Renderer::RenderGroupDescriptor groupDescriptor;
+                        groupDescriptor.name = pending->generated.chunk.renderGroupName;
+                        groupDescriptor.hasChunkCoord = true;
+                        groupDescriptor.chunkX = commitCoord.x;
+                        groupDescriptor.chunkZ = commitCoord.z;
+                        pending->content.renderGroup = Renderer::createRenderGroup(groupDescriptor);
+                        pending->phase = ChunkCommitPhase::CreateCpuTerrainTile;
+                        scheduleChunkCommitPhase(pending);
+                        break;
+                    }
+                    case ChunkCommitPhase::CreateCpuTerrainTile: {
+                        const Renderer::MaterialHandle terrainMaterial =
+                            terrainMaterialForBiome(pending->generated.chunk.terrain.biome.id);
+                        pending->content.terrain =
+                            terrain.createCpuTileFromGenerated(pending->generated.chunk.terrain, terrainMaterial);
+                        pending->phase = ChunkCommitPhase::CreateTerrainRenderer;
+                        scheduleChunkCommitPhase(pending);
+                        break;
+                    }
+                    case ChunkCommitPhase::CreateTerrainRenderer: {
+                        const Renderer::MaterialHandle terrainMaterial =
+                            terrainMaterialForBiome(pending->generated.chunk.terrain.biome.id);
+                        const Renderer::TerrainHandle rendererTerrain =
+                            terrain.ensureRendererTerrain(pending->content.terrain);
+                        Renderer::setTerrainMaterial(rendererTerrain, terrainMaterial);
+                        Renderer::setTerrainRenderLayer(rendererTerrain, Renderer::RenderLayer::Terrain);
+                        Renderer::setTerrainVisibilityFlags(rendererTerrain, Renderer::VisibilityFlags::Visible);
+                        Renderer::setTerrainMaxDrawDistance(rendererTerrain, debugSettings.terrainMaxDrawDistance);
+                        Renderer::setTerrainRenderGroup(rendererTerrain, pending->content.renderGroup);
+                        pending->content.objects.reserve(pending->generated.chunk.props.size());
+                        pending->phase = ChunkCommitPhase::SpawnPropsBatch;
+                        scheduleChunkCommitPhase(pending);
+                        break;
+                    }
+                    case ChunkCommitPhase::SpawnPropsBatch: {
+                        const size_t end = std::min(
+                            pending->generated.chunk.props.size(),
+                            pending->nextPropIndex + static_cast<size_t>(std::max(propSpawnBatchSize, 1u)));
+                        for (; pending->nextPropIndex < end; ++pending->nextPropIndex) {
+                            const Engine::GeneratedChunkProp& prop = pending->generated.chunk.props[pending->nextPropIndex];
+                            const RuntimeObjectArchetypeVisual* visual = findVisual(archetypeVisuals, prop.archetypeId);
+                            if (!visual || visual->mesh.handle.id == UINT32_MAX) {
+                                continue;
+                            }
+
+                            const Engine::WorldObjectHandle object = world.createObject(prop.objectId);
+                            const Renderer::MeshInstanceHandle instance = Renderer::createInstance(visual->mesh.handle);
+                            Renderer::setInstanceMaterial(instance, visual->material);
+                            Renderer::setInstanceRenderLayer(instance, Renderer::RenderLayer::Props);
+                            Renderer::setInstanceVisibilityFlags(instance, Renderer::VisibilityFlags::Visible);
+                            Renderer::setInstanceMaxDrawDistance(instance, debugSettings.propMaxDrawDistance);
+                            Renderer::setInstanceRenderGroup(instance, pending->content.renderGroup);
+                            world.attachRendererInstance(object, instance);
+                            world.setPosition(object, prop.position);
+                            world.setRotation(object, prop.rotation);
+                            world.setScale(object, prop.scale);
+                            world.setAngularVelocity(object, prop.angularVelocity);
+                            world.setLocalBounds(object, prop.localBounds);
+                            world.setCollisionEnabled(object, prop.collisionEnabled);
+                            spatialRegistry.insert(object, prop.position);
+                            pending->content.objects.push_back(object);
+                        }
+                        pending->phase = pending->nextPropIndex < pending->generated.chunk.props.size()
+                            ? ChunkCommitPhase::SpawnPropsBatch
+                            : ChunkCommitPhase::InsertNavigationTile;
+                        scheduleChunkCommitPhase(pending);
+                        break;
+                    }
+                    case ChunkCommitPhase::InsertNavigationTile: {
+                        if (pending->generated.navigation &&
+                            pending->generated.navigation->status == Engine::NavQueryStatus::Success &&
+                            pending->generated.navigation->tileData) {
+                            const Engine::NavigationTileHandle handle =
+                                navigation.loadTerrainTileFromCache(
+                                    *pending->generated.navigation->tileData,
+                                    pending->generated.navigation->diagnostics);
+                            if (handle.id != UINT32_MAX) {
+                                navigationChunks.insert(commitCoord);
+                                lastRebuiltNavigationChunk = commitCoord;
+                                navigationConnectivityDirty = true;
+                                worldGraphDirty = true;
+                                if (navigationDebugControls.cacheEnabled &&
+                                    navigationDebugControls.cacheWriteThrough &&
+                                    pending->generated.navigation->diagnostics.source != Engine::NavigationTileSource::Cache &&
+                                    !objectOverrides.hasOverridesForChunk(commitCoord)) {
+                                    navigationCache.writeTile(*pending->generated.navigation->tileData);
+                                }
+                            }
+                        }
+                        pending->phase = ChunkCommitPhase::FinalizeMetadata;
+                        scheduleChunkCommitPhase(pending);
+                        break;
+                    }
+                    case ChunkCommitPhase::FinalizeMetadata: {
+                        if (!chunkStreamer.registerLoadedChunk(commitCoord, pending->content)) {
+                            cleanupPendingChunkCommit(pending);
+                            return;
+                        }
+                        pending->registered = true;
+                        asyncStreaming.recordTiming(
+                            pending->generated.terrainGenerationMs,
+                            pending->generated.navigationBuildMs);
+                        asyncStreaming.committingLoads.erase(commitCoord);
+                        ++asyncStreaming.committedLoadsThisFrame;
+                        navigationTilesDirty = true;
+                        debugVisibilityDirty = true;
+                        pickingDirty = true;
+                        recomputeNavigationBlockerStats();
+                        pending->phase = ChunkCommitPhase::Done;
+                        break;
+                    }
+                    case ChunkCommitPhase::Done:
+                        break;
+                }
+            },
+        });
+    };
+    const auto beginChunkCommit = [&](GeneratedChunkLoadResult generated) {
+        if (chunkStreamer.isLoaded(generated.chunk.coord) ||
+            asyncStreaming.committingLoads.contains(generated.chunk.coord)) {
+            return;
+        }
+        auto pending = std::make_shared<PendingChunkCommit>();
+        pending->generated = std::move(generated);
+        asyncStreaming.committingLoads.insert(pending->generated.chunk.coord);
+        scheduleChunkCommitPhase(pending);
+    };
+    const auto markConnectivityDirtyForChunk = [&](Engine::ChunkCoord coord) {
+        navigationConnectivityDirty = true;
+        navigationConnectivityDirtyChunks.insert(coord);
+        navigationConnectivityDirtyChunks.insert({coord.x + 1, coord.z});
+        navigationConnectivityDirtyChunks.insert({coord.x - 1, coord.z});
+        navigationConnectivityDirtyChunks.insert({coord.x, coord.z + 1});
+        navigationConnectivityDirtyChunks.insert({coord.x, coord.z - 1});
+    };
+    std::function<void(std::shared_ptr<PendingChunkUnload>)> scheduleChunkUnloadPhase;
+    scheduleChunkUnloadPhase = [&](std::shared_ptr<PendingChunkUnload> pending) {
+        if (!pending || pending->phase == ChunkUnloadPhase::Done) {
+            return;
         }
 
-        asyncStreaming.recordTiming(generated.terrainGenerationMs, generated.navigationBuildMs);
-        debugVisibilityDirty = true;
-        pickingDirty = true;
-        return true;
+        const ChunkUnloadPhase phase = pending->phase;
+        mainThreadWork.enqueue(Engine::MainThreadWorkItem{
+            chunkUnloadPhaseCategory(phase),
+            Engine::BudgetPriority::High,
+            "chunk unload " + std::to_string(pending->coord.x) + "," +
+                std::to_string(pending->coord.z) + " " + std::string(chunkUnloadPhaseName(phase)),
+            [&, pending]() {
+                switch (pending->phase) {
+                    case ChunkUnloadPhase::RemoveNavigation: {
+                        navigation.destroyTile(pending->coord);
+                        navigationChunks.erase(pending->coord);
+                        if (auto navIt = runtimeNavTiles.find(pending->coord); navIt != runtimeNavTiles.end()) {
+                            asyncWork.cancel(navIt->second.pendingJob);
+                            runtimeNavTiles.erase(navIt);
+                        }
+                        navigationConnectivity.removeChunk(pending->coord);
+                        pending->phase = ChunkUnloadPhase::DestroyPropsBatch;
+                        break;
+                    }
+                    case ChunkUnloadPhase::DestroyPropsBatch: {
+                        const size_t batchSize = static_cast<size_t>(std::max(propSpawnBatchSize, 1u));
+                        const size_t end = std::min(pending->content.objects.size(), pending->nextObjectIndex + batchSize);
+                        for (; pending->nextObjectIndex < end; ++pending->nextObjectIndex) {
+                            const Engine::WorldObjectHandle object = pending->content.objects[pending->nextObjectIndex];
+                            spatialRegistry.remove(object);
+                            world.destroyObjectAndRendererInstance(object);
+                        }
+                        if (pending->nextObjectIndex >= pending->content.objects.size()) {
+                            pending->phase = ChunkUnloadPhase::DestroyTerrain;
+                        }
+                        break;
+                    }
+                    case ChunkUnloadPhase::DestroyTerrain:
+                        terrain.destroyTile(pending->content.terrain);
+                        pending->phase = ChunkUnloadPhase::DestroyRenderGroup;
+                        break;
+                    case ChunkUnloadPhase::DestroyRenderGroup:
+                        Renderer::destroyRenderGroup(pending->content.renderGroup);
+                        pending->phase = ChunkUnloadPhase::FinalizeMetadata;
+                        break;
+                    case ChunkUnloadPhase::FinalizeMetadata:
+                        markConnectivityDirtyForChunk(pending->coord);
+                        worldGraphDirty = true;
+                        debugVisibilityDirty = true;
+                        pickingDirty = true;
+                        ++asyncStreaming.committedUnloadsThisFrame;
+                        recomputeNavigationBlockerStats();
+                        asyncStreaming.unloadingChunks.erase(pending->coord);
+                        std::erase(activeChunkUnloads, pending);
+                        pending->phase = ChunkUnloadPhase::Done;
+                        break;
+                    case ChunkUnloadPhase::Done:
+                        break;
+                }
+
+                if (pending->phase != ChunkUnloadPhase::Done) {
+                    scheduleChunkUnloadPhase(pending);
+                }
+            },
+        });
+    };
+    const auto enqueueChunkUnloadCommit = [&](Engine::ChunkCoord coord) {
+        if (asyncStreaming.desiredChunks.contains(coord) || !chunkStreamer.isLoaded(coord)) {
+            asyncStreaming.unloadingChunks.erase(coord);
+            return;
+        }
+
+        std::optional<Engine::ChunkContent> content = chunkStreamer.detachLoadedChunk(coord);
+        if (!content) {
+            asyncStreaming.unloadingChunks.erase(coord);
+            return;
+        }
+
+        auto pending = std::make_shared<PendingChunkUnload>();
+        pending->coord = coord;
+        pending->content = std::move(*content);
+        activeChunkUnloads.push_back(pending);
+        scheduleChunkUnloadPhase(pending);
     };
     const auto applyDebugVisibilitySettings = [&]() {
         chunkStreamer.forEachLoadedChunkContent(
@@ -1965,7 +2406,100 @@ int main(int, char**)
 
         return buildData;
     };
-    const auto recomputeNavigationBlockerStats = [&]() {
+    const auto markNavTileDirty = [&](Engine::ChunkCoord coord, RuntimeNavTileDirtyReason reason) {
+        RuntimeNavTileRecord& record = runtimeNavTiles[coord];
+        record.state = RuntimeNavTileState::Dirty;
+        record.dirtyReasons |= static_cast<uint32_t>(reason);
+    };
+    const auto enqueueNavigationTileInsertion = [&](NavigationWorkerBuildResult result) {
+        const Engine::ChunkCoord coord = result.coord;
+        mainThreadWork.enqueue(Engine::MainThreadWorkItem{
+            Engine::BudgetCategory::NavigationCommit,
+            Engine::BudgetPriority::Normal,
+            "insert nav tile " + std::to_string(coord.x) + "," + std::to_string(coord.z),
+            [&, result = std::move(result)]() mutable {
+                RuntimeNavTileRecord& record = runtimeNavTiles[result.coord];
+                if (!chunkStreamer.isLoaded(result.coord)) {
+                    record.state = RuntimeNavTileState::Missing;
+                    return;
+                }
+                if (result.build.status != Engine::NavQueryStatus::Success || !result.build.tileData) {
+                    record.state = RuntimeNavTileState::Failed;
+                    record.message = result.build.message;
+                    ++runtimeNavigationStats.workerBuildsFailedThisFrame;
+                    return;
+                }
+
+                navigation.destroyTile(result.coord);
+                navigationChunks.erase(result.coord);
+                const Engine::NavigationTileHandle handle =
+                    navigation.loadTerrainTileFromCache(*result.build.tileData, result.build.diagnostics);
+                if (handle.id == UINT32_MAX) {
+                    record.state = RuntimeNavTileState::Failed;
+                    record.message = navigation.lastBuildMessage();
+                    ++runtimeNavigationStats.cacheLoadFailuresThisFrame;
+                    return;
+                }
+
+                record.state = RuntimeNavTileState::Ready;
+                record.dirtyReasons = static_cast<uint32_t>(RuntimeNavTileDirtyReason::None);
+                record.pendingJob = {};
+                record.message = result.build.message;
+                navigationChunks.insert(result.coord);
+                lastRebuiltNavigationChunk = result.coord;
+                markConnectivityDirtyForChunk(result.coord);
+                worldGraphDirty = true;
+                if (result.writeCache &&
+                    navigationDebugControls.cacheEnabled &&
+                    navigationDebugControls.cacheWriteThrough &&
+                    !objectOverrides.hasOverridesForChunk(result.coord)) {
+                    navigationCache.writeTile(*result.build.tileData);
+                }
+            },
+        });
+    };
+    const auto enqueueNavigationTileWorkerBuild = [&](
+        Engine::ChunkCoord coord,
+        Engine::NavigationTerrainBuildData buildData,
+        NavigationBlockerStats blockerStats,
+        bool writeCache) {
+        RuntimeNavTileRecord& record = runtimeNavTiles[coord];
+        if (record.state == RuntimeNavTileState::BuildPending) {
+            return;
+        }
+        const Engine::NavAgentSettings navAgentSnapshot = playerNavAgent;
+        const Engine::NavBuildSettings navBuildSettingsSnapshot = navBuildSettings;
+        const Engine::AsyncJobHandle handle = asyncWork.submit(
+            "nav tile " + std::to_string(coord.x) + "," + std::to_string(coord.z),
+            [coord, buildData = std::move(buildData), blockerStats, writeCache, navAgentSnapshot, navBuildSettingsSnapshot](std::stop_token stopToken) -> std::any {
+                NavigationWorkerBuildResult result;
+                result.coord = coord;
+                result.blockerStats = blockerStats;
+                result.writeCache = writeCache;
+                if (stopToken.stop_requested()) {
+                    result.build.status = Engine::NavQueryStatus::InvalidInput;
+                    result.build.message = "Navigation tile worker job was cancelled.";
+                    return result;
+                }
+                result.buildMs = measureMilliseconds([&]() {
+                    result.build = Engine::NavigationSystem::buildTerrainTileData(
+                        buildData,
+                        navAgentSnapshot,
+                        navBuildSettingsSnapshot);
+                });
+                return result;
+            });
+        if (handle.id != UINT64_MAX) {
+            record.state = RuntimeNavTileState::BuildPending;
+            record.pendingJob = handle;
+            record.message = "Worker build pending.";
+            ++runtimeNavigationStats.workerBuildsQueuedThisFrame;
+        } else {
+            record.state = RuntimeNavTileState::Failed;
+            record.message = "Failed to enqueue navigation tile worker build.";
+        }
+    };
+    recomputeNavigationBlockerStats = [&]() {
         NavigationBlockerStats stats;
         chunkStreamer.forEachLoadedChunkContent(
             [&](Engine::TerrainTileHandle, const std::vector<Engine::WorldObjectHandle>& objects, Renderer::RenderGroupHandle) {
@@ -1997,6 +2531,7 @@ int main(int, char**)
         return hasOverrides;
     };
     const auto rebuildNavigationConnectivity = [&]() {
+        ConnectivityRebuildResult result;
         std::vector<Engine::ChunkCoord> loadedNavChunks;
         loadedNavChunks.reserve(navigationChunks.size());
         for (Engine::ChunkCoord coord : navigationChunks) {
@@ -2005,6 +2540,39 @@ int main(int, char**)
         std::ranges::sort(loadedNavChunks, [](Engine::ChunkCoord lhs, Engine::ChunkCoord rhs) {
             return lhs.x == rhs.x ? lhs.z < rhs.z : lhs.x < rhs.x;
         });
+        if (!navigationConnectivityDirtyChunks.empty()) {
+            std::vector<Engine::ChunkCoord> dirtyChunks;
+            dirtyChunks.reserve(navigationConnectivityDirtyChunks.size());
+            const uint32_t maxChunksToProcess = std::max(connectivityChunksPerFrame, 1u);
+            uint32_t inspectedChunks = 0;
+            for (Engine::ChunkCoord coord : navigationConnectivityDirtyChunks) {
+                if (inspectedChunks >= maxChunksToProcess) {
+                    ++result.deferredChunks;
+                    continue;
+                }
+                ++inspectedChunks;
+                dirtyChunks.push_back(coord);
+            }
+            result.processedChunks = static_cast<uint32_t>(dirtyChunks.size());
+            result.hasMoreWork = result.deferredChunks > 0;
+            std::ranges::sort(dirtyChunks, [](Engine::ChunkCoord lhs, Engine::ChunkCoord rhs) {
+                return lhs.x == rhs.x ? lhs.z < rhs.z : lhs.x < rhs.x;
+            });
+            navigationConnectivity.rebuildChunks(dirtyChunks, navigation, terrain, playerNavAgent);
+            if (navigationDebugControls.cacheEnabled &&
+                navigationDebugControls.cacheWriteThrough &&
+                !loadedChunksHaveNavigationOverrides()) {
+                for (Engine::ChunkCoord coord : dirtyChunks) {
+                    if (const Engine::ChunkNavConnectivity* connectivity = navigationConnectivity.connectivity(coord)) {
+                        navigationCache.writeConnectivity(*connectivity);
+                    }
+                }
+            }
+            for (Engine::ChunkCoord coord : dirtyChunks) {
+                navigationConnectivityDirtyChunks.erase(coord);
+            }
+            return result;
+        }
         if (navigationDebugControls.cacheEnabled && !loadedChunksHaveNavigationOverrides()) {
             Engine::NavigationConnectivityCacheData cachedConnectivity;
             bool loadedAll = !loadedNavChunks.empty();
@@ -2018,10 +2586,12 @@ int main(int, char**)
             }
             if (loadedAll) {
                 navigationConnectivity.loadCacheData(cachedConnectivity);
-                return;
+                result.processedChunks = static_cast<uint32_t>(loadedNavChunks.size());
+                return result;
             }
         }
         navigationConnectivity.rebuild(loadedNavChunks, navigation, terrain, playerNavAgent);
+        result.processedChunks = static_cast<uint32_t>(loadedNavChunks.size());
         if (navigationDebugControls.cacheEnabled &&
             navigationDebugControls.cacheWriteThrough &&
             !loadedChunksHaveNavigationOverrides()) {
@@ -2029,6 +2599,8 @@ int main(int, char**)
                 navigationCache.writeConnectivity(connectivity);
             }
         }
+        navigationConnectivityDirtyChunks.clear();
+        return result;
     };
     const auto rebuildWorldNavigationGraph = [&](Engine::ChunkCoord centerChunk) {
         if (navigationDebugControls.cacheEnabled && !loadedChunksHaveNavigationOverrides()) {
@@ -2052,63 +2624,37 @@ int main(int, char**)
     const auto updateWorldNavigationGraphCenter = [&](const glm::vec3& centerWorldPosition) {
         const Engine::ChunkCoord centerChunk =
             terrain.coordForWorldPosition(centerWorldPosition.x, centerWorldPosition.z);
-        if (!hasWorldGraphCenter || !(centerChunk == currentWorldGraphCenter)) {
+        if (!hasWorldGraphCenter) {
             currentWorldGraphCenter = centerChunk;
             hasWorldGraphCenter = true;
+            worldGraphDirty = true;
+            return;
+        }
+
+        const int32_t threshold = static_cast<int32_t>(std::max(worldGraphRecenterThresholdChunks, 1u));
+        const bool outsideRecenterWindow =
+            std::abs(centerChunk.x - currentWorldGraphCenter.x) >= threshold ||
+            std::abs(centerChunk.z - currentWorldGraphCenter.z) >= threshold;
+        if (outsideRecenterWindow) {
+            currentWorldGraphCenter = centerChunk;
             worldGraphDirty = true;
         }
     };
     const auto rebuildNavigationTile = [&](Engine::ChunkCoord targetCoord, bool cancelActivePath = true) {
-        bool rebuilt = false;
-        chunkStreamer.forEachLoadedChunkContent(
-            [&](Engine::TerrainTileHandle terrainTile, const std::vector<Engine::WorldObjectHandle>& objects, Renderer::RenderGroupHandle) {
-                if (rebuilt) {
-                    return;
-                }
-                const std::optional<Engine::ChunkCoord> coord = terrain.tileCoord(terrainTile);
-                if (!coord || *coord != targetCoord) {
-                    return;
-                }
-
-                navigation.destroyTile(targetCoord);
-                navigationChunks.erase(targetCoord);
-                const bool chunkHasOverrides = objectOverrides.hasOverridesForChunk(targetCoord);
-                if (navigationDebugControls.cacheEnabled && !chunkHasOverrides) {
-                    if (const std::optional<Engine::NavigationTileCacheData> cachedTile = navigationCache.loadTile(targetCoord)) {
-                        const Engine::NavigationTileHandle handle = navigation.loadTerrainTileFromCache(*cachedTile);
-                        if (handle.id != UINT32_MAX) {
-                            navigationChunks.insert(targetCoord);
-                            lastRebuiltNavigationChunk = targetCoord;
-                            rebuilt = true;
-                            return;
-                        }
-                    }
-                }
-                if (const std::optional<Engine::NavigationTerrainBuildData> buildData =
-                        buildNavigationDataForChunk(terrainTile, objects)) {
-                    const Engine::NavigationTileHandle handle = navigation.buildTerrainTile(*buildData, playerNavAgent);
-                    if (handle.id != UINT32_MAX) {
-                        navigationChunks.insert(targetCoord);
-                        lastRebuiltNavigationChunk = targetCoord;
-                        rebuilt = true;
-                        if (navigationDebugControls.cacheEnabled &&
-                            navigationDebugControls.cacheWriteThrough &&
-                            !chunkHasOverrides) {
-                            if (const std::optional<Engine::NavigationTileCacheData> tile = navigation.tileCacheData(targetCoord)) {
-                                navigationCache.writeTile(*tile);
-                            }
-                        }
-                    }
-                }
-            }
-        );
-
-        if (rebuilt && cancelActivePath) {
+        navigation.destroyTile(targetCoord);
+        navigationChunks.erase(targetCoord);
+        if (auto navIt = runtimeNavTiles.find(targetCoord); navIt != runtimeNavTiles.end()) {
+            asyncWork.cancel(navIt->second.pendingJob);
+            navIt->second.pendingJob = {};
+        }
+        markNavTileDirty(targetCoord, RuntimeNavTileDirtyReason::ManualRebuild);
+        navigationTilesDirty = true;
+        markConnectivityDirtyForChunk(targetCoord);
+        worldGraphDirty = true;
+        if (cancelActivePath) {
             cancelCommandedActorPaths();
         }
-        navigationConnectivityDirty = navigationConnectivityDirty || rebuilt;
-        worldGraphDirty = worldGraphDirty || rebuilt;
-        return rebuilt;
+        return true;
     };
     const auto rebuildNavigationTiles = [&](const std::vector<Engine::ChunkCoord>& coords, bool cancelActivePath = true) {
         bool anyRebuilt = false;
@@ -2124,6 +2670,7 @@ int main(int, char**)
         NavigationSyncResult result;
         std::unordered_set<Engine::ChunkCoord, Engine::ChunkCoordHash> loadedChunks;
         NavigationBlockerStats syncedBlockerStats;
+        const uint32_t maxChunksToProcess = std::max(navTileSyncChunksPerFrame, 1u);
         chunkStreamer.forEachLoadedChunkContent(
             [&](Engine::TerrainTileHandle terrainTile, const std::vector<Engine::WorldObjectHandle>& objects, Renderer::RenderGroupHandle) {
                 const std::optional<Engine::ChunkCoord> coord = terrain.tileCoord(terrainTile);
@@ -2132,39 +2679,68 @@ int main(int, char**)
                 }
 
                 loadedChunks.insert(*coord);
+                RuntimeNavTileRecord& record = runtimeNavTiles[*coord];
                 if (navigation.hasTile(*coord)) {
+                    record.state = RuntimeNavTileState::Ready;
                     return;
                 }
+                if (record.state == RuntimeNavTileState::BuildPending ||
+                    record.state == RuntimeNavTileState::CachePending) {
+                    return;
+                }
+                if (!asyncNavigationEnabled) {
+                    record.state = RuntimeNavTileState::Missing;
+                    record.message = "Async navigation generation disabled.";
+                    return;
+                }
+                if (result.processedChunks >= maxChunksToProcess) {
+                    result.hasMoreWork = true;
+                    ++result.deferredChunks;
+                    return;
+                }
+                ++result.processedChunks;
 
-                const std::optional<Engine::NavigationTerrainBuildData> buildData =
-                    buildNavigationDataForChunk(terrainTile, objects, &syncedBlockerStats);
-                result.blockerStatsUpdated = true;
                 const bool chunkHasOverrides = objectOverrides.hasOverridesForChunk(*coord);
                 if (navigationDebugControls.cacheEnabled && !chunkHasOverrides) {
+                    record.state = RuntimeNavTileState::CachePending;
                     if (const std::optional<Engine::NavigationTileCacheData> cachedTile = navigationCache.loadTile(*coord)) {
-                        const Engine::NavigationTileHandle handle = navigation.loadTerrainTileFromCache(*cachedTile);
-                        if (handle.id != UINT32_MAX) {
-                            navigationChunks.insert(*coord);
-                            lastRebuiltNavigationChunk = *coord;
-                            result.tileSetChanged = true;
-                            return;
-                        }
+                        NavigationWorkerBuildResult cacheResult;
+                        cacheResult.coord = *coord;
+                        cacheResult.build.status = Engine::NavQueryStatus::Success;
+                        cacheResult.build.message = "Loaded terrain navigation tile from cache.";
+                        cacheResult.build.tileData = *cachedTile;
+                        cacheResult.build.diagnostics.coord = *coord;
+                        cacheResult.build.diagnostics.status = Engine::NavQueryStatus::Success;
+                        cacheResult.build.diagnostics.message = cacheResult.build.message;
+                        cacheResult.build.diagnostics.source = Engine::NavigationTileSource::Cache;
+                        cacheResult.build.diagnostics.sourceResolution = terrain.settings().navigationResolution;
+                        cacheResult.build.diagnostics.bounds = cachedTile->bounds;
+                        cacheResult.build.diagnostics.agent = playerNavAgent;
+                        cacheResult.build.diagnostics.build = navBuildSettings;
+                        cacheResult.writeCache = false;
+                        enqueueNavigationTileInsertion(std::move(cacheResult));
+                        ++runtimeNavigationStats.cacheHitsThisFrame;
+                        return;
                     }
+                    ++runtimeNavigationStats.cacheMissesThisFrame;
+                    record.dirtyReasons |= static_cast<uint32_t>(RuntimeNavTileDirtyReason::CacheMiss);
                 }
+
+                NavigationBlockerStats chunkBlockerStats;
+                const std::optional<Engine::NavigationTerrainBuildData> buildData =
+                    buildNavigationDataForChunk(terrainTile, objects, &chunkBlockerStats);
+                syncedBlockerStats.vertices += chunkBlockerStats.vertices;
+                syncedBlockerStats.triangles += chunkBlockerStats.triangles;
+                result.blockerStatsUpdated = true;
                 if (buildData) {
-                    const Engine::NavigationTileHandle handle = navigation.buildTerrainTile(*buildData, playerNavAgent);
-                    if (handle.id != UINT32_MAX) {
-                        navigationChunks.insert(*coord);
-                        lastRebuiltNavigationChunk = *coord;
-                        result.tileSetChanged = true;
-                        if (navigationDebugControls.cacheEnabled &&
-                            navigationDebugControls.cacheWriteThrough &&
-                            !chunkHasOverrides) {
-                            if (const std::optional<Engine::NavigationTileCacheData> tile = navigation.tileCacheData(*coord)) {
-                                navigationCache.writeTile(*tile);
-                            }
-                        }
-                    }
+                    enqueueNavigationTileWorkerBuild(
+                        *coord,
+                        *buildData,
+                        chunkBlockerStats,
+                        navigationDebugControls.cacheEnabled && navigationDebugControls.cacheWriteThrough && !chunkHasOverrides);
+                } else {
+                    record.state = RuntimeNavTileState::Failed;
+                    record.message = "Failed to extract navigation build data.";
                 }
             }
         );
@@ -2181,6 +2757,8 @@ int main(int, char**)
         for (Engine::ChunkCoord coord : staleChunks) {
             navigation.destroyTile(coord);
             navigationChunks.erase(coord);
+            runtimeNavTiles.erase(coord);
+            markConnectivityDirtyForChunk(coord);
             result.tileSetChanged = true;
         }
         return result;
@@ -2199,8 +2777,8 @@ int main(int, char**)
     Engine::InputMapping inputMapping = inputMappingLoad.mapping;
 
     Engine::CameraSettings cameraSettings;
-    cameraSettings.farPlane = 5000.0f;
-    cameraSettings.maxDistance = 700.0f;
+    cameraSettings.farPlane = 900.0f;
+    cameraSettings.maxDistance = 320.0f;
     cameraSettings.edgePanSpeed = 70.0f;
     cameraSettings.mousePanSensitivity = 0.18f;
     cameraSettings.zoomSensitivity = 32.0f;
@@ -2217,31 +2795,82 @@ int main(int, char**)
     cameraDebugControls.maxFollowLag = camera.followSettings().maxFollowLag;
     Engine::DebugSelectionState debugSelection;
     Renderer::DebugUi::InteractionDebugStats interactionStats;
-    const auto processNavigationDirty = [&]() {
-        if (navigationTilesDirty) {
-            NavigationSyncResult syncResult;
-            frameTimings.navTileSyncMs = measureMilliseconds([&]() {
-                syncResult = syncNavigationTiles();
+    std::function<void()> processNavigationDirty;
+    processNavigationDirty = [&]() {
+        if (navigationTilesDirty && !navigationTilesWorkQueued) {
+            navigationTilesWorkQueued = true;
+            mainThreadWork.enqueue(Engine::MainThreadWorkItem{
+                Engine::BudgetCategory::NavigationCommit,
+                Engine::BudgetPriority::High,
+                "sync navigation tiles",
+                [&]() {
+                    NavigationSyncResult syncResult;
+                    frameTimings.navTileSyncMs = measureMilliseconds([&]() {
+                        syncResult = syncNavigationTiles();
+                    });
+                    lastNavTileSyncChunksProcessed = syncResult.processedChunks;
+                    lastNavTileSyncChunksDeferred = syncResult.deferredChunks;
+                    navigationTilesDirty = syncResult.hasMoreWork;
+                    navigationTilesWorkQueued = false;
+                    navigationConnectivityDirty = navigationConnectivityDirty || syncResult.tileSetChanged;
+                    processNavigationDirty();
+                },
             });
-            navigationTilesDirty = false;
-            navigationConnectivityDirty = navigationConnectivityDirty || syncResult.tileSetChanged;
         }
-        if (navigationConnectivityDirty) {
-            frameTimings.connectivityMs = measureMilliseconds([&]() {
-                rebuildNavigationConnectivity();
+        if (navigationConnectivityDirty && !navigationConnectivityWorkQueued) {
+            navigationConnectivityWorkQueued = true;
+            mainThreadWork.enqueue(Engine::MainThreadWorkItem{
+                Engine::BudgetCategory::DerivedRebuild,
+                Engine::BudgetPriority::Normal,
+                "rebuild navigation connectivity",
+                [&]() {
+                    ConnectivityRebuildResult connectivityResult;
+                    frameTimings.connectivityMs = measureMilliseconds([&]() {
+                        connectivityResult = rebuildNavigationConnectivity();
+                    });
+                    lastConnectivityChunksProcessed = connectivityResult.processedChunks;
+                    lastConnectivityChunksDeferred = connectivityResult.deferredChunks;
+                    navigationConnectivityDirty = connectivityResult.hasMoreWork;
+                    navigationConnectivityWorkQueued = false;
+                    worldGraphDirty = true;
+                    processNavigationDirty();
+                },
             });
-            navigationConnectivityDirty = false;
-            worldGraphDirty = true;
         }
-        if (worldGraphDirty && hasWorldGraphCenter) {
-            frameTimings.worldGraphMs = measureMilliseconds([&]() {
-                rebuildWorldNavigationGraph(currentWorldGraphCenter);
+        if (worldGraphDirty && hasWorldGraphCenter && !navigationConnectivityDirty && !worldGraphWorkQueued) {
+            worldGraphWorkQueued = true;
+            mainThreadWork.enqueue(Engine::MainThreadWorkItem{
+                Engine::BudgetCategory::DerivedRebuild,
+                Engine::BudgetPriority::Low,
+                "rebuild world navigation graph",
+                [&]() {
+                    frameTimings.worldGraphMs = measureMilliseconds([&]() {
+                        rebuildWorldNavigationGraph(currentWorldGraphCenter);
+                    });
+                    worldGraphDirty = false;
+                    worldGraphWorkQueued = false;
+                },
             });
-            worldGraphDirty = false;
+        }
+        if (debugVisibilityDirty && !debugVisibilityWorkQueued) {
+            debugVisibilityWorkQueued = true;
+            mainThreadWork.enqueue(Engine::MainThreadWorkItem{
+                Engine::BudgetCategory::DerivedRebuild,
+                Engine::BudgetPriority::Low,
+                "apply renderer visibility metadata",
+                [&]() {
+                    applyDebugVisibilitySettings();
+                    debugVisibilityDirty = false;
+                    debugVisibilityWorkQueued = false;
+                },
+            });
         }
     };
     const auto enqueueChunkLoad = [&](Engine::ChunkCoord coord) {
-        if (chunkStreamer.isLoaded(coord) || asyncStreaming.pendingLoads.contains(coord)) {
+        if (chunkStreamer.isLoaded(coord) ||
+            asyncStreaming.pendingLoads.contains(coord) ||
+            asyncStreaming.committingLoads.contains(coord) ||
+            asyncStreaming.unloadingChunks.contains(coord)) {
             return;
         }
         const bool alreadyCompleted = std::ranges::any_of(
@@ -2257,18 +2886,14 @@ int main(int, char**)
         objectOverrides.writeToSnapshot(overrideSnapshot);
         const Engine::NavAgentSettings navAgentSnapshot = playerNavAgent;
         const Engine::NavBuildSettings navBuildSettingsSnapshot = navBuildSettings;
-        const bool buildNav = asyncNavigationEnabled;
-        const bool chunkHasOverrides = objectOverrides.hasOverridesForChunk(coord);
+        constexpr bool buildNavWithVisualChunk = false;
         std::optional<Engine::NavigationTileCacheData> cachedNavigationTile;
-        if (buildNav && navigationDebugControls.cacheEnabled && !chunkHasOverrides) {
-            cachedNavigationTile = navigationCache.loadTile(coord);
-        }
 
         if (!asyncTerrainEnabled) {
             asyncStreaming.completedLoads.push_back(generateChunkData(
                 coord,
                 overrideSnapshot,
-                buildNav,
+                buildNavWithVisualChunk,
                 navAgentSnapshot,
                 navBuildSettingsSnapshot,
                 cachedNavigationTile));
@@ -2277,14 +2902,14 @@ int main(int, char**)
 
         const Engine::AsyncJobHandle handle = asyncWork.submit(
             "chunk " + std::to_string(coord.x) + "," + std::to_string(coord.z),
-            [&, coord, overrideSnapshot, buildNav, navAgentSnapshot, navBuildSettingsSnapshot, cachedNavigationTile](std::stop_token stopToken) -> std::any {
+            [&, coord, overrideSnapshot, navAgentSnapshot, navBuildSettingsSnapshot, cachedNavigationTile](std::stop_token stopToken) -> std::any {
                 if (stopToken.stop_requested()) {
                     return GeneratedChunkLoadResult{};
                 }
                 return generateChunkData(
                     coord,
                     overrideSnapshot,
-                    buildNav,
+                    buildNavWithVisualChunk,
                     navAgentSnapshot,
                     navBuildSettingsSnapshot,
                     cachedNavigationTile);
@@ -2313,8 +2938,10 @@ int main(int, char**)
             if (asyncStreaming.desiredChunks.contains(coord)) {
                 continue;
             }
-            if (std::ranges::find(asyncStreaming.pendingUnloads, coord) == asyncStreaming.pendingUnloads.end()) {
+            if (!asyncStreaming.unloadingChunks.contains(coord) &&
+                std::ranges::find(asyncStreaming.pendingUnloads, coord) == asyncStreaming.pendingUnloads.end()) {
                 asyncStreaming.pendingUnloads.push_back(coord);
+                asyncStreaming.unloadingChunks.insert(coord);
             }
         }
 
@@ -2341,47 +2968,56 @@ int main(int, char**)
                 ++asyncStreaming.staleJobs;
                 continue;
             }
+            if (completed.result.type() == typeid(NavigationWorkerBuildResult)) {
+                NavigationWorkerBuildResult result =
+                    std::any_cast<NavigationWorkerBuildResult>(std::move(completed.result));
+                RuntimeNavTileRecord& record = runtimeNavTiles[result.coord];
+                if (record.pendingJob.id == completed.handle.id) {
+                    record.pendingJob = {};
+                }
+                if (!asyncStreaming.desiredChunks.contains(result.coord) || !chunkStreamer.isLoaded(result.coord)) {
+                    record.state = RuntimeNavTileState::Missing;
+                    ++asyncStreaming.staleJobs;
+                    continue;
+                }
+                ++runtimeNavigationStats.workerBuildsCompletedThisFrame;
+                enqueueNavigationTileInsertion(std::move(result));
+                continue;
+            }
             if (completed.result.type() != typeid(GeneratedChunkLoadResult)) {
                 continue;
             }
             GeneratedChunkLoadResult result = std::any_cast<GeneratedChunkLoadResult>(std::move(completed.result));
             asyncStreaming.pendingLoads.erase(result.chunk.coord);
-            if (!asyncStreaming.desiredChunks.contains(result.chunk.coord) || chunkStreamer.isLoaded(result.chunk.coord)) {
+            if (!asyncStreaming.desiredChunks.contains(result.chunk.coord) ||
+                chunkStreamer.isLoaded(result.chunk.coord) ||
+                asyncStreaming.committingLoads.contains(result.chunk.coord)) {
                 ++asyncStreaming.staleJobs;
                 continue;
             }
             asyncStreaming.completedLoads.push_back(std::move(result));
         }
 
-        for (uint32_t index = 0; index < chunkLoadCommitBudget && !asyncStreaming.completedLoads.empty(); ++index) {
+        while (!asyncStreaming.completedLoads.empty()) {
             GeneratedChunkLoadResult generated = std::move(asyncStreaming.completedLoads.front());
             asyncStreaming.completedLoads.pop_front();
             if (!asyncStreaming.desiredChunks.contains(generated.chunk.coord)) {
                 ++asyncStreaming.staleJobs;
                 continue;
             }
-            changed = commitGeneratedChunk(generated) || changed;
-            ++asyncStreaming.committedLoadsThisFrame;
+            beginChunkCommit(std::move(generated));
         }
 
-        for (uint32_t index = 0; index < chunkUnloadCommitBudget && !asyncStreaming.pendingUnloads.empty(); ++index) {
+        while (!asyncStreaming.pendingUnloads.empty()) {
             const Engine::ChunkCoord coord = asyncStreaming.pendingUnloads.front();
             asyncStreaming.pendingUnloads.pop_front();
             if (asyncStreaming.desiredChunks.contains(coord) || !chunkStreamer.isLoaded(coord)) {
+                asyncStreaming.unloadingChunks.erase(coord);
                 continue;
             }
-            chunkStreamer.unloadChunk(coord, world, terrain, &spatialRegistry);
-            navigation.destroyTile(coord);
-            navigationChunks.erase(coord);
-            navigationConnectivityDirty = true;
-            worldGraphDirty = true;
-            changed = true;
-            ++asyncStreaming.committedUnloadsThisFrame;
+            enqueueChunkUnloadCommit(coord);
         }
 
-        if (changed) {
-            recomputeNavigationBlockerStats();
-        }
         return changed;
     };
     const bool initialChunksChanged = updateChunkStreamingAsync(camera.state().pivot);
@@ -2390,11 +3026,11 @@ int main(int, char**)
     pickingDirty = pickingDirty || initialChunksChanged;
     updateWorldNavigationGraphCenter(camera.state().pivot);
     processNavigationDirty();
-    debugVisibilityDirty = terrain.updateLods(camera.position()) || debugVisibilityDirty;
-    if (debugVisibilityDirty) {
-        applyDebugVisibilitySettings();
-        debugVisibilityDirty = false;
-    }
+    lastTerrainLodUpdate = terrain.updateLodsBudgeted(camera.position(), UINT32_MAX);
+    debugVisibilityDirty = lastTerrainLodUpdate.rebuiltAny() || debugVisibilityDirty;
+    processNavigationDirty();
+    frameBudget.beginFrame({1000.0f, true});
+    mainThreadWork.drain(frameBudget);
 
     playerObject = world.createObject(Engine::ObjectId::player());
     const Renderer::MeshInstanceHandle playerInstance = Renderer::createInstance(playerStaticMesh);
@@ -2445,13 +3081,67 @@ int main(int, char**)
 
     world.syncRenderState();
 
+    const auto finishPendingChunkUnloadNow = [&](const std::shared_ptr<PendingChunkUnload>& pending) {
+        if (!pending || pending->phase == ChunkUnloadPhase::Done) {
+            return;
+        }
+
+        if (pending->phase == ChunkUnloadPhase::RemoveNavigation) {
+            navigation.destroyTile(pending->coord);
+            navigationChunks.erase(pending->coord);
+            if (auto navIt = runtimeNavTiles.find(pending->coord); navIt != runtimeNavTiles.end()) {
+                asyncWork.cancel(navIt->second.pendingJob);
+                runtimeNavTiles.erase(navIt);
+            }
+            navigationConnectivity.removeChunk(pending->coord);
+        }
+
+        if (pending->phase == ChunkUnloadPhase::RemoveNavigation ||
+            pending->phase == ChunkUnloadPhase::DestroyPropsBatch) {
+            for (; pending->nextObjectIndex < pending->content.objects.size(); ++pending->nextObjectIndex) {
+                const Engine::WorldObjectHandle object = pending->content.objects[pending->nextObjectIndex];
+                spatialRegistry.remove(object);
+                world.destroyObjectAndRendererInstance(object);
+            }
+        }
+
+        if (pending->phase == ChunkUnloadPhase::RemoveNavigation ||
+            pending->phase == ChunkUnloadPhase::DestroyPropsBatch ||
+            pending->phase == ChunkUnloadPhase::DestroyTerrain) {
+            terrain.destroyTile(pending->content.terrain);
+        }
+
+        if (pending->phase == ChunkUnloadPhase::RemoveNavigation ||
+            pending->phase == ChunkUnloadPhase::DestroyPropsBatch ||
+            pending->phase == ChunkUnloadPhase::DestroyTerrain ||
+            pending->phase == ChunkUnloadPhase::DestroyRenderGroup) {
+            Renderer::destroyRenderGroup(pending->content.renderGroup);
+        }
+
+        asyncStreaming.unloadingChunks.erase(pending->coord);
+        pending->phase = ChunkUnloadPhase::Done;
+    };
+
     const auto clearPendingChunkWork = [&]() {
         for (const auto& [_, handle] : asyncStreaming.pendingLoads) {
             asyncWork.cancel(handle);
         }
         asyncStreaming.pendingLoads.clear();
         asyncStreaming.completedLoads.clear();
+        asyncStreaming.completedNavigationBuilds.clear();
         asyncStreaming.pendingUnloads.clear();
+        asyncStreaming.committingLoads.clear();
+        asyncStreaming.unloadingChunks.clear();
+        for (const auto& [_, record] : runtimeNavTiles) {
+            asyncWork.cancel(record.pendingJob);
+        }
+        for (const std::shared_ptr<PendingChunkUnload>& pending : activeChunkUnloads) {
+            finishPendingChunkUnloadNow(pending);
+        }
+        activeChunkUnloads.clear();
+        runtimeNavTiles.clear();
+        navigationConnectivityDirtyChunks.clear();
+        mainThreadWork.clear();
         asyncWork.pollCompleted();
     };
 
@@ -2472,11 +3162,9 @@ int main(int, char**)
         updateWorldNavigationGraphCenter(camera.state().pivot);
         processNavigationDirty();
         cancelCommandedActorPaths();
-        debugVisibilityDirty = terrain.updateLods(camera.position()) || debugVisibilityDirty || chunksChanged;
-        if (debugVisibilityDirty) {
-            applyDebugVisibilitySettings();
-            debugVisibilityDirty = false;
-        }
+        lastTerrainLodUpdate = terrain.updateLodsBudgeted(camera.position(), terrainLodRebuildsPerFrame);
+        debugVisibilityDirty = lastTerrainLodUpdate.rebuiltAny() || debugVisibilityDirty || chunksChanged;
+        processNavigationDirty();
         world.syncRenderState();
     };
 
@@ -2518,39 +3206,54 @@ int main(int, char**)
         return request;
     };
 
+    float previousFrameCpuMs = 0.0f;
+    float previousDebugUiBuildMs = 0.0f;
+    float previousDebugUiRenderMs = 0.0f;
+    float previousBgfxFrameMs = 0.0f;
+    float previousPostFrameRequestsMs = 0.0f;
     while (running) {
+        const auto frameCpuStart = std::chrono::steady_clock::now();
         frameTimings = {};
+        runtimeNavigationStats = {};
+        frameTimings.previousFrameCpuMs = previousFrameCpuMs;
+        frameTimings.debugUiBuildMs = previousDebugUiBuildMs;
+        frameTimings.debugUiRenderMs = previousDebugUiRenderMs;
+        frameTimings.bgfxFrameMs = previousBgfxFrameMs;
+        frameTimings.postFrameRequestsMs = previousPostFrameRequestsMs;
+        frameBudget.beginFrame(frameBudgetSettings);
         loop.beginFrame();
         input.beginFrame();
 
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            if (debugUiEnabled) {
-                Renderer::DebugUi::processEvent(event);
+        frameTimings.eventPollingMs = measureMilliseconds([&]() {
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                if (debugUiEnabled) {
+                    Renderer::DebugUi::processEvent(event);
+                }
+                bool sendToGameInput = true;
+                switch (event.type) {
+                    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                    case SDL_EVENT_MOUSE_BUTTON_UP:
+                    case SDL_EVENT_MOUSE_MOTION:
+                    case SDL_EVENT_MOUSE_WHEEL:
+                        sendToGameInput = !debugUiWantsMouse;
+                        break;
+                    case SDL_EVENT_KEY_DOWN:
+                    case SDL_EVENT_KEY_UP:
+                    case SDL_EVENT_TEXT_INPUT:
+                        sendToGameInput = !debugUiWantsKeyboard;
+                        break;
+                    default:
+                        break;
+                }
+                if (sendToGameInput) {
+                    input.processEvent(event);
+                }
+                if (event.type == SDL_EVENT_QUIT) {
+                    running = false;
+                }
             }
-            bool sendToGameInput = true;
-            switch (event.type) {
-                case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                case SDL_EVENT_MOUSE_BUTTON_UP:
-                case SDL_EVENT_MOUSE_MOTION:
-                case SDL_EVENT_MOUSE_WHEEL:
-                    sendToGameInput = !debugUiWantsMouse;
-                    break;
-                case SDL_EVENT_KEY_DOWN:
-                case SDL_EVENT_KEY_UP:
-                case SDL_EVENT_TEXT_INPUT:
-                    sendToGameInput = !debugUiWantsKeyboard;
-                    break;
-                default:
-                    break;
-            }
-            if (sendToGameInput) {
-                input.processEvent(event);
-            }
-            if (event.type == SDL_EVENT_QUIT) {
-                running = false;
-            }
-        }
+        });
 
         int width = currentWidth;
         int height = currentHeight;
@@ -2568,7 +3271,9 @@ int main(int, char**)
         }
         debugUiWantsMouse = debugUiEnabled && Renderer::DebugUi::wantsMouseCapture();
         debugUiWantsKeyboard = debugUiEnabled && Renderer::DebugUi::wantsKeyboardCapture();
-        inputMapping.publishEvents(input, events);
+        frameTimings.inputMappingMs = measureMilliseconds([&]() {
+            inputMapping.publishEvents(input, events);
+        });
         playerNavAgent = toEngineAgentSettings(navigationDebugControls.agent);
         if (pressedAction(events, "player.set_destination")) {
             destinationClickTracking = true;
@@ -2678,7 +3383,9 @@ int main(int, char**)
         }
 
         const glm::vec3 previousCameraPivot = camera.state().pivot;
-        camera.update(events, loop.frameDeltaSeconds(), playerCameraTarget);
+        frameTimings.cameraUpdateMs = measureMilliseconds([&]() {
+            camera.update(events, loop.frameDeltaSeconds(), playerCameraTarget);
+        });
         bool chunksChanged = false;
         frameTimings.chunkStreamingMs = measureMilliseconds([&]() {
             chunksChanged = updateChunkStreamingAsync(camera.state().pivot);
@@ -2693,13 +3400,17 @@ int main(int, char**)
         }
         updateWorldNavigationGraphCenter(camera.state().pivot);
         processNavigationDirty();
-        if (terrain.updateLods(camera.position())) {
-            debugVisibilityDirty = true;
-        }
-        if (debugVisibilityDirty) {
-            applyDebugVisibilitySettings();
-            debugVisibilityDirty = false;
-        }
+        frameTimings.terrainLodMs = measureMilliseconds([&]() {
+            lastTerrainLodUpdate = terrain.updateLodsBudgeted(camera.position(), terrainLodRebuildsPerFrame);
+            if (lastTerrainLodUpdate.rebuiltAny()) {
+                debugVisibilityDirty = true;
+            }
+        });
+        processNavigationDirty();
+        frameTimings.budgetDrainMs = measureMilliseconds([&]() {
+            mainThreadWork.drain(frameBudget);
+        });
+        processNavigationDirty();
         Renderer::setAtmosphereSettings(atmosphere);
         if (BuildDebugToolsEnabled) {
             Renderer::setDebugDrawSettings(debugDrawSettings);
@@ -2741,23 +3452,12 @@ int main(int, char**)
                 " actor(s).";
         }
 
-        while (loop.shouldRunFixedUpdate()) {
-            world.fixedUpdate(loop.fixedDeltaSeconds());
-            actors.fixedUpdate(
-                playerActor,
-                events,
-                terrain,
-                world,
-                spatialRegistry,
-                blockingCollision,
-                navigation,
-                playerNavAgent,
-                loop.fixedDeltaSeconds());
-            Engine::EventQueue actorNoInputEvents;
-            for (Engine::ActorHandle actor : demoActors) {
+        frameTimings.fixedUpdateMs = measureMilliseconds([&]() {
+            while (loop.shouldRunFixedUpdate()) {
+                world.fixedUpdate(loop.fixedDeltaSeconds());
                 actors.fixedUpdate(
-                    actor,
-                    actorNoInputEvents,
+                    playerActor,
+                    events,
                     terrain,
                     world,
                     spatialRegistry,
@@ -2765,14 +3465,29 @@ int main(int, char**)
                     navigation,
                     playerNavAgent,
                     loop.fixedDeltaSeconds());
+                Engine::EventQueue actorNoInputEvents;
+                for (Engine::ActorHandle actor : demoActors) {
+                    actors.fixedUpdate(
+                        actor,
+                        actorNoInputEvents,
+                        terrain,
+                        world,
+                        spatialRegistry,
+                        blockingCollision,
+                        navigation,
+                        playerNavAgent,
+                        loop.fixedDeltaSeconds());
+                }
+                updateSpatialRegistryForLoadedObjects();
+                if (const std::optional<glm::vec3> playerPosition = world.position(playerObject)) {
+                    spatialRegistry.update(playerObject, *playerPosition);
+                }
+                loop.consumeFixedUpdate();
             }
-            updateSpatialRegistryForLoadedObjects();
-            if (const std::optional<glm::vec3> playerPosition = world.position(playerObject)) {
-                spatialRegistry.update(playerObject, *playerPosition);
-            }
-            loop.consumeFixedUpdate();
-        }
-        world.syncRenderState();
+        });
+        frameTimings.worldSyncMs = measureMilliseconds([&]() {
+            world.syncRenderState();
+        });
 
         const bool interactionNeedsPicking =
             pressedAction(events, "interaction.select") ||
@@ -2808,8 +3523,11 @@ int main(int, char**)
             debugUiEnabled &&
             debugDrawSettings.navigationNearestPoint &&
             debugSelection.terrainHit) {
-            nearestNavigationPoint = navigation.nearestNavigablePoint(debugSelection.terrainHit->position, playerNavAgent);
+            frameTimings.nearestNavigationPointMs = measureMilliseconds([&]() {
+                nearestNavigationPoint = navigation.nearestNavigablePoint(debugSelection.terrainHit->position, playerNavAgent);
+            });
         }
+        const auto interactionCpuStart = std::chrono::steady_clock::now();
         if (destinationClickRequested) {
             if (debugSelection.hoveredObject) {
                 Engine::InteractionEvent interaction;
@@ -2940,37 +3658,44 @@ int main(int, char**)
             worldSaveControls.status = outcome.status;
             interactionStats = makeInteractionDebugStats(outcome);
         }
+        frameTimings.interactionMs =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - interactionCpuStart).count();
 
         if (BuildDebugToolsEnabled) {
-            enqueueDebugPrimitives(
-                renderView,
-                debugDrawSettings,
-                debugSelection,
-                world,
-                chunkStreamer,
-                terrain,
-                navigation,
-                navigationConnectivity,
-                worldNavigationGraph,
-                lastWorldRoute,
-                navigationChunks,
-                playerNavAgent,
-                playerObject,
-                actors,
-                playerActor,
-                actorSelection,
-                lastFormationDestinations,
-                lastFailedFormationDestinations
-            );
+            frameTimings.debugPrimitiveEnqueueMs = measureMilliseconds([&]() {
+                enqueueDebugPrimitives(
+                    renderView,
+                    debugDrawSettings,
+                    debugSelection,
+                    world,
+                    chunkStreamer,
+                    terrain,
+                    navigation,
+                    navigationConnectivity,
+                    worldNavigationGraph,
+                    lastWorldRoute,
+                    navigationChunks,
+                    playerNavAgent,
+                    playerObject,
+                    actors,
+                    playerActor,
+                    actorSelection,
+                    lastFormationDestinations,
+                    lastFailedFormationDestinations
+                );
+            });
         }
         Renderer::SceneDrawStats drawStats;
         frameTimings.drawSubmissionMs = measureMilliseconds([&]() {
             drawStats = Renderer::drawScene(renderView);
         });
         if (BuildDebugToolsEnabled) {
-            Renderer::drawDebugPrimitives(renderView);
+            frameTimings.debugPrimitiveDrawMs = measureMilliseconds([&]() {
+                Renderer::drawDebugPrimitives(renderView);
+            });
         }
         if (debugUiEnabled) {
+            const auto debugUiBuildStart = std::chrono::steady_clock::now();
             Renderer::DebugUi::TerrainLodDebugStats terrainLods;
             terrainLods.counts = terrain.lodCounts();
             terrainLods.activeNavMaxSlopeDegrees = playerNavAgent.maxSlopeDegrees;
@@ -3150,6 +3875,7 @@ int main(int, char**)
             }
             navigationStats.agent = toDebugAgentSettings(playerNavAgent);
             navigationStats.build = toDebugBuildSettings(navigation.settings());
+            navigationStats.navigationResolution = terrain.settings().navigationResolution;
             const Engine::NavigationCacheStats cacheStats = navigationCache.stats();
             navigationStats.cacheIdentity = navigationCache.manifest().identityHash;
             navigationStats.cacheTileHits = cacheStats.tileHits;
@@ -3162,14 +3888,59 @@ int main(int, char**)
             navigationStats.cacheGraphHits = cacheStats.graphHits;
             navigationStats.cacheGraphMisses = cacheStats.graphMisses;
             navigationStats.cacheGraphWrites = cacheStats.graphWrites;
+            navigationStats.navTileCacheHitsThisFrame = runtimeNavigationStats.cacheHitsThisFrame;
+            navigationStats.navTileCacheMissesThisFrame = runtimeNavigationStats.cacheMissesThisFrame;
+            navigationStats.navTileCacheLoadFailuresThisFrame = runtimeNavigationStats.cacheLoadFailuresThisFrame;
+            navigationStats.navTileWorkerBuildsQueuedThisFrame = runtimeNavigationStats.workerBuildsQueuedThisFrame;
+            navigationStats.navTileWorkerBuildsCompletedThisFrame = runtimeNavigationStats.workerBuildsCompletedThisFrame;
+            navigationStats.navTileWorkerBuildsFailedThisFrame = runtimeNavigationStats.workerBuildsFailedThisFrame;
+            for (const auto& [_, record] : runtimeNavTiles) {
+                switch (record.state) {
+                    case RuntimeNavTileState::Ready:
+                        ++navigationStats.navTileReadyChunks;
+                        break;
+                    case RuntimeNavTileState::CachePending:
+                    case RuntimeNavTileState::BuildPending:
+                    case RuntimeNavTileState::Dirty:
+                        ++navigationStats.navTilePendingChunks;
+                        break;
+                    case RuntimeNavTileState::Failed:
+                        ++navigationStats.navTileFailedChunks;
+                        break;
+                    case RuntimeNavTileState::Missing:
+                        break;
+                }
+            }
+            navigationStats.navTileSyncChunksThisFrame = lastNavTileSyncChunksProcessed;
+            navigationStats.navTileSyncDeferredChunks = lastNavTileSyncChunksDeferred;
+            navigationStats.connectivityChunksThisFrame = lastConnectivityChunksProcessed;
+            navigationStats.connectivityDeferredChunks = lastConnectivityChunksDeferred;
             navigationStats.cacheLastPath = cacheStats.lastPath.string();
             navigationStats.cacheLastMessage = cacheStats.lastMessage;
+            navigationStats.previousFrameCpuMs = frameTimings.previousFrameCpuMs;
+            navigationStats.eventPollingMs = frameTimings.eventPollingMs;
+            navigationStats.inputMappingMs = frameTimings.inputMappingMs;
+            navigationStats.cameraUpdateMs = frameTimings.cameraUpdateMs;
             navigationStats.chunkStreamingMs = frameTimings.chunkStreamingMs;
+            navigationStats.terrainLodMs = frameTimings.terrainLodMs;
+            navigationStats.terrainLodRebuildsThisFrame = lastTerrainLodUpdate.rebuiltCount;
+            navigationStats.terrainLodPendingRebuilds = lastTerrainLodUpdate.pendingCount;
+            navigationStats.budgetDrainMs = frameTimings.budgetDrainMs;
             navigationStats.navTileSyncMs = frameTimings.navTileSyncMs;
             navigationStats.connectivityMs = frameTimings.connectivityMs;
             navigationStats.worldGraphMs = frameTimings.worldGraphMs;
+            navigationStats.fixedUpdateMs = frameTimings.fixedUpdateMs;
+            navigationStats.worldSyncMs = frameTimings.worldSyncMs;
             navigationStats.pickingMs = frameTimings.pickingMs;
+            navigationStats.nearestNavigationPointMs = frameTimings.nearestNavigationPointMs;
+            navigationStats.interactionMs = frameTimings.interactionMs;
+            navigationStats.debugPrimitiveEnqueueMs = frameTimings.debugPrimitiveEnqueueMs;
             navigationStats.drawSubmissionMs = frameTimings.drawSubmissionMs;
+            navigationStats.debugPrimitiveDrawMs = frameTimings.debugPrimitiveDrawMs;
+            navigationStats.debugUiBuildMs = frameTimings.debugUiBuildMs;
+            navigationStats.debugUiRenderMs = frameTimings.debugUiRenderMs;
+            navigationStats.bgfxFrameMs = frameTimings.bgfxFrameMs;
+            navigationStats.postFrameRequestsMs = frameTimings.postFrameRequestsMs;
             navigationStats.asyncWorkerCount = asyncWork.workerCount();
             navigationStats.asyncPendingChunkJobs = static_cast<uint32_t>(asyncStreaming.pendingLoads.size());
             navigationStats.asyncCompletedChunks = static_cast<uint32_t>(asyncStreaming.completedLoads.size());
@@ -3182,6 +3953,23 @@ int main(int, char**)
             navigationStats.asyncMaxTerrainGenerationMs = asyncStreaming.maxTerrainGenerationMs;
             navigationStats.asyncAverageNavigationBuildMs = asyncStreaming.averageNavigationBuildMs;
             navigationStats.asyncMaxNavigationBuildMs = asyncStreaming.maxNavigationBuildMs;
+            const Engine::FrameBudgetStats& budgetStats = frameBudget.stats();
+            navigationStats.frameBudgetMs = budgetStats.budgetMs;
+            navigationStats.frameBudgetUsedMs = budgetStats.usedMs;
+            navigationStats.frameBudgetOverrunMs = budgetStats.overrunMs;
+            navigationStats.frameBudgetItemsRun = budgetStats.itemsRun;
+            navigationStats.frameBudgetItemsDeferred = budgetStats.itemsDeferred;
+            navigationStats.mainThreadPendingWorkItems = mainThreadWork.pendingCount();
+            navigationStats.slowestBudgetItemMs = budgetStats.slowestItemMs;
+            navigationStats.slowestBudgetItemLabel = budgetStats.slowestItemLabel;
+            navigationStats.longFrameThresholdMs = longFrameDiagnostics.thresholdMs;
+            navigationStats.longFrameCount = longFrameDiagnostics.count;
+            navigationStats.lastLongFrameMs = longFrameDiagnostics.lastFrameMs;
+            navigationStats.lastLongFrameSummary = longFrameDiagnostics.lastSummary;
+            for (uint32_t index = 0; index < navigationStats.frameBudgetCategoryMs.size() &&
+                index < budgetStats.perCategoryMs.size(); ++index) {
+                navigationStats.frameBudgetCategoryMs[index] = budgetStats.perCategoryMs[index];
+            }
             const Renderer::DebugUi::DebugPickingStats pickingStats =
                 makeDebugPickingStats(debugSelection, world, objectArchetypes, objectOverrides, chunkStreamer);
             const Renderer::DebugUi::PlayerActorDebugStats playerStats =
@@ -3227,12 +4015,27 @@ int main(int, char**)
             }
             asyncTerrainEnabled = navigationDebugControls.asyncTerrainEnabled;
             asyncNavigationEnabled = navigationDebugControls.asyncNavigationEnabled;
-            chunkLoadCommitBudget = std::max(navigationDebugControls.chunkLoadCommitBudget, 1u);
-            chunkUnloadCommitBudget = std::max(navigationDebugControls.chunkUnloadCommitBudget, 1u);
-            Renderer::DebugUi::render(1, viewportExtent(width), viewportExtent(height));
+            frameBudgetSettings.enabled = navigationDebugControls.mainThreadBudgetEnabled;
+            frameBudgetSettings.maxMainThreadWorkMs = std::max(navigationDebugControls.mainThreadBudgetMs, 0.0f);
+            propSpawnBatchSize = std::max(navigationDebugControls.propSpawnBatchSize, 1u);
+            terrainLodRebuildsPerFrame = navigationDebugControls.terrainLodRebuildsPerFrame;
+            navTileSyncChunksPerFrame = std::max(navigationDebugControls.navTileSyncChunksPerFrame, 1u);
+            connectivityChunksPerFrame = std::max(navigationDebugControls.connectivityChunksPerFrame, 1u);
+            worldGraphRecenterThresholdChunks = std::max(navigationDebugControls.worldGraphRecenterThresholdChunks, 1u);
+            frameTimings.debugUiBuildMs =
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - debugUiBuildStart).count();
+            frameTimings.debugUiRenderMs = measureMilliseconds([&]() {
+                Renderer::DebugUi::render(1, viewportExtent(width), viewportExtent(height));
+            });
+            previousDebugUiBuildMs = frameTimings.debugUiBuildMs;
+            previousDebugUiRenderMs = frameTimings.debugUiRenderMs;
         }
-        bgfx::touch(0);
-        bgfx::frame();
+        frameTimings.bgfxFrameMs = measureMilliseconds([&]() {
+            bgfx::touch(0);
+            bgfx::frame();
+        });
+        previousBgfxFrameMs = frameTimings.bgfxFrameMs;
+        const auto postFrameRequestsStart = std::chrono::steady_clock::now();
         if (navigationDebugControls.rebuildVisibleTilesRequested) {
             navigationDebugControls.rebuildVisibleTilesRequested = false;
             playerNavAgent = toEngineAgentSettings(navigationDebugControls.agent);
@@ -3240,6 +4043,7 @@ int main(int, char**)
             refreshNavigationCacheManifest();
             navigation = Engine::NavigationSystem(navBuildSettings);
             navigationChunks.clear();
+            runtimeNavTiles.clear();
             navigationConnectivity.clear();
             worldNavigationGraph.clear();
             hasWorldGraphCenter = false;
@@ -3260,6 +4064,7 @@ int main(int, char**)
             settings.portalMergeDistance = navigationDebugControls.portalMergeDistance;
             settings.neighborLinkDistance = navigationDebugControls.portalNeighborLinkDistance;
             navigationConnectivity.setSettings(settings);
+            navigationConnectivityDirtyChunks.clear();
             navigationConnectivityDirty = true;
             worldGraphDirty = true;
             processNavigationDirty();
@@ -3354,7 +4159,8 @@ int main(int, char**)
                 pickingDirty = true;
                 updateWorldNavigationGraphCenter(camera.state().pivot);
                 processNavigationDirty();
-                debugVisibilityDirty = terrain.updateLods(camera.position()) || debugVisibilityDirty;
+                lastTerrainLodUpdate = terrain.updateLodsBudgeted(camera.position(), terrainLodRebuildsPerFrame);
+                debugVisibilityDirty = lastTerrainLodUpdate.rebuiltAny() || debugVisibilityDirty;
                 cancelCommandedActorPaths();
                 actors.setPosition(playerActor, result.snapshot.player.position, &terrain, &world);
                 if (const std::optional<glm::vec3> playerPosition = world.position(playerObject)) {
@@ -3368,10 +4174,7 @@ int main(int, char**)
                         spatialRegistry.insert(object, *position);
                     }
                 }
-                if (debugVisibilityDirty) {
-                    applyDebugVisibilitySettings();
-                    debugVisibilityDirty = false;
-                }
+                processNavigationDirty();
                 world.syncRenderState();
                 debugSelection = {};
                 worldSaveControls.status = "Loaded world state.";
@@ -3471,6 +4274,22 @@ int main(int, char**)
                 worldSaveControls.status = outcome.status;
                 interactionStats = makeInteractionDebugStats(outcome);
             }
+        }
+        frameTimings.postFrameRequestsMs =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - postFrameRequestsStart).count();
+        previousPostFrameRequestsMs = frameTimings.postFrameRequestsMs;
+        const float currentFrameCpuMs =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - frameCpuStart).count();
+        previousFrameCpuMs = currentFrameCpuMs;
+        if (currentFrameCpuMs > longFrameDiagnostics.thresholdMs) {
+            ++longFrameDiagnostics.count;
+            longFrameDiagnostics.lastFrameMs = currentFrameCpuMs;
+            longFrameDiagnostics.lastSummary =
+                makeLongFrameSummary(frameTimings, frameBudget.stats(), mainThreadWork.pendingCount());
+            SDL_Log(
+                "Long frame %.2f ms: %s",
+                currentFrameCpuMs,
+                longFrameDiagnostics.lastSummary.c_str());
         }
         events.clear();
     }

@@ -30,6 +30,7 @@ namespace Engine {
             profile.build.edgeMaxError = build["edge_max_error"].as<float>(profile.build.edgeMaxError);
             profile.build.detailSampleDist = build["detail_sample_dist"].as<float>(profile.build.detailSampleDist);
             profile.build.detailSampleMaxError = build["detail_sample_max_error"].as<float>(profile.build.detailSampleMaxError);
+            profile.navigationResolution = build["navigation_resolution"].as<uint32_t>(profile.navigationResolution);
 
             profile.agent.radius = std::max(profile.agent.radius, 0.01f);
             profile.agent.height = std::max(profile.agent.height, 0.01f);
@@ -40,6 +41,7 @@ namespace Engine {
             profile.build.maxTiles = std::max(profile.build.maxTiles, 1u);
             profile.build.maxPolysPerTile = std::max(profile.build.maxPolysPerTile, 1u);
             profile.build.maxVertsPerPoly = std::clamp(profile.build.maxVertsPerPoly, 3u, 12u);
+            profile.navigationResolution = std::max(profile.navigationResolution, 2u);
             return profile;
         }
     }
@@ -52,6 +54,7 @@ namespace Engine {
         profile.build = {};
         profile.build.cellSize = 0.8f;
         profile.build.cellHeight = 0.25f;
+        profile.navigationResolution = 17;
         return profile;
     }
 

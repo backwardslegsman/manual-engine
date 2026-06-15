@@ -64,22 +64,37 @@ namespace Engine {
         return true;
     }
 
-    void ChunkStreamer::unloadChunk(ChunkCoord coord, World& world, TerrainSystem& terrain, SpatialRegistry* spatialRegistry)
+    std::optional<ChunkContent> ChunkStreamer::detachLoadedChunk(ChunkCoord coord)
     {
         const auto chunkIt = activeChunks_.find(coord);
         if (chunkIt == activeChunks_.end()) {
+            return std::nullopt;
+        }
+
+        ChunkContent content{
+            chunkIt->second.terrain,
+            std::move(chunkIt->second.objects),
+            chunkIt->second.renderGroup,
+        };
+        activeChunks_.erase(chunkIt);
+        return content;
+    }
+
+    void ChunkStreamer::unloadChunk(ChunkCoord coord, World& world, TerrainSystem& terrain, SpatialRegistry* spatialRegistry)
+    {
+        std::optional<ChunkContent> content = detachLoadedChunk(coord);
+        if (!content) {
             return;
         }
 
-        for (WorldObjectHandle object : chunkIt->second.objects) {
+        for (WorldObjectHandle object : content->objects) {
             if (spatialRegistry) {
                 spatialRegistry->remove(object);
             }
             world.destroyObjectAndRendererInstance(object);
         }
-        terrain.destroyTile(chunkIt->second.terrain);
-        Renderer::destroyRenderGroup(chunkIt->second.renderGroup);
-        activeChunks_.erase(chunkIt);
+        terrain.destroyTile(content->terrain);
+        Renderer::destroyRenderGroup(content->renderGroup);
     }
 
     void ChunkStreamer::unloadAll(World& world, TerrainSystem& terrain, SpatialRegistry* spatialRegistry)

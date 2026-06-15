@@ -10,6 +10,7 @@ navigation_profiles:
       build:
         cell_size: 0.8
         cell_height: 0.25
+        navigation_resolution: 17
         tile_border_size: 0
         max_tiles: 256
         max_polys_per_tile: 4096

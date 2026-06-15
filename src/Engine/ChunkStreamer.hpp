@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -55,6 +56,7 @@ namespace Engine {
         );
         void loadChunk(ChunkCoord coord, World& world, TerrainSystem& terrain, const ChunkContentFactory& factory);
         bool registerLoadedChunk(ChunkCoord coord, ChunkContent content);
+        std::optional<ChunkContent> detachLoadedChunk(ChunkCoord coord);
         void unloadChunk(ChunkCoord coord, World& world, TerrainSystem& terrain, SpatialRegistry* spatialRegistry = nullptr);
         void unloadAll(World& world, TerrainSystem& terrain, SpatialRegistry* spatialRegistry = nullptr);
 

@@ -327,6 +327,8 @@ namespace Engine {
         diagnostics.source = NavigationTileSource::LiveBuild;
         diagnostics.terrainVertexCount = static_cast<uint32_t>(buildData.vertices.size());
         diagnostics.terrainTriangleCount = static_cast<uint32_t>(buildData.indices.size() / 3);
+        diagnostics.sourceResolution =
+            static_cast<uint32_t>(std::round(std::sqrt(static_cast<float>(buildData.vertices.size()))));
         diagnostics.blockerVertexCount = static_cast<uint32_t>(buildData.blockingVertices.size());
         diagnostics.blockerTriangleCount = static_cast<uint32_t>(buildData.blockingIndices.size() / 3);
         diagnostics.bounds = buildData.bounds;

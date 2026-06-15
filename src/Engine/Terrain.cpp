@@ -46,6 +46,7 @@ namespace Engine {
     {
         settings_.chunkSize = std::max(settings_.chunkSize, 1.0f);
         settings_.resolution = std::max(settings_.resolution, 2u);
+        settings_.navigationResolution = std::max(settings_.navigationResolution, 2u);
         settings_.skirtDepth = std::max(settings_.skirtDepth, 0.0f);
         for (uint32_t index = 0; index < settings_.lodLevels.size(); ++index) {
             TerrainLodLevel& level = settings_.lodLevels[index];
@@ -92,6 +93,15 @@ namespace Engine {
         const GeneratedTerrainTileData& generated,
         Renderer::MaterialHandle material)
     {
+        const TerrainTileHandle handle = createCpuTileFromGenerated(generated, material);
+        ensureRendererTerrain(handle);
+        return handle;
+    }
+
+    TerrainTileHandle TerrainSystem::createCpuTileFromGenerated(
+        const GeneratedTerrainTileData& generated,
+        Renderer::MaterialHandle material)
+    {
         TerrainTile terrain;
         terrain.alive = true;
         terrain.coord = generated.coord;
@@ -108,11 +118,23 @@ namespace Engine {
         }
 
         terrain.currentLod = 0;
-        if (settings_.createRendererResources) {
-            terrain.rendererTerrain = createRendererTerrain(terrain, terrain.currentLod);
-        }
-
         return storeTile(std::move(terrain));
+    }
+
+    Renderer::TerrainHandle TerrainSystem::ensureRendererTerrain(TerrainTileHandle handle)
+    {
+        TerrainTile* terrain = tile(handle);
+        if (!terrain) {
+            return {};
+        }
+        if (!settings_.createRendererResources) {
+            return terrain->rendererTerrain;
+        }
+        if (terrain->rendererTerrain.id != UINT32_MAX) {
+            return terrain->rendererTerrain;
+        }
+        terrain->rendererTerrain = createRendererTerrain(*terrain, terrain->currentLod);
+        return terrain->rendererTerrain;
     }
 
     TerrainTileHandle TerrainSystem::createTileFromHeights(
@@ -181,7 +203,12 @@ namespace Engine {
 
     bool TerrainSystem::updateLods(const glm::vec3& cameraPosition)
     {
-        bool rebuilt = false;
+        return updateLodsBudgeted(cameraPosition, UINT32_MAX).rebuiltAny();
+    }
+
+    TerrainLodUpdateResult TerrainSystem::updateLodsBudgeted(const glm::vec3& cameraPosition, uint32_t maxRebuilds)
+    {
+        TerrainLodUpdateResult result;
         for (TerrainTile& terrain : tiles_) {
             if (!terrain.alive) {
                 continue;
@@ -192,17 +219,22 @@ namespace Engine {
                 continue;
             }
 
+            if (result.rebuiltCount >= maxRebuilds) {
+                ++result.pendingCount;
+                continue;
+            }
+
             if (!settings_.createRendererResources) {
                 terrain.currentLod = desiredLod;
-                rebuilt = true;
+                ++result.rebuiltCount;
                 continue;
             }
             Renderer::destroyTerrainTile(terrain.rendererTerrain);
             terrain.currentLod = desiredLod;
             terrain.rendererTerrain = createRendererTerrain(terrain, terrain.currentLod);
-            rebuilt = true;
+            ++result.rebuiltCount;
         }
-        return rebuilt;
+        return result;
     }
 
     std::array<uint32_t, TerrainLodLevelCount> TerrainSystem::lodCounts() const
@@ -475,34 +507,63 @@ namespace Engine {
 
     std::optional<NavigationTerrainBuildData> TerrainSystem::navigationBuildData(TerrainTileHandle handle) const
     {
+        return navigationBuildData(handle, settings_.navigationResolution);
+    }
+
+    std::optional<NavigationTerrainBuildData> TerrainSystem::navigationBuildData(
+        TerrainTileHandle handle,
+        uint32_t navigationResolution) const
+    {
         const TerrainTile* terrain = tile(handle);
         const std::optional<Renderer::Aabb> bounds = tileWorldBounds(handle);
         if (!terrain || !bounds || terrain->heights.empty() || terrain->resolution < 2) {
             return std::nullopt;
         }
 
+        const uint32_t resolution = std::max(navigationResolution, 2u);
         NavigationTerrainBuildData buildData;
         buildData.coord = terrain->coord;
         buildData.bounds = *bounds;
-        buildData.vertices.reserve(static_cast<size_t>(terrain->resolution) * terrain->resolution);
-        buildData.indices.reserve(static_cast<size_t>(terrain->resolution - 1) * (terrain->resolution - 1) * 6);
+        buildData.vertices.reserve(static_cast<size_t>(resolution) * resolution);
+        buildData.indices.reserve(static_cast<size_t>(resolution - 1) * (resolution - 1) * 6);
 
-        const float spacing = terrain->size / static_cast<float>(terrain->resolution - 1);
-        for (uint32_t z = 0; z < terrain->resolution; ++z) {
-            for (uint32_t x = 0; x < terrain->resolution; ++x) {
+        const float spacing = terrain->size / static_cast<float>(resolution - 1);
+        const auto sampleTileHeight = [&](float worldX, float worldZ) {
+            const float localX = std::clamp(worldX - terrain->origin.x, 0.0f, terrain->size);
+            const float localZ = std::clamp(worldZ - terrain->origin.z, 0.0f, terrain->size);
+            const float normalizedX = localX / terrain->size * static_cast<float>(terrain->resolution - 1);
+            const float normalizedZ = localZ / terrain->size * static_cast<float>(terrain->resolution - 1);
+            const uint32_t x0 = std::min(static_cast<uint32_t>(std::floor(normalizedX)), terrain->resolution - 1);
+            const uint32_t z0 = std::min(static_cast<uint32_t>(std::floor(normalizedZ)), terrain->resolution - 1);
+            const uint32_t x1 = std::min(x0 + 1, terrain->resolution - 1);
+            const uint32_t z1 = std::min(z0 + 1, terrain->resolution - 1);
+            const float tx = normalizedX - static_cast<float>(x0);
+            const float tz = normalizedZ - static_cast<float>(z0);
+            const float h00 = tileHeightAt(*terrain, x0, z0);
+            const float h10 = tileHeightAt(*terrain, x1, z0);
+            const float h01 = tileHeightAt(*terrain, x0, z1);
+            const float h11 = tileHeightAt(*terrain, x1, z1);
+            const float hx0 = h00 + (h10 - h00) * tx;
+            const float hx1 = h01 + (h11 - h01) * tx;
+            return hx0 + (hx1 - hx0) * tz;
+        };
+        for (uint32_t z = 0; z < resolution; ++z) {
+            for (uint32_t x = 0; x < resolution; ++x) {
+                const float worldX = terrain->origin.x + static_cast<float>(x) * spacing;
+                const float worldZ = terrain->origin.z + static_cast<float>(z) * spacing;
                 buildData.vertices.push_back({
-                    terrain->origin.x + static_cast<float>(x) * spacing,
-                    tileHeightAt(*terrain, x, z),
-                    terrain->origin.z + static_cast<float>(z) * spacing,
+                    worldX,
+                    sampleTileHeight(worldX, worldZ),
+                    worldZ,
                 });
             }
         }
 
-        for (uint32_t z = 0; z + 1 < terrain->resolution; ++z) {
-            for (uint32_t x = 0; x + 1 < terrain->resolution; ++x) {
-                const uint32_t topLeft = z * terrain->resolution + x;
+        for (uint32_t z = 0; z + 1 < resolution; ++z) {
+            for (uint32_t x = 0; x + 1 < resolution; ++x) {
+                const uint32_t topLeft = z * resolution + x;
                 const uint32_t topRight = topLeft + 1;
-                const uint32_t bottomLeft = (z + 1) * terrain->resolution + x;
+                const uint32_t bottomLeft = (z + 1) * resolution + x;
                 const uint32_t bottomRight = bottomLeft + 1;
                 buildData.indices.push_back(topLeft);
                 buildData.indices.push_back(bottomLeft);
@@ -553,12 +614,20 @@ namespace Engine {
     std::optional<NavigationTerrainBuildData> TerrainSystem::navigationBuildData(
         const GeneratedTerrainTileData& generated)
     {
+        return navigationBuildData(generated, generated.resolution);
+    }
+
+    std::optional<NavigationTerrainBuildData> TerrainSystem::navigationBuildData(
+        const GeneratedTerrainTileData& generated,
+        uint32_t navigationResolution)
+    {
         if (generated.resolution < 2 ||
             generated.size <= 0.0f ||
             generated.heights.size() != static_cast<size_t>(generated.resolution) * generated.resolution) {
             return std::nullopt;
         }
 
+        const uint32_t resolution = std::max(navigationResolution, 2u);
         const auto [minIt, maxIt] = std::minmax_element(generated.heights.begin(), generated.heights.end());
         NavigationTerrainBuildData buildData;
         buildData.coord = generated.coord;
@@ -566,25 +635,27 @@ namespace Engine {
             {generated.origin.x, *minIt, generated.origin.z},
             {generated.origin.x + generated.size, *maxIt, generated.origin.z + generated.size},
         };
-        buildData.vertices.reserve(static_cast<size_t>(generated.resolution) * generated.resolution);
-        buildData.indices.reserve(static_cast<size_t>(generated.resolution - 1) * (generated.resolution - 1) * 6);
+        buildData.vertices.reserve(static_cast<size_t>(resolution) * resolution);
+        buildData.indices.reserve(static_cast<size_t>(resolution - 1) * (resolution - 1) * 6);
 
-        const float spacing = generated.size / static_cast<float>(generated.resolution - 1);
-        for (uint32_t z = 0; z < generated.resolution; ++z) {
-            for (uint32_t x = 0; x < generated.resolution; ++x) {
+        const float spacing = generated.size / static_cast<float>(resolution - 1);
+        for (uint32_t z = 0; z < resolution; ++z) {
+            for (uint32_t x = 0; x < resolution; ++x) {
+                const float worldX = generated.origin.x + static_cast<float>(x) * spacing;
+                const float worldZ = generated.origin.z + static_cast<float>(z) * spacing;
                 buildData.vertices.push_back({
-                    generated.origin.x + static_cast<float>(x) * spacing,
-                    generated.heights[static_cast<size_t>(z) * generated.resolution + x],
-                    generated.origin.z + static_cast<float>(z) * spacing,
+                    worldX,
+                    sampleGeneratedHeight(generated, worldX, worldZ).value_or(generated.heights.front()),
+                    worldZ,
                 });
             }
         }
 
-        for (uint32_t z = 0; z + 1 < generated.resolution; ++z) {
-            for (uint32_t x = 0; x + 1 < generated.resolution; ++x) {
-                const uint32_t topLeft = z * generated.resolution + x;
+        for (uint32_t z = 0; z + 1 < resolution; ++z) {
+            for (uint32_t x = 0; x + 1 < resolution; ++x) {
+                const uint32_t topLeft = z * resolution + x;
                 const uint32_t topRight = topLeft + 1;
-                const uint32_t bottomLeft = (z + 1) * generated.resolution + x;
+                const uint32_t bottomLeft = (z + 1) * resolution + x;
                 const uint32_t bottomRight = bottomLeft + 1;
                 buildData.indices.push_back(topLeft);
                 buildData.indices.push_back(bottomLeft);

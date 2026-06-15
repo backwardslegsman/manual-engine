@@ -101,6 +101,7 @@ namespace Engine {
         NavigationTileSource source = NavigationTileSource::Unknown;
         uint32_t terrainVertexCount = 0;
         uint32_t terrainTriangleCount = 0;
+        uint32_t sourceResolution = 0;
         uint32_t blockerVertexCount = 0;
         uint32_t blockerTriangleCount = 0;
         uint32_t walkableTerrainTriangleCount = 0;

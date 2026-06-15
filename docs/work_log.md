@@ -441,3 +441,145 @@ Changed:
 Rationale:
 - Camera movement across chunk boundaries should not synchronously generate terrain, props, Recast tiles, and destroy/create every changed chunk in one frame.
 - Keeping workers limited to immutable snapshots and plain generated data preserves the existing ownership contracts for world, renderer, terrain, spatial registry, and live navigation state.
+
+## 2026-06-14 - Global Main-Thread Frame Budget
+
+Changed:
+- Added `Engine::FrameBudget` and `Engine::MainThreadWorkQueue` for fixed-ms cooperative main-thread work scheduling.
+- Split generated chunk commit into budgeted phases for render group creation, CPU terrain storage, renderer terrain creation, prop batches, nav tile insertion, and final metadata.
+- Moved chunk unloads and dirty navigation/connectivity/graph/renderer-visibility rebuilds behind budgeted work items.
+- Added frame budget debug stats and controls for budget enablement, budget ms, pending work count, overrun, category timings, and prop batch size.
+- Added focused tests for budget deferral, critical overrun behavior, and queue preservation of deferred work.
+
+Rationale:
+- Async generation removed worker-side cost from the frame, but live renderer/world/nav commits still needed a shared main-thread budget to avoid one hitch per committed chunk.
+- A small cooperative budget is enough for the current engine and leaves room for future systems to share main-thread time without introducing a full task graph.
+
+## 2026-06-14 - Explicit Chunk Commit Phase Scheduling
+
+Changed:
+- Added explicit names, budget categories, and priorities for each generated chunk commit phase.
+- Chunk commit work queue labels now identify the exact phase being run or deferred, such as CPU terrain creation, renderer terrain creation, prop batch spawning, nav tile insertion, and final metadata.
+
+Rationale:
+- The frame budget is only useful if expensive main-thread work is split into visible cooperative units.
+- Named phases make it easier to tune the commit pipeline and identify which phase still overruns the frame budget.
+
+## 2026-06-14 - Smaller Sample Chunks
+
+Changed:
+- Reduced the sample chunk size from `96m` to `24m`.
+- Scaled the sample loaded chunk radius from `3` to `12` and the coarse graph radius from `16` to `64` so the prototype keeps roughly the same world-space coverage.
+- Updated navigation cache and world graph defaults to match the new sample chunk scale.
+
+Rationale:
+- Smaller chunks reduce the amount of terrain, prop, renderer, and navigation work tied to one chunk commit.
+- Keeping the physical coverage similar preserves the large-world test profile while making each individual streaming/nav unit easier to budget.
+
+## 2026-06-14 - CPU Timing Probes
+
+Changed:
+- Added frame CPU timing probes for event polling, input mapping, camera update, chunk streaming, terrain LOD, budget queue drain, nav tile sync, connectivity, world graph rebuilds, fixed updates, world sync, picking, nearest-nav debug queries, interaction/command handling, debug primitive enqueue/draw, scene draw, and Dear ImGui build/render.
+- Replaced the compact performance text in the navigation debug tab with a readable CPU probe table.
+
+Rationale:
+- Hitch reduction needs concrete timing attribution now that chunk generation, chunk commits, navigation, graph rebuilds, rendering, and debug tooling can all contribute to frame spikes.
+- Keeping probes lightweight and local to the App frame loop avoids adding a profiler dependency while preserving enough detail to guide the next optimization pass.
+
+## 2026-06-14 - Navigation CPU Profiling Test
+
+Changed:
+- Added a headless navigation profiling scenario to the CTest runner.
+- The test times terrain CPU tile creation, navigation build data extraction, blocker geometry append, Recast tile builds, connectivity rebuild, world graph rebuild, nearest/path queries, coarse route queries, actor route command setup, and actor fixed updates.
+- The ranked profile is printed during verbose test runs and written to `build/windows-vs-vcpkg/navigation_cpu_profile.txt`.
+
+Rationale:
+- Frame hitches need a repeatable test artifact that shows which CPU buckets dominate without relying on the SDL/bgfx runtime.
+- The profiling test validates outputs but avoids machine-specific timing thresholds, so it can guide optimization without becoming flaky.
+
+## 2026-06-14 - Runtime Navigation Hitch Reduction
+
+Changed:
+- Added runtime nav tile records for missing, pending, ready, failed, and dirty loaded chunks.
+- Changed normal nav tile sync to prefer cache hits and enqueue worker Recast byte builds on misses instead of synchronously building Recast tiles on the main thread.
+- Split visual chunk commit from nav tile availability so terrain/props can appear before local navigation is ready.
+- Added `TerrainSettings::navigationResolution`, YAML navigation profile loading for `navigation_resolution`, cache manifest identity support, and nav tile diagnostics for source resolution.
+- Added incremental connectivity APIs and switched normal tile insert/destroy updates to rebuild changed chunks and neighbors.
+- Added debug counters for runtime nav cache hits/misses, worker build queue/completion/failure, and ready/pending/failed nav chunk counts.
+
+Rationale:
+- Profiling showed Recast tile generation was the dominant CPU cost, so the runtime path now keeps that work off the main thread and reduces source geometry before building.
+- Connectivity was the second-largest headless bucket, so normal tile updates no longer require a full loaded-set portal rebuild.
+
+## 2026-06-14 - Expanded CPU Profiling Probes
+
+Changed:
+- Added runtime CPU probes for `bgfx::frame()` and post-frame debug/save/rebuild request handling.
+- Expanded the headless navigation CPU profile with Detour tile cache export/insert, incremental connectivity rebuild, full `33x33` nav-source Recast build, and reduced `17x17` nav-source Recast build buckets.
+
+Rationale:
+- The previous profile identified broad hotspots, but cache insertion, graphics frame wait, post-frame debug actions, and reduced-source Recast costs needed separate measurements.
+- The latest Release profile shows cache export/insert is negligible, incremental connectivity is substantially cheaper than a full rebuild, and reduced nav source geometry lowers Recast build time.
+
+## 2026-06-14 - Gameplay-Scale Render Distance Defaults
+
+Changed:
+- Changed default renderer distance culling from unlimited to finite draw ranges: props at `160m` and terrain at `280m`.
+- Reduced the default camera far plane to `900m` and max orbit distance to `320m`.
+
+Rationale:
+- Unlimited terrain and prop submission made the large generated world more expensive than a typical gameplay view needs.
+- Keeping runtime debug sliders preserves tuning flexibility while making the default profile more practical for normal play.
+
+## 2026-06-15 - Budgeted Terrain LOD Rebuilds
+
+Changed:
+- Added a budgeted terrain LOD update path that limits renderer terrain buffer rebuilds per frame while reporting rebuilt and pending counts.
+- Switched App runtime, save/load, and chunk reload paths away from all-at-once terrain LOD updates.
+- Added a Dear ImGui performance control for terrain LOD rebuilds per frame.
+- Added phased runtime chunk unloads so nav removal, prop destruction, terrain destruction, render-group destruction, and final dirty marking are separate budgeted work items.
+
+Rationale:
+- Camera movement can change desired LOD for many loaded terrain tiles at once. Recreating every affected renderer terrain buffer in a single frame produces visible hitches.
+- CPU terrain data remains authoritative for gameplay, so stale renderer LOD for a few frames is an acceptable visual tradeoff for stable frame pacing.
+- Moving across chunk boundaries can unload an entire row/column. Splitting unloads prevents one chunk teardown from destroying every world object and renderer resource in a single callback.
+
+## 2026-06-15 - Chunk-Capped Navigation Runtime Work
+
+Changed:
+- Capped runtime nav tile sync so one queued work item only probes/schedules a fixed number of chunks and requeues remaining work.
+- Capped dirty navigation connectivity rebuilds so portal sampling is spread across frames when many nav tiles change.
+- Delayed coarse world graph rebuilds until connectivity is fully refreshed, and recentered the large graph only after the camera moves a configurable number of chunks.
+- Added Dear ImGui controls and counters for nav sync chunks, connectivity chunks, and graph recenter threshold.
+
+Rationale:
+- Navigation hitching was still possible because cache probing, connectivity portal sampling, and graph rebuilds were budgeted as large atomic callbacks.
+- Spreading tile sync/connectivity work over multiple frames and coalescing graph rebuilds keeps local pathing data progressive without doing all navigation-derived work on a single camera chunk crossing.
+
+## 2026-06-15 - Dear ImGui Index Offset Fix
+
+Changed:
+- Fixed the bgfx Dear ImGui renderer to use `ImDrawCmd::IdxOffset` directly instead of adding a second manual running index offset.
+
+Rationale:
+- Modern Dear ImGui draw commands already provide command-list-relative index offsets. Double-offsetting later commands corrupted tab and text geometry, making debug UI labels appear glitchy or partially missing.
+
+## 2026-06-15 - Long-Frame Diagnostics And Cache Write Policy
+
+Changed:
+- Added slowest-work-item attribution to `Engine::FrameBudget`.
+- Added Debug UI long-frame diagnostics showing the last frame above the hitch threshold with CPU bucket timings, slowest budget item, and pending work count.
+- Disabled navigation cache write-through by default while keeping cache reads enabled and manual cache generation controls available.
+
+Rationale:
+- Rare hitches every 20-30 seconds need event-style diagnostics because steady CPU probes can miss the responsible frame.
+- Main-thread disk writes from automatic navigation cache write-through can stall unpredictably, so cache generation should be explicit unless the user is intentionally warming cache data.
+
+## 2026-06-15 - Performance Roadmap
+
+Changed:
+- Added `docs/performance_roadmap.md` to track worker offload, frame budgeting, streaming, and hitch-reduction phases separately from the navigation feature roadmap.
+- Cross-referenced the new roadmap from `docs/engine_overview.md`.
+
+Rationale:
+- The engine now has enough runtime systems that performance work needs its own planning document with explicit worker/main-thread boundaries and phased commit priorities.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -10,6 +11,7 @@ namespace Engine {
         std::string id = "default";
         NavAgentSettings agent;
         NavBuildSettings build;
+        uint32_t navigationResolution = 17;
     };
 
     struct NavigationProfileLoadResult {

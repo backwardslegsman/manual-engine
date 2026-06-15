@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -85,6 +86,18 @@ namespace Engine {
             const NavigationSystem& navigation,
             const TerrainSystem& terrain,
             const NavAgentSettings& agent);
+        void rebuildChunk(
+            ChunkCoord coord,
+            const NavigationSystem& navigation,
+            const TerrainSystem& terrain,
+            const NavAgentSettings& agent);
+        void rebuildChunks(
+            std::span<const ChunkCoord> coords,
+            const NavigationSystem& navigation,
+            const TerrainSystem& terrain,
+            const NavAgentSettings& agent);
+        void removeChunk(ChunkCoord coord);
+        void relinkChunkAndNeighbors(ChunkCoord coord);
         void clear();
 
         const NavigationConnectivitySettings& settings() const;
