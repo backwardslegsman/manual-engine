@@ -594,3 +594,14 @@ Changed:
 
 Rationale:
 - Navigation cache file I/O can stall unpredictably on the main thread. Workers now handle file reads/writes, while the main thread only merges results into stats and live systems.
+
+## 2026-06-15 - Encapsulation Pass
+
+Changed:
+- Extracted navigation cache async job wrappers from `src/App/main.cpp` into `Engine::NavigationCacheAsync`.
+- Tightened public comments around navigation cache manifest validity, worker-safe cache helpers, and cooperative main-thread budgeting.
+- Updated App/Engine guidance and system contracts to describe the current async cache and budgeted main-thread ownership rules.
+
+Rationale:
+- App should compose services and choose scheduling policy, while reusable cache I/O job construction belongs in Engine.
+- The performance work added new worker/main-thread contracts that need to be explicit in public headers and persistent guidance.

@@ -16,6 +16,9 @@ namespace Engine {
         uint32_t formatVersion = 1;
     };
 
+    // Manifest identity is the cache validity contract. Add every input that
+    // can change baseline generated navigation data before relying on cache
+    // hits for runtime pathing.
     struct NavigationCacheManifest {
         std::string worldId = "sample";
         uint32_t formatVersion = 1;
@@ -55,6 +58,9 @@ namespace Engine {
     enum class NavigationCacheOperationStatus {
         Hit,
         Miss,
+        // Stale means the file was readable but does not match the active
+        // manifest identity. Corrupt means the file could not be parsed or
+        // converted into the requested cache payload.
         Stale,
         Corrupt,
         WriteSuccess,
@@ -84,8 +90,11 @@ namespace Engine {
 
     using NavigationCacheWriteResult = NavigationCacheOperationResult;
 
-    // Disk cache for deterministic baseline navigation data. Cache files are
-    // derived data and must never be required for startup or save loading.
+    // Main-thread facade for deterministic baseline navigation cache data.
+    // File reads/writes are available here for tests/tools, but runtime code
+    // should prefer NavigationCacheAsync helpers so disk I/O stays off the
+    // frame path. Cache files are derived data and must never be required for
+    // startup or save loading.
     class NavigationCache {
     public:
         NavigationCache(NavigationCacheSettings settings, NavigationCacheManifest manifest);
@@ -107,6 +116,8 @@ namespace Engine {
         void clearStats();
         bool ensureManifest();
 
+        // Worker-safe file I/O helpers. They only consume immutable settings
+        // and manifest snapshots and return plain payload/status structs.
         static NavigationCacheTileReadResult readTileCache(
             const NavigationCacheSettings& settings,
             const NavigationCacheManifest& manifest,
@@ -132,6 +143,8 @@ namespace Engine {
             const NavigationCacheManifest& manifest,
             const WorldNavigationGraphCacheData& graph);
 
+        // Merge worker-safe helper results into the facade's debug stats. Must
+        // be called from the owning/main thread.
         void recordReadResult(const NavigationCacheOperationResult& result);
         void recordWriteResult(const NavigationCacheOperationResult& result);
 

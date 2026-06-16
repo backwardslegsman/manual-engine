@@ -23,4 +23,6 @@
 - Keep biome, procedural content, terrain, and persistence rules deterministic from world coordinates, chunk coordinates, stable object IDs, and saved settings.
 - Debug/editor tools should mutate durable world state through `WorldObjectOverrides`, not by writing ad hoc serialized scene data.
 - Keep Recast/Detour private to `Navigation.cpp`; public navigation headers should expose plain Engine types and status values only.
+- Keep navigation cache file I/O behind `NavigationCache` / `NavigationCacheAsync` helpers. Runtime code should pass immutable manifest/settings snapshots to worker jobs and merge plain results on the main thread.
+- Keep main-thread work cooperative and budgetable. If a callback may touch many chunks, objects, renderer resources, or nav records, split it into smaller `MainThreadWorkItem`s before adding more call sites.
 - Avoid premature ECS architecture. Use plain structs and focused managers until entity/component needs are concrete.

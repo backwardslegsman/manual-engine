@@ -37,6 +37,7 @@ add_executable(manual_engine
     src/Engine/InteractionSystem.cpp
     src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationCache.cpp
+    src/Engine/NavigationCacheAsync.cpp
     src/Engine/NavigationProfile.cpp
     src/Engine/ObjectArchetype.cpp
     src/Engine/ObjectId.cpp
@@ -96,6 +97,7 @@ add_executable(manual_engine_navigation_tests
     src/Engine/EventQueue.cpp
     src/Engine/FrameBudget.cpp
     src/Engine/NavigationCache.cpp
+    src/Engine/NavigationCacheAsync.cpp
     src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationProfile.cpp
     src/Engine/ObjectId.cpp

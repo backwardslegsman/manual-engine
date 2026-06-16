@@ -311,13 +311,13 @@ Avoid in V1:
 
 ## Phase 12 - Navigation Cache Generation
 
-Status: implemented as an in-app debug/write-through cache for baseline navigation data.
+Status: implemented as an in-app debug/write-through cache for baseline navigation data. Runtime cache I/O now uses worker jobs; cache misses enqueue worker generation rather than blocking the frame with synchronous Recast builds.
 
 Generate and load deterministic navigation cache artifacts so open-world routing does not need to rebuild every coarse or local navigation product from scratch at runtime.
 
 Goal:
 - Move expensive deterministic navigation products out of the frame loop and into explicit cache generation.
-- Keep runtime chunk streaming simple: load cache data when available, fall back to synchronous generation only for missing/debug chunks.
+- Keep runtime chunk streaming simple: load cache data when available, fall back to worker generation for missing/debug chunks.
 - Version cache artifacts against the procedural rules that affect terrain, blockers, biomes, archetypes, and agent/build settings.
 
 Planned cache products:
@@ -329,7 +329,7 @@ Planned cache products:
 V1 behavior:
 - Add explicit debug-triggered cache generation/refresh commands for the currently visible loaded chunks and graph.
 - Write cache files under a generated-data directory, not inside authored config.
-- Runtime `NavigationSystem` can load cached Detour tile bytes for a chunk before falling back to building from terrain.
+- Runtime `NavigationSystem` can load cached Detour tile bytes for a chunk before falling back to worker-built tile bytes from terrain.
 - Runtime connectivity and world graph systems can load cached metadata before falling back to deterministic generation.
 - A cache mismatch must be reported clearly and treated as a miss, not silently loaded.
 - Persistent object overrides remain runtime modifications; V1 caches only deterministic baseline navigation and requires affected loaded chunks to rebuild when edited blockers change.
@@ -339,11 +339,10 @@ Acceptance:
 - Generating a cache for the visible/graph test region produces repeatable files for the same seed and config.
 - Starting the app with a valid cache avoids rebuilding unchanged loaded nav tiles where possible.
 - Changing biome rules, archetype blocking data, Recast settings, or agent settings invalidates the relevant cache data.
-- Missing cache data falls back to current synchronous generation without breaking movement.
+- Missing cache data falls back to worker generation without breaking movement.
 - Debug rebuild can refresh cache data for selected/visible chunks.
 
 Avoid in V1:
-- Background worker build queues.
 - Streaming-driven cache generation for arbitrary distant chunks.
 - Persistent dynamic obstacle caches.
 - Multiple simultaneous agent-class caches beyond the current player-sized profile.

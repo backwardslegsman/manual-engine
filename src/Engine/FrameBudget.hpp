@@ -14,6 +14,8 @@ namespace Engine {
         bool enabled = true;
     };
 
+    // Categories are diagnostic and scheduling labels for cooperative
+    // main-thread work. They do not imply thread ownership by themselves.
     enum class BudgetCategory : uint32_t {
         StreamingCommit = 0,
         NavigationCommit,
@@ -51,6 +53,10 @@ namespace Engine {
         void beginFrame(FrameBudgetSettings settings = {});
         bool hasTime() const;
 
+        // Runs one cooperative work item and charges its elapsed time to the
+        // current frame budget. Critical items are allowed to overrun and are
+        // reported through stats; normal work is skipped once the budget is
+        // exhausted.
         bool run(
             BudgetCategory category,
             std::string_view label,
@@ -79,6 +85,9 @@ namespace Engine {
 
     class MainThreadWorkQueue {
     public:
+        // The queue is intentionally main-thread only. Worker jobs should
+        // return plain data; the App/owning service enqueues the live mutation
+        // phase here.
         void enqueue(MainThreadWorkItem item);
         void drain(FrameBudget& budget);
         void clear();

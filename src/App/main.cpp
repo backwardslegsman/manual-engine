@@ -36,6 +36,7 @@
 #include "Engine/InteractionHandlerSystem.hpp"
 #include "Engine/InteractionSystem.hpp"
 #include "Engine/Navigation.hpp"
+#include "Engine/NavigationCacheAsync.hpp"
 #include "Engine/NavigationCache.hpp"
 #include "Engine/NavigationConnectivity.hpp"
 #include "Engine/NavigationProfile.hpp"
@@ -232,22 +233,6 @@ namespace {
         NavigationBlockerStats blockerStats;
         float buildMs = 0.0f;
         bool writeCache = false;
-    };
-
-    struct NavigationTileCacheReadJobResult {
-        Engine::NavigationCacheTileReadResult result;
-    };
-
-    struct NavigationConnectivityCacheReadJobResult {
-        std::vector<Engine::NavigationCacheConnectivityReadResult> results;
-    };
-
-    struct NavigationGraphCacheReadJobResult {
-        Engine::NavigationCacheGraphReadResult result;
-    };
-
-    struct NavigationCacheWriteJobResult {
-        Engine::NavigationCacheWriteResult result;
     };
 
     struct RuntimeNavigationStats {
@@ -2452,20 +2437,11 @@ int main(int, char**)
     enqueueTileCacheWrite = [&](Engine::NavigationTileCacheData tile) {
         const Engine::NavigationCacheSettings settingsSnapshot = navigationCacheSettings;
         const Engine::NavigationCacheManifest manifestSnapshot = navigationCache.manifest();
-        const Engine::AsyncJobHandle handle = asyncWork.submit(
-            "navigation tile cache write",
-            [settingsSnapshot, manifestSnapshot, tile = std::move(tile)](std::stop_token stopToken) mutable -> std::any {
-                NavigationCacheWriteJobResult jobResult;
-                if (stopToken.stop_requested()) {
-                    jobResult.result.kind = Engine::NavigationCacheKind::Tile;
-                    jobResult.result.coord = tile.coord;
-                    jobResult.result.status = Engine::NavigationCacheOperationStatus::Cancelled;
-                    jobResult.result.message = "Navigation cache write was cancelled.";
-                    return jobResult;
-                }
-                jobResult.result = Engine::NavigationCache::writeTileCache(settingsSnapshot, manifestSnapshot, tile);
-                return jobResult;
-            });
+        const Engine::AsyncJobHandle handle = Engine::enqueueNavigationTileCacheWrite(
+            asyncWork,
+            settingsSnapshot,
+            manifestSnapshot,
+            std::move(tile));
         if (handle.id != UINT64_MAX) {
             ++runtimeNavigationStats.cacheWriteJobsQueuedThisFrame;
         }
@@ -2473,20 +2449,11 @@ int main(int, char**)
     enqueueConnectivityCacheWrite = [&](Engine::ChunkNavConnectivity connectivity) {
         const Engine::NavigationCacheSettings settingsSnapshot = navigationCacheSettings;
         const Engine::NavigationCacheManifest manifestSnapshot = navigationCache.manifest();
-        const Engine::AsyncJobHandle handle = asyncWork.submit(
-            "navigation connectivity cache write",
-            [settingsSnapshot, manifestSnapshot, connectivity = std::move(connectivity)](std::stop_token stopToken) mutable -> std::any {
-                NavigationCacheWriteJobResult jobResult;
-                if (stopToken.stop_requested()) {
-                    jobResult.result.kind = Engine::NavigationCacheKind::Connectivity;
-                    jobResult.result.coord = connectivity.coord;
-                    jobResult.result.status = Engine::NavigationCacheOperationStatus::Cancelled;
-                    jobResult.result.message = "Navigation connectivity cache write was cancelled.";
-                    return jobResult;
-                }
-                jobResult.result = Engine::NavigationCache::writeConnectivityCache(settingsSnapshot, manifestSnapshot, connectivity);
-                return jobResult;
-            });
+        const Engine::AsyncJobHandle handle = Engine::enqueueNavigationConnectivityCacheWrite(
+            asyncWork,
+            settingsSnapshot,
+            manifestSnapshot,
+            std::move(connectivity));
         if (handle.id != UINT64_MAX) {
             ++runtimeNavigationStats.cacheWriteJobsQueuedThisFrame;
         }
@@ -2494,20 +2461,11 @@ int main(int, char**)
     enqueueGraphCacheWrite = [&](Engine::WorldNavigationGraphCacheData graph) {
         const Engine::NavigationCacheSettings settingsSnapshot = navigationCacheSettings;
         const Engine::NavigationCacheManifest manifestSnapshot = navigationCache.manifest();
-        const Engine::AsyncJobHandle handle = asyncWork.submit(
-            "world navigation graph cache write",
-            [settingsSnapshot, manifestSnapshot, graph = std::move(graph)](std::stop_token stopToken) mutable -> std::any {
-                NavigationCacheWriteJobResult jobResult;
-                if (stopToken.stop_requested()) {
-                    jobResult.result.kind = Engine::NavigationCacheKind::Graph;
-                    jobResult.result.coord = graph.centerChunk;
-                    jobResult.result.status = Engine::NavigationCacheOperationStatus::Cancelled;
-                    jobResult.result.message = "World navigation graph cache write was cancelled.";
-                    return jobResult;
-                }
-                jobResult.result = Engine::NavigationCache::writeGraphCache(settingsSnapshot, manifestSnapshot, graph);
-                return jobResult;
-            });
+        const Engine::AsyncJobHandle handle = Engine::enqueueNavigationGraphCacheWrite(
+            asyncWork,
+            settingsSnapshot,
+            manifestSnapshot,
+            std::move(graph));
         if (handle.id != UINT64_MAX) {
             ++runtimeNavigationStats.cacheWriteJobsQueuedThisFrame;
         }
@@ -2519,20 +2477,11 @@ int main(int, char**)
         }
         const Engine::NavigationCacheSettings settingsSnapshot = navigationCacheSettings;
         const Engine::NavigationCacheManifest manifestSnapshot = navigationCache.manifest();
-        const Engine::AsyncJobHandle handle = asyncWork.submit(
-            "navigation tile cache read " + std::to_string(coord.x) + "," + std::to_string(coord.z),
-            [settingsSnapshot, manifestSnapshot, coord](std::stop_token stopToken) -> std::any {
-                NavigationTileCacheReadJobResult jobResult;
-                if (stopToken.stop_requested()) {
-                    jobResult.result.kind = Engine::NavigationCacheKind::Tile;
-                    jobResult.result.coord = coord;
-                    jobResult.result.status = Engine::NavigationCacheOperationStatus::Cancelled;
-                    jobResult.result.message = "Navigation tile cache read was cancelled.";
-                    return jobResult;
-                }
-                jobResult.result = Engine::NavigationCache::readTileCache(settingsSnapshot, manifestSnapshot, coord);
-                return jobResult;
-            });
+        const Engine::AsyncJobHandle handle = Engine::enqueueNavigationTileCacheRead(
+            asyncWork,
+            settingsSnapshot,
+            manifestSnapshot,
+            coord);
         if (handle.id != UINT64_MAX) {
             record.state = RuntimeNavTileState::CacheReadPending;
             record.pendingJob = handle;
@@ -2546,25 +2495,11 @@ int main(int, char**)
         }
         const Engine::NavigationCacheSettings settingsSnapshot = navigationCacheSettings;
         const Engine::NavigationCacheManifest manifestSnapshot = navigationCache.manifest();
-        const Engine::AsyncJobHandle handle = asyncWork.submit(
-            "navigation connectivity cache read batch",
-            [settingsSnapshot, manifestSnapshot, coords = std::move(coords)](std::stop_token stopToken) -> std::any {
-                NavigationConnectivityCacheReadJobResult jobResult;
-                for (Engine::ChunkCoord coord : coords) {
-                    if (stopToken.stop_requested()) {
-                        Engine::NavigationCacheConnectivityReadResult result;
-                        result.kind = Engine::NavigationCacheKind::Connectivity;
-                        result.coord = coord;
-                        result.status = Engine::NavigationCacheOperationStatus::Cancelled;
-                        result.message = "Navigation connectivity cache read was cancelled.";
-                        jobResult.results.push_back(std::move(result));
-                        continue;
-                    }
-                    jobResult.results.push_back(
-                        Engine::NavigationCache::readConnectivityCache(settingsSnapshot, manifestSnapshot, coord));
-                }
-                return jobResult;
-            });
+        const Engine::AsyncJobHandle handle = Engine::enqueueNavigationConnectivityCacheRead(
+            asyncWork,
+            settingsSnapshot,
+            manifestSnapshot,
+            std::move(coords));
         if (handle.id != UINT64_MAX) {
             navigationConnectivityCacheReadPending = true;
             navigationConnectivityCacheReadAttempted = true;
@@ -2578,20 +2513,11 @@ int main(int, char**)
         }
         const Engine::NavigationCacheSettings settingsSnapshot = navigationCacheSettings;
         const Engine::NavigationCacheManifest manifestSnapshot = navigationCache.manifest();
-        const Engine::AsyncJobHandle handle = asyncWork.submit(
-            "world navigation graph cache read",
-            [settingsSnapshot, manifestSnapshot, centerChunk](std::stop_token stopToken) -> std::any {
-                NavigationGraphCacheReadJobResult jobResult;
-                if (stopToken.stop_requested()) {
-                    jobResult.result.kind = Engine::NavigationCacheKind::Graph;
-                    jobResult.result.coord = centerChunk;
-                    jobResult.result.status = Engine::NavigationCacheOperationStatus::Cancelled;
-                    jobResult.result.message = "World navigation graph cache read was cancelled.";
-                    return jobResult;
-                }
-                jobResult.result = Engine::NavigationCache::readGraphCache(settingsSnapshot, manifestSnapshot, centerChunk);
-                return jobResult;
-            });
+        const Engine::AsyncJobHandle handle = Engine::enqueueNavigationGraphCacheRead(
+            asyncWork,
+            settingsSnapshot,
+            manifestSnapshot,
+            centerChunk);
         if (handle.id != UINT64_MAX) {
             worldGraphCacheReadPending = true;
             worldGraphCacheReadAttempted = true;
@@ -3148,9 +3074,9 @@ int main(int, char**)
                 enqueueNavigationTileInsertion(std::move(result));
                 continue;
             }
-            if (completed.result.type() == typeid(NavigationTileCacheReadJobResult)) {
-                NavigationTileCacheReadJobResult jobResult =
-                    std::any_cast<NavigationTileCacheReadJobResult>(std::move(completed.result));
+            if (completed.result.type() == typeid(Engine::NavigationTileCacheReadJobResult)) {
+                Engine::NavigationTileCacheReadJobResult jobResult =
+                    std::any_cast<Engine::NavigationTileCacheReadJobResult>(std::move(completed.result));
                 navigationCache.recordReadResult(jobResult.result);
                 ++runtimeNavigationStats.cacheReadJobsCompletedThisFrame;
                 RuntimeNavTileRecord& record = runtimeNavTiles[jobResult.result.coord];
@@ -3196,9 +3122,9 @@ int main(int, char**)
                 }
                 continue;
             }
-            if (completed.result.type() == typeid(NavigationCacheWriteJobResult)) {
-                NavigationCacheWriteJobResult jobResult =
-                    std::any_cast<NavigationCacheWriteJobResult>(std::move(completed.result));
+            if (completed.result.type() == typeid(Engine::NavigationCacheWriteJobResult)) {
+                Engine::NavigationCacheWriteJobResult jobResult =
+                    std::any_cast<Engine::NavigationCacheWriteJobResult>(std::move(completed.result));
                 navigationCache.recordWriteResult(jobResult.result);
                 ++runtimeNavigationStats.cacheWriteJobsCompletedThisFrame;
                 if (jobResult.result.status != Engine::NavigationCacheOperationStatus::WriteSuccess) {
@@ -3206,13 +3132,13 @@ int main(int, char**)
                 }
                 continue;
             }
-            if (completed.result.type() == typeid(NavigationConnectivityCacheReadJobResult)) {
+            if (completed.result.type() == typeid(Engine::NavigationConnectivityCacheReadJobResult)) {
                 if (navigationConnectivityCacheReadJob.id != completed.handle.id) {
                     ++asyncStreaming.staleJobs;
                     continue;
                 }
-                NavigationConnectivityCacheReadJobResult jobResult =
-                    std::any_cast<NavigationConnectivityCacheReadJobResult>(std::move(completed.result));
+                Engine::NavigationConnectivityCacheReadJobResult jobResult =
+                    std::any_cast<Engine::NavigationConnectivityCacheReadJobResult>(std::move(completed.result));
                 navigationConnectivityCacheReadPending = false;
                 navigationConnectivityCacheReadJob = {};
                 Engine::NavigationConnectivityCacheData cacheData;
@@ -3244,13 +3170,13 @@ int main(int, char**)
                 processNavigationDirty();
                 continue;
             }
-            if (completed.result.type() == typeid(NavigationGraphCacheReadJobResult)) {
+            if (completed.result.type() == typeid(Engine::NavigationGraphCacheReadJobResult)) {
                 if (worldGraphCacheReadJob.id != completed.handle.id) {
                     ++asyncStreaming.staleJobs;
                     continue;
                 }
-                NavigationGraphCacheReadJobResult jobResult =
-                    std::any_cast<NavigationGraphCacheReadJobResult>(std::move(completed.result));
+                Engine::NavigationGraphCacheReadJobResult jobResult =
+                    std::any_cast<Engine::NavigationGraphCacheReadJobResult>(std::move(completed.result));
                 worldGraphCacheReadPending = false;
                 worldGraphCacheReadJob = {};
                 navigationCache.recordReadResult(jobResult.result);
