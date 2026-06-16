@@ -284,6 +284,35 @@ namespace Engine {
         {
             return std::to_string(coord.x) + "_" + std::to_string(coord.z) + std::string{extension};
         }
+
+        std::filesystem::path navigationCacheRoot(const NavigationCacheSettings& settings, const NavigationCacheManifest& manifest)
+        {
+            return settings.rootPath / manifest.identityHash;
+        }
+
+        std::filesystem::path navigationTilePath(
+            const NavigationCacheSettings& settings,
+            const NavigationCacheManifest& manifest,
+            ChunkCoord coord)
+        {
+            return navigationCacheRoot(settings, manifest) / "tiles" / chunkFileName(coord, ".navtile");
+        }
+
+        std::filesystem::path navigationConnectivityPath(
+            const NavigationCacheSettings& settings,
+            const NavigationCacheManifest& manifest,
+            ChunkCoord coord)
+        {
+            return navigationCacheRoot(settings, manifest) / "connectivity" / chunkFileName(coord, ".yaml");
+        }
+
+        std::filesystem::path navigationGraphPath(
+            const NavigationCacheSettings& settings,
+            const NavigationCacheManifest& manifest,
+            ChunkCoord centerChunk)
+        {
+            return navigationCacheRoot(settings, manifest) / "graphs" / chunkFileName(centerChunk, ".yaml");
+        }
     }
 
     NavigationCache::NavigationCache(NavigationCacheSettings settings, NavigationCacheManifest manifest)
@@ -357,6 +386,277 @@ namespace Engine {
         stats_ = {};
     }
 
+    NavigationCacheTileReadResult NavigationCache::readTileCache(
+        const NavigationCacheSettings& settings,
+        const NavigationCacheManifest& manifest,
+        ChunkCoord coord)
+    {
+        NavigationCacheTileReadResult result;
+        result.kind = NavigationCacheKind::Tile;
+        result.coord = coord;
+        result.path = navigationTilePath(settings, manifest, coord);
+        std::ifstream file(result.path, std::ios::binary);
+        if (!file) {
+            result.status = NavigationCacheOperationStatus::Miss;
+            result.message = "Navigation tile cache miss.";
+            return result;
+        }
+
+        std::array<char, 4> magic{};
+        file.read(magic.data(), magic.size());
+        if (magic != TileMagic) {
+            result.status = NavigationCacheOperationStatus::Stale;
+            result.message = "Navigation tile cache magic mismatch.";
+            return result;
+        }
+
+        NavigationTileCacheData data;
+        file.read(reinterpret_cast<char*>(&data.coord.x), sizeof(data.coord.x));
+        file.read(reinterpret_cast<char*>(&data.coord.z), sizeof(data.coord.z));
+        file.read(reinterpret_cast<char*>(&data.bounds.min.x), sizeof(float));
+        file.read(reinterpret_cast<char*>(&data.bounds.min.y), sizeof(float));
+        file.read(reinterpret_cast<char*>(&data.bounds.min.z), sizeof(float));
+        file.read(reinterpret_cast<char*>(&data.bounds.max.x), sizeof(float));
+        file.read(reinterpret_cast<char*>(&data.bounds.max.y), sizeof(float));
+        file.read(reinterpret_cast<char*>(&data.bounds.max.z), sizeof(float));
+        uint32_t byteCount = 0;
+        file.read(reinterpret_cast<char*>(&byteCount), sizeof(byteCount));
+        if (!file || data.coord != coord || byteCount == 0) {
+            result.status = NavigationCacheOperationStatus::Stale;
+            result.message = "Navigation tile cache header is invalid.";
+            return result;
+        }
+        data.detourTileData.resize(byteCount);
+        file.read(reinterpret_cast<char*>(data.detourTileData.data()), data.detourTileData.size());
+        if (!file) {
+            result.status = NavigationCacheOperationStatus::Corrupt;
+            result.message = "Navigation tile cache payload is truncated.";
+            return result;
+        }
+
+        result.status = NavigationCacheOperationStatus::Hit;
+        result.message = "Loaded navigation tile cache.";
+        result.tile = std::move(data);
+        return result;
+    }
+
+    NavigationCacheWriteResult NavigationCache::writeTileCache(
+        const NavigationCacheSettings& settings,
+        const NavigationCacheManifest& manifest,
+        const NavigationTileCacheData& tile)
+    {
+        NavigationCacheWriteResult result;
+        result.kind = NavigationCacheKind::Tile;
+        result.coord = tile.coord;
+        result.path = navigationTilePath(settings, manifest, tile.coord);
+        if (tile.detourTileData.empty()) {
+            result.status = NavigationCacheOperationStatus::WriteFailed;
+            result.message = "Navigation tile cache data is empty.";
+            return result;
+        }
+        try {
+            std::filesystem::create_directories(result.path.parent_path());
+            std::ofstream file(result.path, std::ios::binary);
+            if (!file) {
+                result.status = NavigationCacheOperationStatus::WriteFailed;
+                result.message = "Failed to open navigation tile cache for writing.";
+                return result;
+            }
+            file.write(TileMagic.data(), TileMagic.size());
+            file.write(reinterpret_cast<const char*>(&tile.coord.x), sizeof(tile.coord.x));
+            file.write(reinterpret_cast<const char*>(&tile.coord.z), sizeof(tile.coord.z));
+            file.write(reinterpret_cast<const char*>(&tile.bounds.min.x), sizeof(float));
+            file.write(reinterpret_cast<const char*>(&tile.bounds.min.y), sizeof(float));
+            file.write(reinterpret_cast<const char*>(&tile.bounds.min.z), sizeof(float));
+            file.write(reinterpret_cast<const char*>(&tile.bounds.max.x), sizeof(float));
+            file.write(reinterpret_cast<const char*>(&tile.bounds.max.y), sizeof(float));
+            file.write(reinterpret_cast<const char*>(&tile.bounds.max.z), sizeof(float));
+            const uint32_t byteCount = static_cast<uint32_t>(tile.detourTileData.size());
+            file.write(reinterpret_cast<const char*>(&byteCount), sizeof(byteCount));
+            file.write(reinterpret_cast<const char*>(tile.detourTileData.data()), tile.detourTileData.size());
+            result.status = NavigationCacheOperationStatus::WriteSuccess;
+            result.message = "Wrote navigation tile cache.";
+            return result;
+        } catch (const std::exception& exception) {
+            result.status = NavigationCacheOperationStatus::WriteFailed;
+            result.message = exception.what();
+            return result;
+        }
+    }
+
+    NavigationCacheConnectivityReadResult NavigationCache::readConnectivityCache(
+        const NavigationCacheSettings& settings,
+        const NavigationCacheManifest& manifest,
+        ChunkCoord coord)
+    {
+        NavigationCacheConnectivityReadResult result;
+        result.kind = NavigationCacheKind::Connectivity;
+        result.coord = coord;
+        result.path = navigationConnectivityPath(settings, manifest, coord);
+        try {
+            const YAML::Node root = YAML::LoadFile(result.path.string());
+            if (root["identity_hash"].as<std::string>(std::string{}) != manifest.identityHash) {
+                result.status = NavigationCacheOperationStatus::Stale;
+                result.message = "Navigation connectivity cache identity mismatch.";
+                return result;
+            }
+            result.status = NavigationCacheOperationStatus::Hit;
+            result.message = "Loaded navigation connectivity cache.";
+            result.connectivity = readConnectivity(root["connectivity"]);
+            return result;
+        } catch (const YAML::BadFile& exception) {
+            result.status = NavigationCacheOperationStatus::Miss;
+            result.message = exception.what();
+            return result;
+        } catch (const std::exception& exception) {
+            result.status = NavigationCacheOperationStatus::Corrupt;
+            result.message = exception.what();
+            return result;
+        }
+    }
+
+    NavigationCacheWriteResult NavigationCache::writeConnectivityCache(
+        const NavigationCacheSettings& settings,
+        const NavigationCacheManifest& manifest,
+        const ChunkNavConnectivity& connectivity)
+    {
+        NavigationCacheWriteResult result;
+        result.kind = NavigationCacheKind::Connectivity;
+        result.coord = connectivity.coord;
+        result.path = navigationConnectivityPath(settings, manifest, connectivity.coord);
+        try {
+            std::filesystem::create_directories(result.path.parent_path());
+            YAML::Node root;
+            root["identity_hash"] = manifest.identityHash;
+            root["connectivity"] = connectivityNode(connectivity);
+            std::ofstream file(result.path);
+            if (!file) {
+                result.status = NavigationCacheOperationStatus::WriteFailed;
+                result.message = "Failed to open navigation connectivity cache for writing.";
+                return result;
+            }
+            file << root;
+            result.status = NavigationCacheOperationStatus::WriteSuccess;
+            result.message = "Wrote navigation connectivity cache.";
+            return result;
+        } catch (const std::exception& exception) {
+            result.status = NavigationCacheOperationStatus::WriteFailed;
+            result.message = exception.what();
+            return result;
+        }
+    }
+
+    NavigationCacheGraphReadResult NavigationCache::readGraphCache(
+        const NavigationCacheSettings& settings,
+        const NavigationCacheManifest& manifest,
+        ChunkCoord centerChunk)
+    {
+        NavigationCacheGraphReadResult result;
+        result.kind = NavigationCacheKind::Graph;
+        result.coord = centerChunk;
+        result.path = navigationGraphPath(settings, manifest, centerChunk);
+        try {
+            const YAML::Node root = YAML::LoadFile(result.path.string());
+            if (root["identity_hash"].as<std::string>(std::string{}) != manifest.identityHash) {
+                result.status = NavigationCacheOperationStatus::Stale;
+                result.message = "World navigation graph cache identity mismatch.";
+                return result;
+            }
+            result.status = NavigationCacheOperationStatus::Hit;
+            result.message = "Loaded world navigation graph cache.";
+            result.graph = readGraph(root["graph"]);
+            return result;
+        } catch (const YAML::BadFile& exception) {
+            result.status = NavigationCacheOperationStatus::Miss;
+            result.message = exception.what();
+            return result;
+        } catch (const std::exception& exception) {
+            result.status = NavigationCacheOperationStatus::Corrupt;
+            result.message = exception.what();
+            return result;
+        }
+    }
+
+    NavigationCacheWriteResult NavigationCache::writeGraphCache(
+        const NavigationCacheSettings& settings,
+        const NavigationCacheManifest& manifest,
+        const WorldNavigationGraphCacheData& graph)
+    {
+        NavigationCacheWriteResult result;
+        result.kind = NavigationCacheKind::Graph;
+        result.coord = graph.centerChunk;
+        result.path = navigationGraphPath(settings, manifest, graph.centerChunk);
+        try {
+            std::filesystem::create_directories(result.path.parent_path());
+            YAML::Node root;
+            root["identity_hash"] = manifest.identityHash;
+            root["graph"] = graphNode(graph);
+            std::ofstream file(result.path);
+            if (!file) {
+                result.status = NavigationCacheOperationStatus::WriteFailed;
+                result.message = "Failed to open world navigation graph cache for writing.";
+                return result;
+            }
+            file << root;
+            result.status = NavigationCacheOperationStatus::WriteSuccess;
+            result.message = "Wrote world navigation graph cache.";
+            return result;
+        } catch (const std::exception& exception) {
+            result.status = NavigationCacheOperationStatus::WriteFailed;
+            result.message = exception.what();
+            return result;
+        }
+    }
+
+    void NavigationCache::recordReadResult(const NavigationCacheOperationResult& result)
+    {
+        switch (result.kind) {
+            case NavigationCacheKind::Tile:
+                if (result.status == NavigationCacheOperationStatus::Hit) {
+                    ++stats_.tileHits;
+                } else if (result.status == NavigationCacheOperationStatus::Stale ||
+                    result.status == NavigationCacheOperationStatus::Corrupt) {
+                    ++stats_.tileStale;
+                } else {
+                    ++stats_.tileMisses;
+                }
+                break;
+            case NavigationCacheKind::Connectivity:
+                if (result.status == NavigationCacheOperationStatus::Hit) {
+                    ++stats_.connectivityHits;
+                } else {
+                    ++stats_.connectivityMisses;
+                }
+                break;
+            case NavigationCacheKind::Graph:
+                if (result.status == NavigationCacheOperationStatus::Hit) {
+                    ++stats_.graphHits;
+                } else {
+                    ++stats_.graphMisses;
+                }
+                break;
+        }
+        setLast(result.path, result.message);
+    }
+
+    void NavigationCache::recordWriteResult(const NavigationCacheOperationResult& result)
+    {
+        if (result.status == NavigationCacheOperationStatus::WriteSuccess) {
+            switch (result.kind) {
+                case NavigationCacheKind::Tile:
+                    ++stats_.tileWrites;
+                    break;
+                case NavigationCacheKind::Connectivity:
+                    ++stats_.connectivityWrites;
+                    break;
+                case NavigationCacheKind::Graph:
+                    ++stats_.graphWrites;
+                    break;
+            }
+        }
+        setLast(result.path, result.message);
+    }
+
     bool NavigationCache::ensureManifest()
     {
         try {
@@ -377,174 +677,49 @@ namespace Engine {
 
     std::optional<NavigationTileCacheData> NavigationCache::loadTile(ChunkCoord coord)
     {
-        const std::filesystem::path path = tilePath(coord);
-        std::ifstream file(path, std::ios::binary);
-        if (!file) {
-            ++stats_.tileMisses;
-            setLast(path, "Navigation tile cache miss.");
-            return std::nullopt;
-        }
-
-        std::array<char, 4> magic{};
-        file.read(magic.data(), magic.size());
-        if (magic != TileMagic) {
-            ++stats_.tileStale;
-            setLast(path, "Navigation tile cache magic mismatch.");
-            return std::nullopt;
-        }
-
-        NavigationTileCacheData data;
-        file.read(reinterpret_cast<char*>(&data.coord.x), sizeof(data.coord.x));
-        file.read(reinterpret_cast<char*>(&data.coord.z), sizeof(data.coord.z));
-        file.read(reinterpret_cast<char*>(&data.bounds.min.x), sizeof(float));
-        file.read(reinterpret_cast<char*>(&data.bounds.min.y), sizeof(float));
-        file.read(reinterpret_cast<char*>(&data.bounds.min.z), sizeof(float));
-        file.read(reinterpret_cast<char*>(&data.bounds.max.x), sizeof(float));
-        file.read(reinterpret_cast<char*>(&data.bounds.max.y), sizeof(float));
-        file.read(reinterpret_cast<char*>(&data.bounds.max.z), sizeof(float));
-        uint32_t byteCount = 0;
-        file.read(reinterpret_cast<char*>(&byteCount), sizeof(byteCount));
-        if (!file || data.coord != coord || byteCount == 0) {
-            ++stats_.tileStale;
-            setLast(path, "Navigation tile cache header is invalid.");
-            return std::nullopt;
-        }
-        data.detourTileData.resize(byteCount);
-        file.read(reinterpret_cast<char*>(data.detourTileData.data()), data.detourTileData.size());
-        if (!file) {
-            ++stats_.tileStale;
-            setLast(path, "Navigation tile cache payload is truncated.");
-            return std::nullopt;
-        }
-
-        ++stats_.tileHits;
-        setLast(path, "Loaded navigation tile cache.");
-        return data;
+        NavigationCacheTileReadResult result = readTileCache(settings_, manifest_, coord);
+        recordReadResult(result);
+        return std::move(result.tile);
     }
 
     bool NavigationCache::writeTile(const NavigationTileCacheData& tile)
     {
-        if (tile.detourTileData.empty()) {
-            return false;
-        }
-        const std::filesystem::path path = tilePath(tile.coord);
-        try {
-            std::filesystem::create_directories(path.parent_path());
-            std::ofstream file(path, std::ios::binary);
-            if (!file) {
-                setLast(path, "Failed to open navigation tile cache for writing.");
-                return false;
-            }
-            file.write(TileMagic.data(), TileMagic.size());
-            file.write(reinterpret_cast<const char*>(&tile.coord.x), sizeof(tile.coord.x));
-            file.write(reinterpret_cast<const char*>(&tile.coord.z), sizeof(tile.coord.z));
-            file.write(reinterpret_cast<const char*>(&tile.bounds.min.x), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&tile.bounds.min.y), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&tile.bounds.min.z), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&tile.bounds.max.x), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&tile.bounds.max.y), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&tile.bounds.max.z), sizeof(float));
-            const uint32_t byteCount = static_cast<uint32_t>(tile.detourTileData.size());
-            file.write(reinterpret_cast<const char*>(&byteCount), sizeof(byteCount));
-            file.write(reinterpret_cast<const char*>(tile.detourTileData.data()), tile.detourTileData.size());
-            ++stats_.tileWrites;
-            setLast(path, "Wrote navigation tile cache.");
-            return true;
-        } catch (const std::exception& exception) {
-            setLast(path, exception.what());
-            return false;
-        }
+        NavigationCacheWriteResult result = writeTileCache(settings_, manifest_, tile);
+        recordWriteResult(result);
+        return result.status == NavigationCacheOperationStatus::WriteSuccess;
     }
 
     std::optional<ChunkNavConnectivity> NavigationCache::loadConnectivity(ChunkCoord coord)
     {
-        const std::filesystem::path path = connectivityPath(coord);
-        try {
-            const YAML::Node root = YAML::LoadFile(path.string());
-            if (root["identity_hash"].as<std::string>(std::string{}) != manifest_.identityHash) {
-                ++stats_.connectivityMisses;
-                setLast(path, "Navigation connectivity cache identity mismatch.");
-                return std::nullopt;
-            }
-            ++stats_.connectivityHits;
-            setLast(path, "Loaded navigation connectivity cache.");
-            return readConnectivity(root["connectivity"]);
-        } catch (const std::exception& exception) {
-            ++stats_.connectivityMisses;
-            setLast(path, exception.what());
-            return std::nullopt;
-        }
+        NavigationCacheConnectivityReadResult result = readConnectivityCache(settings_, manifest_, coord);
+        recordReadResult(result);
+        return std::move(result.connectivity);
     }
 
     bool NavigationCache::writeConnectivity(const ChunkNavConnectivity& connectivity)
     {
-        const std::filesystem::path path = connectivityPath(connectivity.coord);
-        try {
-            std::filesystem::create_directories(path.parent_path());
-            YAML::Node root;
-            root["identity_hash"] = manifest_.identityHash;
-            root["connectivity"] = connectivityNode(connectivity);
-            std::ofstream file(path);
-            if (!file) {
-                setLast(path, "Failed to open navigation connectivity cache for writing.");
-                return false;
-            }
-            file << root;
-            ++stats_.connectivityWrites;
-            setLast(path, "Wrote navigation connectivity cache.");
-            return true;
-        } catch (const std::exception& exception) {
-            setLast(path, exception.what());
-            return false;
-        }
+        NavigationCacheWriteResult result = writeConnectivityCache(settings_, manifest_, connectivity);
+        recordWriteResult(result);
+        return result.status == NavigationCacheOperationStatus::WriteSuccess;
     }
 
     std::optional<WorldNavigationGraphCacheData> NavigationCache::loadGraph(ChunkCoord centerChunk)
     {
-        const std::filesystem::path path = graphPath(centerChunk);
-        try {
-            const YAML::Node root = YAML::LoadFile(path.string());
-            if (root["identity_hash"].as<std::string>(std::string{}) != manifest_.identityHash) {
-                ++stats_.graphMisses;
-                setLast(path, "World navigation graph cache identity mismatch.");
-                return std::nullopt;
-            }
-            ++stats_.graphHits;
-            setLast(path, "Loaded world navigation graph cache.");
-            return readGraph(root["graph"]);
-        } catch (const std::exception& exception) {
-            ++stats_.graphMisses;
-            setLast(path, exception.what());
-            return std::nullopt;
-        }
+        NavigationCacheGraphReadResult result = readGraphCache(settings_, manifest_, centerChunk);
+        recordReadResult(result);
+        return std::move(result.graph);
     }
 
     bool NavigationCache::writeGraph(const WorldNavigationGraphCacheData& graph)
     {
-        const std::filesystem::path path = graphPath(graph.centerChunk);
-        try {
-            std::filesystem::create_directories(path.parent_path());
-            YAML::Node root;
-            root["identity_hash"] = manifest_.identityHash;
-            root["graph"] = graphNode(graph);
-            std::ofstream file(path);
-            if (!file) {
-                setLast(path, "Failed to open world navigation graph cache for writing.");
-                return false;
-            }
-            file << root;
-            ++stats_.graphWrites;
-            setLast(path, "Wrote world navigation graph cache.");
-            return true;
-        } catch (const std::exception& exception) {
-            setLast(path, exception.what());
-            return false;
-        }
+        NavigationCacheWriteResult result = writeGraphCache(settings_, manifest_, graph);
+        recordWriteResult(result);
+        return result.status == NavigationCacheOperationStatus::WriteSuccess;
     }
 
     std::filesystem::path NavigationCache::cacheRoot() const
     {
-        return settings_.rootPath / manifest_.identityHash;
+        return navigationCacheRoot(settings_, manifest_);
     }
 
     std::filesystem::path NavigationCache::manifestPath() const
@@ -554,17 +729,17 @@ namespace Engine {
 
     std::filesystem::path NavigationCache::tilePath(ChunkCoord coord) const
     {
-        return cacheRoot() / "tiles" / chunkFileName(coord, ".navtile");
+        return navigationTilePath(settings_, manifest_, coord);
     }
 
     std::filesystem::path NavigationCache::connectivityPath(ChunkCoord coord) const
     {
-        return cacheRoot() / "connectivity" / chunkFileName(coord, ".yaml");
+        return navigationConnectivityPath(settings_, manifest_, coord);
     }
 
     std::filesystem::path NavigationCache::graphPath(ChunkCoord centerChunk) const
     {
-        return cacheRoot() / "graphs" / chunkFileName(centerChunk, ".yaml");
+        return navigationGraphPath(settings_, manifest_, centerChunk);
     }
 
     void NavigationCache::setLast(std::filesystem::path path, std::string message)

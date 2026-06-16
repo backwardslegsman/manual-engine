@@ -203,7 +203,7 @@ namespace {
 
     enum class RuntimeNavTileState {
         Missing,
-        CachePending,
+        CacheReadPending,
         BuildPending,
         Ready,
         Failed,
@@ -234,10 +234,32 @@ namespace {
         bool writeCache = false;
     };
 
+    struct NavigationTileCacheReadJobResult {
+        Engine::NavigationCacheTileReadResult result;
+    };
+
+    struct NavigationConnectivityCacheReadJobResult {
+        std::vector<Engine::NavigationCacheConnectivityReadResult> results;
+    };
+
+    struct NavigationGraphCacheReadJobResult {
+        Engine::NavigationCacheGraphReadResult result;
+    };
+
+    struct NavigationCacheWriteJobResult {
+        Engine::NavigationCacheWriteResult result;
+    };
+
     struct RuntimeNavigationStats {
         uint32_t cacheHitsThisFrame = 0;
         uint32_t cacheMissesThisFrame = 0;
+        uint32_t cacheStaleOrCorruptThisFrame = 0;
         uint32_t cacheLoadFailuresThisFrame = 0;
+        uint32_t cacheReadJobsQueuedThisFrame = 0;
+        uint32_t cacheReadJobsCompletedThisFrame = 0;
+        uint32_t cacheWriteJobsQueuedThisFrame = 0;
+        uint32_t cacheWriteJobsCompletedThisFrame = 0;
+        uint32_t cacheWriteJobsFailedThisFrame = 0;
         uint32_t workerBuildsQueuedThisFrame = 0;
         uint32_t workerBuildsCompletedThisFrame = 0;
         uint32_t workerBuildsFailedThisFrame = 0;
@@ -1788,6 +1810,12 @@ int main(int, char**)
     bool navigationConnectivityWorkQueued = false;
     bool worldGraphWorkQueued = false;
     bool debugVisibilityWorkQueued = false;
+    bool navigationConnectivityCacheReadPending = false;
+    bool navigationConnectivityCacheReadAttempted = false;
+    Engine::AsyncJobHandle navigationConnectivityCacheReadJob;
+    bool worldGraphCacheReadPending = false;
+    bool worldGraphCacheReadAttempted = false;
+    Engine::AsyncJobHandle worldGraphCacheReadJob;
     FramePerformanceTimings frameTimings;
     const auto cancelCommandedActorPaths = [&]() {
         actors.cancelPath(playerActor);
@@ -2080,8 +2108,11 @@ int main(int, char**)
             }
 
             return content;
-        };
+    };
     std::function<void()> recomputeNavigationBlockerStats;
+    std::function<void(Engine::NavigationTileCacheData)> enqueueTileCacheWrite;
+    std::function<void(Engine::ChunkNavConnectivity)> enqueueConnectivityCacheWrite;
+    std::function<void(Engine::WorldNavigationGraphCacheData)> enqueueGraphCacheWrite;
     const auto cleanupPendingChunkCommit = [&](const std::shared_ptr<PendingChunkCommit>& pending) {
         for (Engine::WorldObjectHandle object : pending->content.objects) {
             spatialRegistry.remove(object);
@@ -2204,7 +2235,7 @@ int main(int, char**)
                                     navigationDebugControls.cacheWriteThrough &&
                                     pending->generated.navigation->diagnostics.source != Engine::NavigationTileSource::Cache &&
                                     !objectOverrides.hasOverridesForChunk(commitCoord)) {
-                                    navigationCache.writeTile(*pending->generated.navigation->tileData);
+                                    enqueueTileCacheWrite(*pending->generated.navigation->tileData);
                                 }
                             }
                         }
@@ -2411,6 +2442,163 @@ int main(int, char**)
         record.state = RuntimeNavTileState::Dirty;
         record.dirtyReasons |= static_cast<uint32_t>(reason);
     };
+    const auto cacheStatusIsHit = [](Engine::NavigationCacheOperationStatus status) {
+        return status == Engine::NavigationCacheOperationStatus::Hit;
+    };
+    const auto cacheStatusIsStaleOrCorrupt = [](Engine::NavigationCacheOperationStatus status) {
+        return status == Engine::NavigationCacheOperationStatus::Stale ||
+            status == Engine::NavigationCacheOperationStatus::Corrupt;
+    };
+    enqueueTileCacheWrite = [&](Engine::NavigationTileCacheData tile) {
+        const Engine::NavigationCacheSettings settingsSnapshot = navigationCacheSettings;
+        const Engine::NavigationCacheManifest manifestSnapshot = navigationCache.manifest();
+        const Engine::AsyncJobHandle handle = asyncWork.submit(
+            "navigation tile cache write",
+            [settingsSnapshot, manifestSnapshot, tile = std::move(tile)](std::stop_token stopToken) mutable -> std::any {
+                NavigationCacheWriteJobResult jobResult;
+                if (stopToken.stop_requested()) {
+                    jobResult.result.kind = Engine::NavigationCacheKind::Tile;
+                    jobResult.result.coord = tile.coord;
+                    jobResult.result.status = Engine::NavigationCacheOperationStatus::Cancelled;
+                    jobResult.result.message = "Navigation cache write was cancelled.";
+                    return jobResult;
+                }
+                jobResult.result = Engine::NavigationCache::writeTileCache(settingsSnapshot, manifestSnapshot, tile);
+                return jobResult;
+            });
+        if (handle.id != UINT64_MAX) {
+            ++runtimeNavigationStats.cacheWriteJobsQueuedThisFrame;
+        }
+    };
+    enqueueConnectivityCacheWrite = [&](Engine::ChunkNavConnectivity connectivity) {
+        const Engine::NavigationCacheSettings settingsSnapshot = navigationCacheSettings;
+        const Engine::NavigationCacheManifest manifestSnapshot = navigationCache.manifest();
+        const Engine::AsyncJobHandle handle = asyncWork.submit(
+            "navigation connectivity cache write",
+            [settingsSnapshot, manifestSnapshot, connectivity = std::move(connectivity)](std::stop_token stopToken) mutable -> std::any {
+                NavigationCacheWriteJobResult jobResult;
+                if (stopToken.stop_requested()) {
+                    jobResult.result.kind = Engine::NavigationCacheKind::Connectivity;
+                    jobResult.result.coord = connectivity.coord;
+                    jobResult.result.status = Engine::NavigationCacheOperationStatus::Cancelled;
+                    jobResult.result.message = "Navigation connectivity cache write was cancelled.";
+                    return jobResult;
+                }
+                jobResult.result = Engine::NavigationCache::writeConnectivityCache(settingsSnapshot, manifestSnapshot, connectivity);
+                return jobResult;
+            });
+        if (handle.id != UINT64_MAX) {
+            ++runtimeNavigationStats.cacheWriteJobsQueuedThisFrame;
+        }
+    };
+    enqueueGraphCacheWrite = [&](Engine::WorldNavigationGraphCacheData graph) {
+        const Engine::NavigationCacheSettings settingsSnapshot = navigationCacheSettings;
+        const Engine::NavigationCacheManifest manifestSnapshot = navigationCache.manifest();
+        const Engine::AsyncJobHandle handle = asyncWork.submit(
+            "world navigation graph cache write",
+            [settingsSnapshot, manifestSnapshot, graph = std::move(graph)](std::stop_token stopToken) mutable -> std::any {
+                NavigationCacheWriteJobResult jobResult;
+                if (stopToken.stop_requested()) {
+                    jobResult.result.kind = Engine::NavigationCacheKind::Graph;
+                    jobResult.result.coord = graph.centerChunk;
+                    jobResult.result.status = Engine::NavigationCacheOperationStatus::Cancelled;
+                    jobResult.result.message = "World navigation graph cache write was cancelled.";
+                    return jobResult;
+                }
+                jobResult.result = Engine::NavigationCache::writeGraphCache(settingsSnapshot, manifestSnapshot, graph);
+                return jobResult;
+            });
+        if (handle.id != UINT64_MAX) {
+            ++runtimeNavigationStats.cacheWriteJobsQueuedThisFrame;
+        }
+    };
+    const auto enqueueTileCacheRead = [&](Engine::ChunkCoord coord) {
+        RuntimeNavTileRecord& record = runtimeNavTiles[coord];
+        if (record.state == RuntimeNavTileState::CacheReadPending) {
+            return;
+        }
+        const Engine::NavigationCacheSettings settingsSnapshot = navigationCacheSettings;
+        const Engine::NavigationCacheManifest manifestSnapshot = navigationCache.manifest();
+        const Engine::AsyncJobHandle handle = asyncWork.submit(
+            "navigation tile cache read " + std::to_string(coord.x) + "," + std::to_string(coord.z),
+            [settingsSnapshot, manifestSnapshot, coord](std::stop_token stopToken) -> std::any {
+                NavigationTileCacheReadJobResult jobResult;
+                if (stopToken.stop_requested()) {
+                    jobResult.result.kind = Engine::NavigationCacheKind::Tile;
+                    jobResult.result.coord = coord;
+                    jobResult.result.status = Engine::NavigationCacheOperationStatus::Cancelled;
+                    jobResult.result.message = "Navigation tile cache read was cancelled.";
+                    return jobResult;
+                }
+                jobResult.result = Engine::NavigationCache::readTileCache(settingsSnapshot, manifestSnapshot, coord);
+                return jobResult;
+            });
+        if (handle.id != UINT64_MAX) {
+            record.state = RuntimeNavTileState::CacheReadPending;
+            record.pendingJob = handle;
+            record.message = "Cache read pending.";
+            ++runtimeNavigationStats.cacheReadJobsQueuedThisFrame;
+        }
+    };
+    const auto enqueueConnectivityCacheRead = [&](std::vector<Engine::ChunkCoord> coords) {
+        if (navigationConnectivityCacheReadPending || coords.empty()) {
+            return;
+        }
+        const Engine::NavigationCacheSettings settingsSnapshot = navigationCacheSettings;
+        const Engine::NavigationCacheManifest manifestSnapshot = navigationCache.manifest();
+        const Engine::AsyncJobHandle handle = asyncWork.submit(
+            "navigation connectivity cache read batch",
+            [settingsSnapshot, manifestSnapshot, coords = std::move(coords)](std::stop_token stopToken) -> std::any {
+                NavigationConnectivityCacheReadJobResult jobResult;
+                for (Engine::ChunkCoord coord : coords) {
+                    if (stopToken.stop_requested()) {
+                        Engine::NavigationCacheConnectivityReadResult result;
+                        result.kind = Engine::NavigationCacheKind::Connectivity;
+                        result.coord = coord;
+                        result.status = Engine::NavigationCacheOperationStatus::Cancelled;
+                        result.message = "Navigation connectivity cache read was cancelled.";
+                        jobResult.results.push_back(std::move(result));
+                        continue;
+                    }
+                    jobResult.results.push_back(
+                        Engine::NavigationCache::readConnectivityCache(settingsSnapshot, manifestSnapshot, coord));
+                }
+                return jobResult;
+            });
+        if (handle.id != UINT64_MAX) {
+            navigationConnectivityCacheReadPending = true;
+            navigationConnectivityCacheReadAttempted = true;
+            navigationConnectivityCacheReadJob = handle;
+            ++runtimeNavigationStats.cacheReadJobsQueuedThisFrame;
+        }
+    };
+    const auto enqueueGraphCacheRead = [&](Engine::ChunkCoord centerChunk) {
+        if (worldGraphCacheReadPending) {
+            return;
+        }
+        const Engine::NavigationCacheSettings settingsSnapshot = navigationCacheSettings;
+        const Engine::NavigationCacheManifest manifestSnapshot = navigationCache.manifest();
+        const Engine::AsyncJobHandle handle = asyncWork.submit(
+            "world navigation graph cache read",
+            [settingsSnapshot, manifestSnapshot, centerChunk](std::stop_token stopToken) -> std::any {
+                NavigationGraphCacheReadJobResult jobResult;
+                if (stopToken.stop_requested()) {
+                    jobResult.result.kind = Engine::NavigationCacheKind::Graph;
+                    jobResult.result.coord = centerChunk;
+                    jobResult.result.status = Engine::NavigationCacheOperationStatus::Cancelled;
+                    jobResult.result.message = "World navigation graph cache read was cancelled.";
+                    return jobResult;
+                }
+                jobResult.result = Engine::NavigationCache::readGraphCache(settingsSnapshot, manifestSnapshot, centerChunk);
+                return jobResult;
+            });
+        if (handle.id != UINT64_MAX) {
+            worldGraphCacheReadPending = true;
+            worldGraphCacheReadAttempted = true;
+            worldGraphCacheReadJob = handle;
+            ++runtimeNavigationStats.cacheReadJobsQueuedThisFrame;
+        }
+    };
     const auto enqueueNavigationTileInsertion = [&](NavigationWorkerBuildResult result) {
         const Engine::ChunkCoord coord = result.coord;
         mainThreadWork.enqueue(Engine::MainThreadWorkItem{
@@ -2453,7 +2641,7 @@ int main(int, char**)
                     navigationDebugControls.cacheEnabled &&
                     navigationDebugControls.cacheWriteThrough &&
                     !objectOverrides.hasOverridesForChunk(result.coord)) {
-                    navigationCache.writeTile(*result.build.tileData);
+                    enqueueTileCacheWrite(*result.build.tileData);
                 }
             },
         });
@@ -2564,7 +2752,7 @@ int main(int, char**)
                 !loadedChunksHaveNavigationOverrides()) {
                 for (Engine::ChunkCoord coord : dirtyChunks) {
                     if (const Engine::ChunkNavConnectivity* connectivity = navigationConnectivity.connectivity(coord)) {
-                        navigationCache.writeConnectivity(*connectivity);
+                        enqueueConnectivityCacheWrite(*connectivity);
                     }
                 }
             }
@@ -2573,52 +2761,45 @@ int main(int, char**)
             }
             return result;
         }
-        if (navigationDebugControls.cacheEnabled && !loadedChunksHaveNavigationOverrides()) {
-            Engine::NavigationConnectivityCacheData cachedConnectivity;
-            bool loadedAll = !loadedNavChunks.empty();
-            for (Engine::ChunkCoord coord : loadedNavChunks) {
-                if (std::optional<Engine::ChunkNavConnectivity> cached = navigationCache.loadConnectivity(coord)) {
-                    cachedConnectivity.chunks.push_back(*cached);
-                } else {
-                    loadedAll = false;
-                    break;
-                }
-            }
-            if (loadedAll) {
-                navigationConnectivity.loadCacheData(cachedConnectivity);
-                result.processedChunks = static_cast<uint32_t>(loadedNavChunks.size());
-                return result;
-            }
+        if (navigationDebugControls.cacheEnabled &&
+            !loadedChunksHaveNavigationOverrides() &&
+            !navigationConnectivityCacheReadAttempted &&
+            !navigationConnectivityCacheReadPending &&
+            !loadedNavChunks.empty()) {
+            enqueueConnectivityCacheRead(loadedNavChunks);
+            result.hasMoreWork = true;
+            result.deferredChunks = static_cast<uint32_t>(loadedNavChunks.size());
+            return result;
         }
         navigationConnectivity.rebuild(loadedNavChunks, navigation, terrain, playerNavAgent);
+        navigationConnectivityCacheReadAttempted = false;
         result.processedChunks = static_cast<uint32_t>(loadedNavChunks.size());
         if (navigationDebugControls.cacheEnabled &&
             navigationDebugControls.cacheWriteThrough &&
             !loadedChunksHaveNavigationOverrides()) {
             for (const auto& [_, connectivity] : navigationConnectivity.all()) {
-                navigationCache.writeConnectivity(connectivity);
+                enqueueConnectivityCacheWrite(connectivity);
             }
         }
         navigationConnectivityDirtyChunks.clear();
         return result;
     };
     const auto rebuildWorldNavigationGraph = [&](Engine::ChunkCoord centerChunk) {
-        if (navigationDebugControls.cacheEnabled && !loadedChunksHaveNavigationOverrides()) {
-            if (const std::optional<Engine::WorldNavigationGraphCacheData> cachedGraph =
-                    navigationCache.loadGraph(centerChunk)) {
-                worldNavigationGraph.loadCacheData(*cachedGraph);
-                currentWorldGraphCenter = centerChunk;
-                hasWorldGraphCenter = true;
-                return;
-            }
+        if (navigationDebugControls.cacheEnabled &&
+            !loadedChunksHaveNavigationOverrides() &&
+            !worldGraphCacheReadAttempted &&
+            !worldGraphCacheReadPending) {
+            enqueueGraphCacheRead(centerChunk);
+            return;
         }
         worldNavigationGraph.rebuild(centerChunk, terrain, navigationConnectivity);
+        worldGraphCacheReadAttempted = false;
         currentWorldGraphCenter = centerChunk;
         hasWorldGraphCenter = true;
         if (navigationDebugControls.cacheEnabled &&
             navigationDebugControls.cacheWriteThrough &&
             !loadedChunksHaveNavigationOverrides()) {
-            navigationCache.writeGraph(worldNavigationGraph.cacheData());
+            enqueueGraphCacheWrite(worldNavigationGraph.cacheData());
         }
     };
     const auto updateWorldNavigationGraphCenter = [&](const glm::vec3& centerWorldPosition) {
@@ -2685,7 +2866,7 @@ int main(int, char**)
                     return;
                 }
                 if (record.state == RuntimeNavTileState::BuildPending ||
-                    record.state == RuntimeNavTileState::CachePending) {
+                    record.state == RuntimeNavTileState::CacheReadPending) {
                     return;
                 }
                 if (!asyncNavigationEnabled) {
@@ -2701,29 +2882,12 @@ int main(int, char**)
                 ++result.processedChunks;
 
                 const bool chunkHasOverrides = objectOverrides.hasOverridesForChunk(*coord);
-                if (navigationDebugControls.cacheEnabled && !chunkHasOverrides) {
-                    record.state = RuntimeNavTileState::CachePending;
-                    if (const std::optional<Engine::NavigationTileCacheData> cachedTile = navigationCache.loadTile(*coord)) {
-                        NavigationWorkerBuildResult cacheResult;
-                        cacheResult.coord = *coord;
-                        cacheResult.build.status = Engine::NavQueryStatus::Success;
-                        cacheResult.build.message = "Loaded terrain navigation tile from cache.";
-                        cacheResult.build.tileData = *cachedTile;
-                        cacheResult.build.diagnostics.coord = *coord;
-                        cacheResult.build.diagnostics.status = Engine::NavQueryStatus::Success;
-                        cacheResult.build.diagnostics.message = cacheResult.build.message;
-                        cacheResult.build.diagnostics.source = Engine::NavigationTileSource::Cache;
-                        cacheResult.build.diagnostics.sourceResolution = terrain.settings().navigationResolution;
-                        cacheResult.build.diagnostics.bounds = cachedTile->bounds;
-                        cacheResult.build.diagnostics.agent = playerNavAgent;
-                        cacheResult.build.diagnostics.build = navBuildSettings;
-                        cacheResult.writeCache = false;
-                        enqueueNavigationTileInsertion(std::move(cacheResult));
-                        ++runtimeNavigationStats.cacheHitsThisFrame;
-                        return;
-                    }
-                    ++runtimeNavigationStats.cacheMissesThisFrame;
-                    record.dirtyReasons |= static_cast<uint32_t>(RuntimeNavTileDirtyReason::CacheMiss);
+                const bool skipCache =
+                    (record.dirtyReasons & static_cast<uint32_t>(RuntimeNavTileDirtyReason::CacheMiss)) != 0 ||
+                    (record.dirtyReasons & static_cast<uint32_t>(RuntimeNavTileDirtyReason::CacheStale)) != 0;
+                if (navigationDebugControls.cacheEnabled && !chunkHasOverrides && !skipCache) {
+                    enqueueTileCacheRead(*coord);
+                    return;
                 }
 
                 NavigationBlockerStats chunkBlockerStats;
@@ -2847,7 +3011,7 @@ int main(int, char**)
                     frameTimings.worldGraphMs = measureMilliseconds([&]() {
                         rebuildWorldNavigationGraph(currentWorldGraphCenter);
                     });
-                    worldGraphDirty = false;
+                    worldGraphDirty = worldGraphCacheReadPending;
                     worldGraphWorkQueued = false;
                 },
             });
@@ -2982,6 +3146,132 @@ int main(int, char**)
                 }
                 ++runtimeNavigationStats.workerBuildsCompletedThisFrame;
                 enqueueNavigationTileInsertion(std::move(result));
+                continue;
+            }
+            if (completed.result.type() == typeid(NavigationTileCacheReadJobResult)) {
+                NavigationTileCacheReadJobResult jobResult =
+                    std::any_cast<NavigationTileCacheReadJobResult>(std::move(completed.result));
+                navigationCache.recordReadResult(jobResult.result);
+                ++runtimeNavigationStats.cacheReadJobsCompletedThisFrame;
+                RuntimeNavTileRecord& record = runtimeNavTiles[jobResult.result.coord];
+                if (record.pendingJob.id != completed.handle.id) {
+                    ++asyncStreaming.staleJobs;
+                    continue;
+                }
+                record.pendingJob = {};
+                if (!asyncStreaming.desiredChunks.contains(jobResult.result.coord) ||
+                    !chunkStreamer.isLoaded(jobResult.result.coord)) {
+                    record.state = RuntimeNavTileState::Missing;
+                    ++asyncStreaming.staleJobs;
+                    continue;
+                }
+                if (cacheStatusIsHit(jobResult.result.status) && jobResult.result.tile) {
+                    NavigationWorkerBuildResult cacheResult;
+                    cacheResult.coord = jobResult.result.coord;
+                    cacheResult.build.status = Engine::NavQueryStatus::Success;
+                    cacheResult.build.message = "Loaded terrain navigation tile from cache.";
+                    cacheResult.build.tileData = *jobResult.result.tile;
+                    cacheResult.build.diagnostics.coord = jobResult.result.coord;
+                    cacheResult.build.diagnostics.status = Engine::NavQueryStatus::Success;
+                    cacheResult.build.diagnostics.message = cacheResult.build.message;
+                    cacheResult.build.diagnostics.source = Engine::NavigationTileSource::Cache;
+                    cacheResult.build.diagnostics.sourceResolution = terrain.settings().navigationResolution;
+                    cacheResult.build.diagnostics.bounds = jobResult.result.tile->bounds;
+                    cacheResult.build.diagnostics.agent = playerNavAgent;
+                    cacheResult.build.diagnostics.build = navBuildSettings;
+                    cacheResult.writeCache = false;
+                    ++runtimeNavigationStats.cacheHitsThisFrame;
+                    enqueueNavigationTileInsertion(std::move(cacheResult));
+                } else {
+                    if (cacheStatusIsStaleOrCorrupt(jobResult.result.status)) {
+                        ++runtimeNavigationStats.cacheStaleOrCorruptThisFrame;
+                        record.dirtyReasons |= static_cast<uint32_t>(RuntimeNavTileDirtyReason::CacheStale);
+                    } else {
+                        ++runtimeNavigationStats.cacheMissesThisFrame;
+                        record.dirtyReasons |= static_cast<uint32_t>(RuntimeNavTileDirtyReason::CacheMiss);
+                    }
+                    record.state = RuntimeNavTileState::Dirty;
+                    record.message = jobResult.result.message;
+                    navigationTilesDirty = true;
+                }
+                continue;
+            }
+            if (completed.result.type() == typeid(NavigationCacheWriteJobResult)) {
+                NavigationCacheWriteJobResult jobResult =
+                    std::any_cast<NavigationCacheWriteJobResult>(std::move(completed.result));
+                navigationCache.recordWriteResult(jobResult.result);
+                ++runtimeNavigationStats.cacheWriteJobsCompletedThisFrame;
+                if (jobResult.result.status != Engine::NavigationCacheOperationStatus::WriteSuccess) {
+                    ++runtimeNavigationStats.cacheWriteJobsFailedThisFrame;
+                }
+                continue;
+            }
+            if (completed.result.type() == typeid(NavigationConnectivityCacheReadJobResult)) {
+                if (navigationConnectivityCacheReadJob.id != completed.handle.id) {
+                    ++asyncStreaming.staleJobs;
+                    continue;
+                }
+                NavigationConnectivityCacheReadJobResult jobResult =
+                    std::any_cast<NavigationConnectivityCacheReadJobResult>(std::move(completed.result));
+                navigationConnectivityCacheReadPending = false;
+                navigationConnectivityCacheReadJob = {};
+                Engine::NavigationConnectivityCacheData cacheData;
+                bool allHit = !jobResult.results.empty();
+                for (const Engine::NavigationCacheConnectivityReadResult& result : jobResult.results) {
+                    navigationCache.recordReadResult(result);
+                    ++runtimeNavigationStats.cacheReadJobsCompletedThisFrame;
+                    if (cacheStatusIsHit(result.status) && result.connectivity) {
+                        cacheData.chunks.push_back(*result.connectivity);
+                        ++runtimeNavigationStats.cacheHitsThisFrame;
+                    } else {
+                        allHit = false;
+                        if (cacheStatusIsStaleOrCorrupt(result.status)) {
+                            ++runtimeNavigationStats.cacheStaleOrCorruptThisFrame;
+                        } else {
+                            ++runtimeNavigationStats.cacheMissesThisFrame;
+                        }
+                    }
+                }
+                if (allHit) {
+                    navigationConnectivity.loadCacheData(cacheData);
+                    navigationConnectivityDirty = false;
+                    navigationConnectivityWorkQueued = false;
+                    navigationConnectivityCacheReadAttempted = false;
+                    worldGraphDirty = true;
+                } else {
+                    navigationConnectivityDirty = true;
+                }
+                processNavigationDirty();
+                continue;
+            }
+            if (completed.result.type() == typeid(NavigationGraphCacheReadJobResult)) {
+                if (worldGraphCacheReadJob.id != completed.handle.id) {
+                    ++asyncStreaming.staleJobs;
+                    continue;
+                }
+                NavigationGraphCacheReadJobResult jobResult =
+                    std::any_cast<NavigationGraphCacheReadJobResult>(std::move(completed.result));
+                worldGraphCacheReadPending = false;
+                worldGraphCacheReadJob = {};
+                navigationCache.recordReadResult(jobResult.result);
+                ++runtimeNavigationStats.cacheReadJobsCompletedThisFrame;
+                if (cacheStatusIsHit(jobResult.result.status) && jobResult.result.graph) {
+                    worldNavigationGraph.loadCacheData(*jobResult.result.graph);
+                    currentWorldGraphCenter = jobResult.result.coord;
+                    hasWorldGraphCenter = true;
+                    worldGraphDirty = false;
+                    worldGraphWorkQueued = false;
+                    worldGraphCacheReadAttempted = false;
+                    ++runtimeNavigationStats.cacheHitsThisFrame;
+                } else {
+                    worldGraphDirty = true;
+                    if (cacheStatusIsStaleOrCorrupt(jobResult.result.status)) {
+                        ++runtimeNavigationStats.cacheStaleOrCorruptThisFrame;
+                    } else {
+                        ++runtimeNavigationStats.cacheMissesThisFrame;
+                    }
+                }
+                processNavigationDirty();
                 continue;
             }
             if (completed.result.type() != typeid(GeneratedChunkLoadResult)) {
@@ -3135,6 +3425,14 @@ int main(int, char**)
         for (const auto& [_, record] : runtimeNavTiles) {
             asyncWork.cancel(record.pendingJob);
         }
+        asyncWork.cancel(navigationConnectivityCacheReadJob);
+        asyncWork.cancel(worldGraphCacheReadJob);
+        navigationConnectivityCacheReadPending = false;
+        navigationConnectivityCacheReadAttempted = false;
+        navigationConnectivityCacheReadJob = {};
+        worldGraphCacheReadPending = false;
+        worldGraphCacheReadAttempted = false;
+        worldGraphCacheReadJob = {};
         for (const std::shared_ptr<PendingChunkUnload>& pending : activeChunkUnloads) {
             finishPendingChunkUnloadNow(pending);
         }
@@ -3890,7 +4188,13 @@ int main(int, char**)
             navigationStats.cacheGraphWrites = cacheStats.graphWrites;
             navigationStats.navTileCacheHitsThisFrame = runtimeNavigationStats.cacheHitsThisFrame;
             navigationStats.navTileCacheMissesThisFrame = runtimeNavigationStats.cacheMissesThisFrame;
+            navigationStats.navTileCacheStaleOrCorruptThisFrame = runtimeNavigationStats.cacheStaleOrCorruptThisFrame;
             navigationStats.navTileCacheLoadFailuresThisFrame = runtimeNavigationStats.cacheLoadFailuresThisFrame;
+            navigationStats.cacheReadJobsQueuedThisFrame = runtimeNavigationStats.cacheReadJobsQueuedThisFrame;
+            navigationStats.cacheReadJobsCompletedThisFrame = runtimeNavigationStats.cacheReadJobsCompletedThisFrame;
+            navigationStats.cacheWriteJobsQueuedThisFrame = runtimeNavigationStats.cacheWriteJobsQueuedThisFrame;
+            navigationStats.cacheWriteJobsCompletedThisFrame = runtimeNavigationStats.cacheWriteJobsCompletedThisFrame;
+            navigationStats.cacheWriteJobsFailedThisFrame = runtimeNavigationStats.cacheWriteJobsFailedThisFrame;
             navigationStats.navTileWorkerBuildsQueuedThisFrame = runtimeNavigationStats.workerBuildsQueuedThisFrame;
             navigationStats.navTileWorkerBuildsCompletedThisFrame = runtimeNavigationStats.workerBuildsCompletedThisFrame;
             navigationStats.navTileWorkerBuildsFailedThisFrame = runtimeNavigationStats.workerBuildsFailedThisFrame;
@@ -3899,7 +4203,7 @@ int main(int, char**)
                     case RuntimeNavTileState::Ready:
                         ++navigationStats.navTileReadyChunks;
                         break;
-                    case RuntimeNavTileState::CachePending:
+                    case RuntimeNavTileState::CacheReadPending:
                     case RuntimeNavTileState::BuildPending:
                     case RuntimeNavTileState::Dirty:
                         ++navigationStats.navTilePendingChunks;
@@ -4079,16 +4383,16 @@ int main(int, char**)
             navigationCache.ensureManifest();
             for (Engine::ChunkCoord coord : navigationChunks) {
                 if (const std::optional<Engine::NavigationTileCacheData> tile = navigation.tileCacheData(coord)) {
-                    navigationCache.writeTile(*tile);
+                    enqueueTileCacheWrite(*tile);
                 }
             }
             for (const auto& [_, connectivity] : navigationConnectivity.all()) {
-                navigationCache.writeConnectivity(connectivity);
+                enqueueConnectivityCacheWrite(connectivity);
             }
             if (worldNavigationGraph.stats().hasGraph) {
-                navigationCache.writeGraph(worldNavigationGraph.cacheData());
+                enqueueGraphCacheWrite(worldNavigationGraph.cacheData());
             }
-            worldSaveControls.status = "Generated visible navigation cache records.";
+            worldSaveControls.status = "Queued visible navigation cache writes.";
         }
         if (navigationDebugControls.refreshSelectedOrVisibleCacheRequested) {
             navigationDebugControls.refreshSelectedOrVisibleCacheRequested = false;
@@ -4115,16 +4419,16 @@ int main(int, char**)
             navigationCache.ensureManifest();
             for (Engine::ChunkCoord coord : coords) {
                 if (const std::optional<Engine::NavigationTileCacheData> tile = navigation.tileCacheData(coord)) {
-                    navigationCache.writeTile(*tile);
+                    enqueueTileCacheWrite(*tile);
                 }
             }
             for (const auto& [_, connectivity] : navigationConnectivity.all()) {
-                navigationCache.writeConnectivity(connectivity);
+                enqueueConnectivityCacheWrite(connectivity);
             }
             if (worldNavigationGraph.stats().hasGraph) {
-                navigationCache.writeGraph(worldNavigationGraph.cacheData());
+                enqueueGraphCacheWrite(worldNavigationGraph.cacheData());
             }
-            worldSaveControls.status = "Refreshed navigation cache records.";
+            worldSaveControls.status = "Queued refreshed navigation cache writes.";
         }
         if (worldSaveControls.saveRequested) {
             worldSaveControls.saveRequested = false;

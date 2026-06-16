@@ -46,6 +46,44 @@ namespace Engine {
         std::string lastMessage;
     };
 
+    enum class NavigationCacheKind {
+        Tile,
+        Connectivity,
+        Graph,
+    };
+
+    enum class NavigationCacheOperationStatus {
+        Hit,
+        Miss,
+        Stale,
+        Corrupt,
+        WriteSuccess,
+        WriteFailed,
+        Cancelled,
+    };
+
+    struct NavigationCacheOperationResult {
+        NavigationCacheKind kind = NavigationCacheKind::Tile;
+        NavigationCacheOperationStatus status = NavigationCacheOperationStatus::Miss;
+        ChunkCoord coord;
+        std::filesystem::path path;
+        std::string message;
+    };
+
+    struct NavigationCacheTileReadResult : NavigationCacheOperationResult {
+        std::optional<NavigationTileCacheData> tile;
+    };
+
+    struct NavigationCacheConnectivityReadResult : NavigationCacheOperationResult {
+        std::optional<ChunkNavConnectivity> connectivity;
+    };
+
+    struct NavigationCacheGraphReadResult : NavigationCacheOperationResult {
+        std::optional<WorldNavigationGraphCacheData> graph;
+    };
+
+    using NavigationCacheWriteResult = NavigationCacheOperationResult;
+
     // Disk cache for deterministic baseline navigation data. Cache files are
     // derived data and must never be required for startup or save loading.
     class NavigationCache {
@@ -68,6 +106,34 @@ namespace Engine {
         const NavigationCacheStats& stats() const;
         void clearStats();
         bool ensureManifest();
+
+        static NavigationCacheTileReadResult readTileCache(
+            const NavigationCacheSettings& settings,
+            const NavigationCacheManifest& manifest,
+            ChunkCoord coord);
+        static NavigationCacheWriteResult writeTileCache(
+            const NavigationCacheSettings& settings,
+            const NavigationCacheManifest& manifest,
+            const NavigationTileCacheData& tile);
+        static NavigationCacheConnectivityReadResult readConnectivityCache(
+            const NavigationCacheSettings& settings,
+            const NavigationCacheManifest& manifest,
+            ChunkCoord coord);
+        static NavigationCacheWriteResult writeConnectivityCache(
+            const NavigationCacheSettings& settings,
+            const NavigationCacheManifest& manifest,
+            const ChunkNavConnectivity& connectivity);
+        static NavigationCacheGraphReadResult readGraphCache(
+            const NavigationCacheSettings& settings,
+            const NavigationCacheManifest& manifest,
+            ChunkCoord centerChunk);
+        static NavigationCacheWriteResult writeGraphCache(
+            const NavigationCacheSettings& settings,
+            const NavigationCacheManifest& manifest,
+            const WorldNavigationGraphCacheData& graph);
+
+        void recordReadResult(const NavigationCacheOperationResult& result);
+        void recordWriteResult(const NavigationCacheOperationResult& result);
 
         std::optional<NavigationTileCacheData> loadTile(ChunkCoord coord);
         bool writeTile(const NavigationTileCacheData& tile);

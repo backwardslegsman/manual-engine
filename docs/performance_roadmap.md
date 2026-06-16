@@ -20,6 +20,8 @@ This roadmap tracks hitch reduction and frame pacing work for the open-world pro
 
 ## Phase P1 - Async Navigation Cache I/O
 
+Status: implemented. Navigation cache tile/connectivity/graph file reads and writes now have worker-safe helper APIs, and App uses `AsyncWorkQueue` for runtime cache reads and debug/manual cache writes.
+
 Move navigation cache file reads and writes off the main thread.
 
 Scope:
@@ -220,4 +222,3 @@ Deferred:
 7. More detailed resource destruction pacing if long-frame diagnostics point there.
 8. Budgeted save/reload/editor refresh paths.
 9. Rolling long-frame history/export.
-

@@ -95,6 +95,7 @@ add_executable(manual_engine_navigation_tests
     src/Engine/ChunkTypes.cpp
     src/Engine/EventQueue.cpp
     src/Engine/FrameBudget.cpp
+    src/Engine/NavigationCache.cpp
     src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationProfile.cpp
     src/Engine/ObjectId.cpp

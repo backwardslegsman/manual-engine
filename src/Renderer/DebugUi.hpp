@@ -117,7 +117,13 @@ namespace Renderer::DebugUi {
         uint32_t cacheGraphWrites = 0;
         uint32_t navTileCacheHitsThisFrame = 0;
         uint32_t navTileCacheMissesThisFrame = 0;
+        uint32_t navTileCacheStaleOrCorruptThisFrame = 0;
         uint32_t navTileCacheLoadFailuresThisFrame = 0;
+        uint32_t cacheReadJobsQueuedThisFrame = 0;
+        uint32_t cacheReadJobsCompletedThisFrame = 0;
+        uint32_t cacheWriteJobsQueuedThisFrame = 0;
+        uint32_t cacheWriteJobsCompletedThisFrame = 0;
+        uint32_t cacheWriteJobsFailedThisFrame = 0;
         uint32_t navTileWorkerBuildsQueuedThisFrame = 0;
         uint32_t navTileWorkerBuildsCompletedThisFrame = 0;
         uint32_t navTileWorkerBuildsFailedThisFrame = 0;

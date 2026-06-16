@@ -583,3 +583,14 @@ Changed:
 
 Rationale:
 - The engine now has enough runtime systems that performance work needs its own planning document with explicit worker/main-thread boundaries and phased commit priorities.
+
+## 2026-06-15 - Async Navigation Cache I/O
+
+Changed:
+- Added worker-safe navigation cache read/write helpers and result structs for tile, connectivity, and world graph cache records.
+- Moved runtime nav tile cache reads, connectivity/graph cache reads, write-through writes, and manual cache generation writes onto `AsyncWorkQueue`.
+- Added debug counters for async cache read/write jobs and cache stale/corrupt results.
+- Added cache helper tests for missing files, tile round-trips, corrupt tile files, identity mismatch, and negative chunk coordinates.
+
+Rationale:
+- Navigation cache file I/O can stall unpredictably on the main thread. Workers now handle file reads/writes, while the main thread only merges results into stats and live systems.

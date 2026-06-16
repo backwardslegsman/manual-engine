@@ -529,10 +529,18 @@ namespace Renderer::DebugUi {
             navigation.cacheGraphHits,
             navigation.cacheGraphMisses,
             navigation.cacheGraphWrites);
-        ImGui::Text("Runtime nav cache hit/miss/load-fail this frame: %u / %u / %u",
+        ImGui::Text("Runtime nav cache hit/miss/stale-or-corrupt/load-fail this frame: %u / %u / %u / %u",
             navigation.navTileCacheHitsThisFrame,
             navigation.navTileCacheMissesThisFrame,
+            navigation.navTileCacheStaleOrCorruptThisFrame,
             navigation.navTileCacheLoadFailuresThisFrame);
+        ImGui::Text("Async cache read queued/completed: %u / %u",
+            navigation.cacheReadJobsQueuedThisFrame,
+            navigation.cacheReadJobsCompletedThisFrame);
+        ImGui::Text("Async cache write queued/completed/failed: %u / %u / %u",
+            navigation.cacheWriteJobsQueuedThisFrame,
+            navigation.cacheWriteJobsCompletedThisFrame,
+            navigation.cacheWriteJobsFailedThisFrame);
         ImGui::Text("Runtime nav worker queued/completed/failed this frame: %u / %u / %u",
             navigation.navTileWorkerBuildsQueuedThisFrame,
             navigation.navTileWorkerBuildsCompletedThisFrame,

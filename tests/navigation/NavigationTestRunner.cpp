@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iomanip>
@@ -21,6 +22,7 @@
 #include "Engine/BlockingCollision.hpp"
 #include "Engine/EventQueue.hpp"
 #include "Engine/FrameBudget.hpp"
+#include "Engine/NavigationCache.hpp"
 #include "Engine/NavigationConnectivity.hpp"
 #include "Engine/SpatialRegistry.hpp"
 #include "Engine/Terrain.hpp"
@@ -1220,6 +1222,135 @@ namespace {
         ctx.expect(queue.pendingCount() == 0, "queue still had pending work after open drain");
     }
 
+    Engine::NavigationCacheManifest testCacheManifest(std::string identity)
+    {
+        Engine::NavigationCacheManifest manifest;
+        manifest.identityHash = std::move(identity);
+        manifest.worldId = "cache_test";
+        manifest.formatVersion = 1;
+        manifest.chunkSize = ChunkSize;
+        manifest.graphRadiusChunks = 4;
+        manifest.navigationResolution = Resolution;
+        return manifest;
+    }
+
+    Engine::NavigationCacheSettings testCacheSettings(std::string_view name)
+    {
+        Engine::NavigationCacheSettings settings;
+        settings.rootPath = std::filesystem::path{"generated/navigation_cache_tests"} / std::string{name};
+        settings.worldId = "cache_test";
+        settings.formatVersion = 1;
+        std::filesystem::remove_all(settings.rootPath);
+        return settings;
+    }
+
+    Engine::NavigationTileCacheData testTile(Engine::ChunkCoord coord)
+    {
+        Engine::NavigationTileCacheData tile;
+        tile.coord = coord;
+        tile.bounds = {{-1.0f, 0.0f, -2.0f}, {3.0f, 4.0f, 5.0f}};
+        tile.detourTileData = {1, 2, 3, 4, 5};
+        return tile;
+    }
+
+    void navigationCacheMissingTileReturnsMiss(TestContext& ctx)
+    {
+        const Engine::NavigationCacheSettings settings = testCacheSettings("missing_tile");
+        const Engine::NavigationCacheManifest manifest = testCacheManifest("identity_a");
+        const Engine::NavigationCacheTileReadResult result =
+            Engine::NavigationCache::readTileCache(settings, manifest, {42, -7});
+        ctx.expect(result.status == Engine::NavigationCacheOperationStatus::Miss,
+            "missing tile cache did not return Miss");
+        ctx.expect(!result.tile.has_value(), "missing tile returned payload");
+    }
+
+    void navigationCacheTileRoundTrips(TestContext& ctx)
+    {
+        const Engine::NavigationCacheSettings settings = testCacheSettings("tile_roundtrip");
+        const Engine::NavigationCacheManifest manifest = testCacheManifest("identity_b");
+        const Engine::NavigationTileCacheData tile = testTile({-3, 4});
+        const Engine::NavigationCacheWriteResult write =
+            Engine::NavigationCache::writeTileCache(settings, manifest, tile);
+        const Engine::NavigationCacheTileReadResult read =
+            Engine::NavigationCache::readTileCache(settings, manifest, tile.coord);
+        ctx.expect(write.status == Engine::NavigationCacheOperationStatus::WriteSuccess,
+            "tile cache write failed");
+        ctx.expect(read.status == Engine::NavigationCacheOperationStatus::Hit,
+            "tile cache read did not hit");
+        ctx.expect(read.tile.has_value(), "tile cache hit returned no payload");
+        if (read.tile) {
+            ctx.expect(read.tile->coord == tile.coord, "tile cache coord did not round-trip");
+            ctx.expect(read.tile->detourTileData == tile.detourTileData, "tile cache bytes did not round-trip");
+        }
+    }
+
+    void navigationCacheCorruptTileIsSafe(TestContext& ctx)
+    {
+        const Engine::NavigationCacheSettings settings = testCacheSettings("corrupt_tile");
+        const Engine::NavigationCacheManifest manifest = testCacheManifest("identity_c");
+        const Engine::NavigationTileCacheData tile = testTile({2, 2});
+        const Engine::NavigationCacheWriteResult write =
+            Engine::NavigationCache::writeTileCache(settings, manifest, tile);
+        ctx.expect(write.status == Engine::NavigationCacheOperationStatus::WriteSuccess,
+            "failed to write tile before corrupting it");
+        {
+            std::ofstream file(write.path, std::ios::binary | std::ios::trunc);
+            file << "bad";
+        }
+        const Engine::NavigationCacheTileReadResult read =
+            Engine::NavigationCache::readTileCache(settings, manifest, tile.coord);
+        ctx.expect(read.status == Engine::NavigationCacheOperationStatus::Stale ||
+                read.status == Engine::NavigationCacheOperationStatus::Corrupt,
+            "corrupt tile did not return Stale or Corrupt");
+        ctx.expect(!read.tile.has_value(), "corrupt tile returned payload");
+    }
+
+    void navigationCacheConnectivityIdentityMismatchIsStale(TestContext& ctx)
+    {
+        const Engine::NavigationCacheSettings settings = testCacheSettings("connectivity_stale");
+        const Engine::NavigationCacheManifest manifest = testCacheManifest("identity_d");
+        Engine::ChunkNavConnectivity connectivity;
+        connectivity.coord = {-2, -5};
+        connectivity.biomeId = "test";
+        connectivity.traversalCost = 1.0f;
+        const Engine::NavigationCacheWriteResult write =
+            Engine::NavigationCache::writeConnectivityCache(settings, manifest, connectivity);
+        {
+            std::ofstream file(write.path, std::ios::trunc);
+            file << "identity_hash: stale_identity\nconnectivity:\n  coord: {x: -2, z: -5}\n";
+        }
+        const Engine::NavigationCacheConnectivityReadResult read =
+            Engine::NavigationCache::readConnectivityCache(settings, manifest, connectivity.coord);
+        ctx.expect(write.status == Engine::NavigationCacheOperationStatus::WriteSuccess,
+            "connectivity cache write failed");
+        ctx.expect(read.status == Engine::NavigationCacheOperationStatus::Stale,
+            "connectivity identity mismatch did not return Stale");
+        ctx.expect(!read.connectivity.has_value(), "stale connectivity returned payload");
+    }
+
+    void navigationCacheGraphIdentityMismatchIsStale(TestContext& ctx)
+    {
+        const Engine::NavigationCacheSettings settings = testCacheSettings("graph_stale");
+        const Engine::NavigationCacheManifest manifest = testCacheManifest("identity_f");
+        Engine::WorldNavigationGraphCacheData graph;
+        graph.centerChunk = {-8, 9};
+        graph.hasGraph = true;
+        graph.nodes.push_back({graph.centerChunk, "test", {0.0f, 0.0f, 0.0f}, 1.0f});
+        const Engine::NavigationCacheWriteResult write =
+            Engine::NavigationCache::writeGraphCache(settings, manifest, graph);
+        {
+            std::ofstream file(write.path, std::ios::trunc);
+            file << "identity_hash: stale_identity\ngraph:\n  center: {x: -8, z: 9}\n  has_graph: true\n";
+        }
+        const Engine::NavigationCacheGraphReadResult read =
+            Engine::NavigationCache::readGraphCache(settings, manifest, graph.centerChunk);
+        ctx.expect(write.status == Engine::NavigationCacheOperationStatus::WriteSuccess,
+            "graph cache write failed");
+        ctx.expect(read.status == Engine::NavigationCacheOperationStatus::Stale,
+            "graph identity mismatch did not return Stale");
+        ctx.expect(!read.graph.has_value(), "stale graph returned payload");
+    }
+
     void navigationCpuProfileReport(TestContext& ctx)
     {
         ProfileReport profile;
@@ -1417,6 +1548,11 @@ int main()
         {"FrameBudgetDefersNormalWorkWhenExhausted", frameBudgetDefersNormalWorkWhenExhausted},
         {"FrameBudgetRunsCriticalWorkWithOverrun", frameBudgetRunsCriticalWorkWithOverrun},
         {"MainThreadWorkQueuePreservesDeferredWork", mainThreadWorkQueuePreservesDeferredWork},
+        {"NavigationCacheMissingTileReturnsMiss", navigationCacheMissingTileReturnsMiss},
+        {"NavigationCacheTileRoundTrips", navigationCacheTileRoundTrips},
+        {"NavigationCacheCorruptTileIsSafe", navigationCacheCorruptTileIsSafe},
+        {"NavigationCacheConnectivityIdentityMismatchIsStale", navigationCacheConnectivityIdentityMismatchIsStale},
+        {"NavigationCacheGraphIdentityMismatchIsStale", navigationCacheGraphIdentityMismatchIsStale},
         {"NavigationCpuProfileReport", navigationCpuProfileReport},
     };
 
