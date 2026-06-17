@@ -1,0 +1,27 @@
+Navigation CPU profile
+bucket                               count      total ms        avg ms        max ms
+recast terrain tile build               25        14.900         0.596         0.780
+connectivity rebuild                     1         2.119         2.119         2.119
+recast full 33 source tile build         1         0.858         0.858         0.858
+recast reduced 17 source tile build       1         0.610         0.610         0.610
+connectivity incremental rebuild         1         0.357         0.357         0.357
+world graph rebuild                      1         0.190         0.190         0.190
+actor fixed updates                      1         0.132         0.132         0.132
+navigation build data extraction        25         0.102         0.004         0.009
+terrain cpu tile creation               25         0.060         0.002         0.013
+detour tile cache insert                25         0.053         0.002         0.025
+actor route command                      1         0.053         0.053         0.053
+coarse graph route query                 1         0.050         0.050         0.050
+connectivity remove chunk                5         0.030         0.006         0.010
+world object destroy                   256         0.024         0.000         0.001
+full 33 nav build data extraction        1         0.012         0.012         0.012
+detour path query                        8         0.011         0.001         0.002
+blocker geometry append                  9         0.010         0.001         0.002
+detour tile destroy                     25         0.006         0.000         0.001
+detour nav system clear                  1         0.006         0.006         0.006
+reduced 17 nav build data extraction       1         0.004         0.004         0.004
+detour tile cache export                25         0.003         0.000         0.000
+nearest nav query                       16         0.003         0.000         0.000
+terrain cpu tile destroy                25         0.002         0.000         0.000
+world graph clear                        1         0.002         0.002         0.002
+chunk detach bookkeeping                25         0.001         0.000         0.000

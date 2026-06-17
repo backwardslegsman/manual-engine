@@ -1,0 +1,4 @@
+identity_hash: stale_identity
+graph:
+  center: {x: -8, z: 9}
+  has_graph: true

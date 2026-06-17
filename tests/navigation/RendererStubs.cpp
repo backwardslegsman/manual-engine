@@ -22,6 +22,10 @@ namespace Renderer {
     {
     }
 
+    void destroyRenderGroup(RenderGroupHandle)
+    {
+    }
+
     void setInstanceTransform(MeshInstanceHandle, const glm::mat4&)
     {
     }

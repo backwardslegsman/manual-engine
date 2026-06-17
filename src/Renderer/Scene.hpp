@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,40 @@ namespace Renderer {
         bool worldNavigationRoute = true;
         bool cameraFrustum = false;
         bool actorDestination = true;
+        uint32_t maxDebugLines = 20000;
+        uint32_t maxNavMeshEdgeLines = 6000;
+        uint32_t maxWorldGraphEdgeLines = 4000;
+        uint32_t maxTerrainSlopeWarningLines = 2000;
+        uint32_t maxCollisionAabbs = 2000;
+        uint32_t maxChunkBorderRects = 2000;
+    };
+
+    struct DebugLinePrimitive {
+        glm::vec3 a{};
+        glm::vec3 b{};
+        uint32_t abgr = 0xffffffff;
+    };
+
+    struct DebugPrimitiveBatch {
+        std::vector<DebugLinePrimitive> lines;
+    };
+
+    struct DebugPrimitiveCategoryStats {
+        uint32_t generated = 0;
+        uint32_t submitted = 0;
+        uint32_t clipped = 0;
+    };
+
+    struct DebugDrawStats {
+        uint32_t generatedLines = 0;
+        uint32_t submittedLines = 0;
+        uint32_t clippedLines = 0;
+        uint32_t lastFramePrimitiveBufferSize = 0;
+        DebugPrimitiveCategoryStats navMeshEdges;
+        DebugPrimitiveCategoryStats worldGraphEdges;
+        DebugPrimitiveCategoryStats terrainSlopeWarnings;
+        DebugPrimitiveCategoryStats collisionBounds;
+        DebugPrimitiveCategoryStats chunkBorders;
     };
 
     struct RenderGroupHandle {
@@ -206,8 +241,10 @@ namespace Renderer {
     SceneDrawStats drawScene(const RenderView& view);
     void clearDebugPrimitives();
     void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32_t abgr);
+    void addDebugLines(std::span<const DebugLinePrimitive> lines);
     void addDebugAabb(const Aabb& bounds, uint32_t abgr);
     void addDebugXZRect(float minX, float minZ, float maxX, float maxZ, float y, uint32_t abgr);
     void addDebugFrustum(const glm::mat4& inverseViewProjection, uint32_t abgr);
+    DebugDrawStats& debugDrawStats();
     void drawDebugPrimitives(const RenderView& view);
 }

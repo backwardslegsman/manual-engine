@@ -20,6 +20,7 @@
 
 #include "Engine/ActorController.hpp"
 #include "Engine/BlockingCollision.hpp"
+#include "Engine/ChunkStreamer.hpp"
 #include "Engine/EventQueue.hpp"
 #include "Engine/FrameBudget.hpp"
 #include "Engine/NavigationCache.hpp"
@@ -1066,6 +1067,129 @@ namespace {
         ctx.expect(accepted + rejected <= samples, "portal diagnostics counted more outcomes than samples");
     }
 
+    void phasedConnectivityMatchesSynchronousRebuild(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationSystem navigation;
+        Engine::NavAgentSettings agent;
+        const std::vector<TileSpec> specs{
+            {{0, 0}, heights(0.0f), {}},
+            {{1, 0}, heights(0.0f), {}},
+            {{0, 1}, heights(0.0f), {}},
+            {{1, 1}, heights(0.0f), {}},
+        };
+        if (!addTiles(terrain, navigation, specs, agent, ctx)) {
+            return;
+        }
+
+        const std::vector<Engine::ChunkCoord> chunks{{0, 0}, {1, 0}, {0, 1}, {1, 1}};
+        Engine::NavigationConnectivitySystem synchronous;
+        synchronous.rebuild(chunks, navigation, terrain, agent);
+
+        Engine::NavigationConnectivitySystem phased;
+        Engine::NavigationConnectivityBuildRequest request;
+        request.chunks = chunks;
+        request.clearExisting = true;
+        const Engine::NavigationConnectivityBuildHandle handle = phased.beginRebuild(std::move(request));
+        uint32_t stepCount = 0;
+        while (phased.hasActiveRebuild(handle) && stepCount++ < 256) {
+            phased.stepRebuild(handle, navigation, terrain, agent, 9);
+        }
+
+        const Engine::NavigationConnectivityCacheData expected = synchronous.cacheData();
+        const Engine::NavigationConnectivityCacheData actual = phased.cacheData();
+        ctx.expect(actual.chunks.size() == expected.chunks.size(), "phased connectivity chunk count differed");
+        ctx.expect(phased.stats().totalPortals == synchronous.stats().totalPortals, "phased connectivity portal count differed");
+        ctx.expect(phased.stats().connectedPortals == synchronous.stats().connectedPortals, "phased connectivity connected portal count differed");
+    }
+
+    void phasedConnectivityMaxSamplesSplitsWork(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationSystem navigation;
+        Engine::NavAgentSettings agent;
+        if (!addTiles(terrain, navigation, {{{0, 0}, heights(0.0f), {}}}, agent, ctx)) {
+            return;
+        }
+
+        Engine::NavigationConnectivitySystem phased;
+        Engine::NavigationConnectivityBuildRequest request;
+        request.chunks = {{0, 0}};
+        request.clearExisting = true;
+        const Engine::NavigationConnectivityBuildHandle handle = phased.beginRebuild(std::move(request));
+        uint32_t stepCount = 0;
+        uint32_t sampleSteps = 0;
+        while (phased.hasActiveRebuild(handle) && stepCount++ < 128) {
+            const Engine::NavigationConnectivityBuildStepResult step =
+                phased.stepRebuild(handle, navigation, terrain, agent, 1);
+            if (step.samplesProcessed > 0) {
+                ++sampleSteps;
+                ctx.expect(step.samplesProcessed == 1, "maxSamples=1 processed more than one sample");
+            }
+        }
+        ctx.expect(!phased.hasActiveRebuild(handle), "phased connectivity did not complete");
+        ctx.expect(sampleSteps >= 4, "phased connectivity did not split edge sampling across steps");
+        const Engine::ChunkPortalDiagnostics* diagnostics = phased.portalDiagnostics({0, 0});
+        ctx.expect(diagnostics != nullptr, "phased connectivity produced no diagnostics");
+        if (diagnostics) {
+            uint32_t samples = 0;
+            for (const Engine::NavigationPortalEdgeDiagnostics& edge : diagnostics->edges) {
+                samples += edge.sampleCount;
+            }
+            ctx.expect(samples == phased.settings().samplesPerEdge * Engine::NavEdgeDirectionCount,
+                "phased connectivity diagnostics sample count was wrong");
+        }
+    }
+
+    void phasedConnectivityCancelStopsMutation(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationSystem navigation;
+        Engine::NavAgentSettings agent;
+        if (!addTiles(terrain, navigation, {{{0, 0}, heights(0.0f), {}}}, agent, ctx)) {
+            return;
+        }
+
+        Engine::NavigationConnectivitySystem phased;
+        Engine::NavigationConnectivityBuildRequest request;
+        request.chunks = {{0, 0}};
+        request.clearExisting = true;
+        const Engine::NavigationConnectivityBuildHandle handle = phased.beginRebuild(std::move(request));
+        phased.stepRebuild(handle, navigation, terrain, agent, 1);
+        phased.cancelRebuild(handle);
+        phased.stepRebuild(handle, navigation, terrain, agent, 64);
+        ctx.expect(!phased.hasActiveRebuild(handle), "cancelled connectivity rebuild remained active");
+        ctx.expect(phased.cacheData().chunks.empty(), "cancelled connectivity rebuild mutated final cache data");
+    }
+
+    void phasedConnectivityClearExistingRemovesStaleChunks(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationSystem navigation;
+        Engine::NavAgentSettings agent;
+        if (!addTiles(terrain, navigation, {{{0, 0}, heights(0.0f), {}}, {{1, 0}, heights(0.0f), {}}}, agent, ctx)) {
+            return;
+        }
+
+        Engine::NavigationConnectivitySystem phased;
+        phased.rebuild({{0, 0}, {1, 0}}, navigation, terrain, agent);
+        ctx.expect(phased.cacheData().chunks.size() == 2, "initial connectivity did not contain two chunks");
+
+        Engine::NavigationConnectivityBuildRequest request;
+        request.chunks = {{0, 0}};
+        request.clearExisting = true;
+        const Engine::NavigationConnectivityBuildHandle handle = phased.beginRebuild(std::move(request));
+        uint32_t stepCount = 0;
+        while (phased.hasActiveRebuild(handle) && stepCount++ < 128) {
+            phased.stepRebuild(handle, navigation, terrain, agent, 64);
+        }
+
+        const Engine::NavigationConnectivityCacheData data = phased.cacheData();
+        ctx.expect(data.chunks.size() == 1, "clearExisting phased rebuild left stale chunks");
+        ctx.expect(!data.chunks.empty() && data.chunks.front().coord == Engine::ChunkCoord{0, 0},
+            "clearExisting phased rebuild kept the wrong chunk");
+    }
+
     void actorCommandDiagnosticsAfterRouteFallback(TestContext& ctx)
     {
         Engine::TerrainSystem terrain = makeTerrain();
@@ -1164,6 +1288,87 @@ namespace {
         }
         ctx.expect(reduced->vertices.size() < full->vertices.size(), "reduced nav resolution did not reduce vertex count");
         ctx.expect(reduced->indices.size() < full->indices.size(), "reduced nav resolution did not reduce index count");
+    }
+
+    void terrainRenderMeshBuildDataIsDeterministic(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        const Engine::TerrainTileHandle tile = terrain.createTileFromHeights({0, 0}, rampHeights(0.0f, 3.0f));
+        const std::optional<Engine::TerrainRenderMeshBuildInput> input = terrain.renderMeshBuildInput(tile, 1);
+        ctx.expect(input.has_value(), "missing terrain render mesh build input");
+        if (!input) {
+            return;
+        }
+
+        const Engine::TerrainRenderMeshBuildResult first = Engine::TerrainSystem::buildRenderMeshData(*input);
+        const Engine::TerrainRenderMeshBuildResult second = Engine::TerrainSystem::buildRenderMeshData(*input);
+        ctx.expect(first.success && second.success, "terrain render mesh worker build failed");
+        ctx.expect(first.mesh.vertices.size() == second.mesh.vertices.size(), "terrain render mesh vertex count was not deterministic");
+        ctx.expect(first.mesh.indices == second.mesh.indices, "terrain render mesh indices were not deterministic");
+        ctx.expect(!first.mesh.vertices.empty(), "terrain render mesh produced no vertices");
+        if (!first.mesh.vertices.empty() && !second.mesh.vertices.empty()) {
+            ctx.expect(first.mesh.vertices.front().py == second.mesh.vertices.front().py,
+                "terrain render mesh first vertex height was not deterministic");
+        }
+    }
+
+    void terrainRenderMeshStaleGenerationRejected(TestContext& ctx)
+    {
+        Engine::TerrainSettings settings;
+        settings.chunkSize = ChunkSize;
+        settings.resolution = Resolution;
+        settings.createRendererResources = true;
+        Engine::TerrainSystem terrain{settings};
+        const Engine::TerrainTileHandle tile = terrain.createTileFromHeights({0, 0}, heights(0.0f));
+        const std::optional<Engine::TerrainRenderMeshBuildInput> input = terrain.renderMeshBuildInput(tile, 1);
+        ctx.expect(input.has_value(), "missing stale-generation terrain render input");
+        if (!input) {
+            return;
+        }
+
+        Engine::TerrainRenderMeshBuildResult result = Engine::TerrainSystem::buildRenderMeshData(*input);
+        ++result.mesh.generation;
+        ctx.expect(!terrain.commitRendererMesh(result.mesh), "stale terrain render mesh generation was committed");
+    }
+
+    void terrainRenderMeshBuildDoesNotChangeCpuHeight(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        const Engine::TerrainTileHandle tile = terrain.createTileFromHeights({0, 0}, rampHeights(0.0f, 4.0f));
+        const std::optional<float> before = terrain.sampleHeight(8.0f, 8.0f);
+        const std::optional<Engine::TerrainRenderMeshBuildInput> input = terrain.renderMeshBuildInput(tile, 2);
+        ctx.expect(before.has_value() && input.has_value(), "missing terrain height or render input");
+        if (!before || !input) {
+            return;
+        }
+
+        (void)Engine::TerrainSystem::buildRenderMeshData(*input);
+        const std::optional<float> after = terrain.sampleHeight(8.0f, 8.0f);
+        ctx.expect(after.has_value(), "missing terrain height after render mesh build");
+        if (after) {
+            ctx.expect(std::abs(*before - *after) < 0.0001f, "render mesh build changed CPU height query result");
+        }
+    }
+
+    void chunkStreamerVisitsLoadedChunkByCoord(TestContext& ctx)
+    {
+        Engine::ChunkStreamer streamer{{ChunkSize, 1}};
+        Engine::ChunkContent content;
+        content.terrain = {7};
+        content.objects = {{1}, {2}};
+        ctx.expect(streamer.registerLoadedChunk({2, -1}, content), "failed to register test chunk");
+
+        bool visited = false;
+        const bool found = streamer.visitLoadedChunkContent(
+            {2, -1},
+            [&](Engine::TerrainTileHandle terrainTile, const std::vector<Engine::WorldObjectHandle>& objects, Renderer::RenderGroupHandle) {
+                visited = true;
+                ctx.expect(terrainTile.id == 7, "visited chunk terrain handle was wrong");
+                ctx.expect(objects.size() == 2, "visited chunk object list was wrong");
+            });
+        ctx.expect(found && visited, "visitLoadedChunkContent did not visit loaded chunk");
+        ctx.expect(!streamer.visitLoadedChunkContent({9, 9}, [](Engine::TerrainTileHandle, const std::vector<Engine::WorldObjectHandle>&, Renderer::RenderGroupHandle) {}),
+            "visitLoadedChunkContent reported an unloaded chunk as found");
     }
 
     void frameBudgetDefersNormalWorkWhenExhausted(TestContext& ctx)
@@ -1351,6 +1556,52 @@ namespace {
         ctx.expect(!read.graph.has_value(), "stale graph returned payload");
     }
 
+    void worldNavigationGraphWorkerBuildMatchesRebuild(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationSystem navigation;
+        Engine::NavAgentSettings agent;
+        if (!addTiles(terrain, navigation, {{{0, 0}, heights(0.0f), {}}, {{1, 0}, heights(0.0f), {}}}, agent, ctx)) {
+            return;
+        }
+
+        Engine::NavigationConnectivitySystem connectivity;
+        connectivity.rebuild({{0, 0}, {1, 0}}, navigation, terrain, agent);
+        Engine::WorldNavigationGraph graph({2, ChunkSize});
+        graph.rebuild({0, 0}, terrain, connectivity);
+
+        const Engine::WorldNavigationGraphBuildInput input =
+            Engine::WorldNavigationGraph::buildInput({0, 0}, graph.settings(), terrain, connectivity);
+        const Engine::WorldNavigationGraphBuildResult result = Engine::WorldNavigationGraph::buildCacheData(input);
+        ctx.expect(result.success, "worker graph build did not report success: " + result.message);
+        ctx.expect(result.graph.nodes.size() == graph.cacheData().nodes.size(), "worker graph node count differed from synchronous rebuild");
+        ctx.expect(result.graph.edges.size() == graph.cacheData().edges.size(), "worker graph edge count differed from synchronous rebuild");
+
+        Engine::WorldNavigationGraph workerGraph({2, ChunkSize});
+        workerGraph.loadCacheData(result.graph);
+        const Engine::WorldNavRoute route = workerGraph.findRoute({2.0f, 0.0f, 8.0f}, {24.0f, 0.0f, 8.0f});
+        ctx.expect(route.status == Engine::WorldNavRouteStatus::Success, "worker graph route failed: " + route.message);
+    }
+
+    void worldNavigationGraphWorkerBuildRadiusZero(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationConnectivitySystem connectivity;
+        Engine::WorldNavigationGraph graph({0, ChunkSize});
+        const Engine::WorldNavigationGraphBuildInput input =
+            Engine::WorldNavigationGraph::buildInput({-3, 4}, graph.settings(), terrain, connectivity);
+        const Engine::WorldNavigationGraphBuildResult result = Engine::WorldNavigationGraph::buildCacheData(input);
+        ctx.expect(result.success, "radius-zero graph build failed: " + result.message);
+        ctx.expect(result.graph.nodes.size() == 1, "radius-zero graph did not produce exactly one node");
+        ctx.expect(result.graph.edges.empty(), "radius-zero graph produced edges");
+
+        Engine::WorldNavigationGraph loaded({0, ChunkSize});
+        loaded.loadCacheData(result.graph);
+        const Engine::WorldNavigationGraphStats stats = loaded.stats();
+        ctx.expect(stats.hasGraph, "radius-zero loaded graph was not marked built");
+        ctx.expect(stats.centerChunk == Engine::ChunkCoord{-3, 4}, "radius-zero graph center did not round-trip");
+    }
+
     void navigationCpuProfileReport(TestContext& ctx)
     {
         ProfileReport profile;
@@ -1358,7 +1609,9 @@ namespace {
         Engine::NavigationSystem navigation;
         Engine::NavAgentSettings agent;
         std::vector<Engine::ChunkCoord> loadedChunks;
+        std::vector<Engine::TerrainTileHandle> loadedTerrainTiles;
         loadedChunks.reserve(25);
+        loadedTerrainTiles.reserve(25);
 
         for (int32_t z = -2; z <= 2; ++z) {
             for (int32_t x = -2; x <= 2; ++x) {
@@ -1394,6 +1647,7 @@ namespace {
                 ctx.expect(navTile.id != UINT32_MAX, "profile failed to build navigation tile");
                 if (navTile.id != UINT32_MAX) {
                     loadedChunks.push_back(coord);
+                    loadedTerrainTiles.push_back(tile);
                 }
             }
         }
@@ -1470,6 +1724,79 @@ namespace {
             (void)simulate(actors, actor, terrain, world, {30.0f, 0.0f, 30.0f}, 180, nullptr, nullptr, &navigation, &agent);
         });
 
+        Engine::NavigationSystem destroyNavigation;
+        for (const Engine::NavigationTileCacheData& tile : cachedTiles) {
+            const Engine::NavigationTileHandle handle = destroyNavigation.loadTerrainTileFromCache(tile);
+            ctx.expect(handle.id != UINT32_MAX, "profile failed to seed nav tile destroy benchmark");
+        }
+        for (Engine::ChunkCoord coord : loadedChunks) {
+            profile.measure("detour tile destroy", [&]() {
+                destroyNavigation.destroyTile(coord);
+            });
+        }
+
+        Engine::NavigationSystem clearNavigation;
+        for (const Engine::NavigationTileCacheData& tile : cachedTiles) {
+            const Engine::NavigationTileHandle handle = clearNavigation.loadTerrainTileFromCache(tile);
+            ctx.expect(handle.id != UINT32_MAX, "profile failed to seed nav clear benchmark");
+        }
+        profile.measure("detour nav system clear", [&]() {
+            clearNavigation.clear();
+        });
+
+        for (Engine::ChunkCoord coord : dirtyConnectivityChunks) {
+            profile.measure("connectivity remove chunk", [&]() {
+                connectivity.removeChunk(coord);
+            });
+        }
+        profile.measure("world graph clear", [&]() {
+            graph.clear();
+        });
+
+        Engine::World destroyWorld;
+        Engine::SpatialRegistry destroySpatial;
+        std::vector<Engine::WorldObjectHandle> destroyObjects;
+        destroyObjects.reserve(256);
+        for (uint32_t index = 0; index < 256; ++index) {
+            Engine::WorldObjectHandle object = destroyWorld.createObject(
+                Engine::ObjectId::fromString("profile/object/" + std::to_string(index)));
+            const glm::vec3 position{
+                static_cast<float>(index % 16),
+                0.0f,
+                static_cast<float>(index / 16),
+            };
+            destroyWorld.setPosition(object, position);
+            destroyWorld.setLocalBounds(object, {{-0.5f, 0.0f, -0.5f}, {0.5f, 2.0f, 0.5f}});
+            destroyWorld.attachRendererInstance(object, Renderer::MeshInstanceHandle{index});
+            destroySpatial.insert(object, position);
+            destroyObjects.push_back(object);
+        }
+        for (Engine::WorldObjectHandle object : destroyObjects) {
+            profile.measure("world object destroy", [&]() {
+                destroySpatial.remove(object);
+                destroyWorld.destroyObjectAndRendererInstance(object);
+            });
+        }
+
+        Engine::ChunkStreamer detachStreamer{{ChunkSize, 2}};
+        for (size_t index = 0; index < loadedChunks.size(); ++index) {
+            Engine::ChunkContent content;
+            content.terrain = Engine::TerrainTileHandle{static_cast<uint32_t>(index)};
+            content.renderGroup = Renderer::RenderGroupHandle{static_cast<uint32_t>(index)};
+            detachStreamer.registerLoadedChunk(loadedChunks[index], content);
+        }
+        for (Engine::ChunkCoord coord : loadedChunks) {
+            profile.measure("chunk detach bookkeeping", [&]() {
+                (void)detachStreamer.detachLoadedChunk(coord);
+            });
+        }
+
+        for (Engine::TerrainTileHandle tile : loadedTerrainTiles) {
+            profile.measure("terrain cpu tile destroy", [&]() {
+                terrain.destroyTile(tile);
+            });
+        }
+
         Engine::TerrainSettings fullTerrainSettings;
         fullTerrainSettings.chunkSize = ChunkSize;
         fullTerrainSettings.resolution = 33;
@@ -1540,11 +1867,19 @@ int main()
         {"ManualInputCancelsPath", manualInputCancelsPath},
         {"TileDiagnosticsAfterLiveBuild", tileDiagnosticsAfterLiveBuild},
         {"PortalDiagnosticsAfterConnectivityBuild", portalDiagnosticsAfterConnectivityBuild},
+        {"PhasedConnectivityMatchesSynchronousRebuild", phasedConnectivityMatchesSynchronousRebuild},
+        {"PhasedConnectivityMaxSamplesSplitsWork", phasedConnectivityMaxSamplesSplitsWork},
+        {"PhasedConnectivityCancelStopsMutation", phasedConnectivityCancelStopsMutation},
+        {"PhasedConnectivityClearExistingRemovesStaleChunks", phasedConnectivityClearExistingRemovesStaleChunks},
         {"ActorCommandDiagnosticsAfterRouteFallback", actorCommandDiagnosticsAfterRouteFallback},
         {"TerrainGenerationIsDeterministicAndContinuous", terrainGenerationIsDeterministicAndContinuous},
         {"TerrainDiagnosticsReportRampSlope", terrainDiagnosticsReportRampSlope},
         {"LowerTerrainProfileReducesSlope", lowerTerrainProfileReducesSlope},
         {"NavigationResolutionReducesBuildGeometry", navigationResolutionReducesBuildGeometry},
+        {"TerrainRenderMeshBuildDataIsDeterministic", terrainRenderMeshBuildDataIsDeterministic},
+        {"TerrainRenderMeshStaleGenerationRejected", terrainRenderMeshStaleGenerationRejected},
+        {"TerrainRenderMeshBuildDoesNotChangeCpuHeight", terrainRenderMeshBuildDoesNotChangeCpuHeight},
+        {"ChunkStreamerVisitsLoadedChunkByCoord", chunkStreamerVisitsLoadedChunkByCoord},
         {"FrameBudgetDefersNormalWorkWhenExhausted", frameBudgetDefersNormalWorkWhenExhausted},
         {"FrameBudgetRunsCriticalWorkWithOverrun", frameBudgetRunsCriticalWorkWithOverrun},
         {"MainThreadWorkQueuePreservesDeferredWork", mainThreadWorkQueuePreservesDeferredWork},
@@ -1553,6 +1888,8 @@ int main()
         {"NavigationCacheCorruptTileIsSafe", navigationCacheCorruptTileIsSafe},
         {"NavigationCacheConnectivityIdentityMismatchIsStale", navigationCacheConnectivityIdentityMismatchIsStale},
         {"NavigationCacheGraphIdentityMismatchIsStale", navigationCacheGraphIdentityMismatchIsStale},
+        {"WorldNavigationGraphWorkerBuildMatchesRebuild", worldNavigationGraphWorkerBuildMatchesRebuild},
+        {"WorldNavigationGraphWorkerBuildRadiusZero", worldNavigationGraphWorkerBuildRadiusZero},
         {"NavigationCpuProfileReport", navigationCpuProfileReport},
     };
 

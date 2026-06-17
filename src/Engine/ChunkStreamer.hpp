@@ -64,6 +64,10 @@ namespace Engine {
         size_t loadedChunkCount() const;
         ChunkCoord coordForWorldPosition(const glm::vec3& position) const;
         std::vector<ChunkCoord> desiredChunksAround(ChunkCoord center) const;
+        bool visitLoadedChunkContent(
+            ChunkCoord coord,
+            const std::function<void(TerrainTileHandle, const std::vector<WorldObjectHandle>&, Renderer::RenderGroupHandle)>& visitor
+        ) const;
         void forEachLoadedChunkContent(
             const std::function<void(TerrainTileHandle, const std::vector<WorldObjectHandle>&, Renderer::RenderGroupHandle)>& visitor
         ) const;

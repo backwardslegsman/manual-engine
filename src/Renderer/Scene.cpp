@@ -108,6 +108,7 @@ namespace {
     Renderer::TextureHandle g_blackTexture;
     Renderer::AtmosphereSettings g_atmosphere;
     Renderer::DebugDrawSettings g_debugDrawSettings;
+    Renderer::DebugDrawStats g_debugDrawStats;
 
     bool isValidStaticMesh(Renderer::StaticMeshHandle handle)
     {
@@ -1268,15 +1269,30 @@ namespace Renderer {
     void clearDebugPrimitives()
     {
         g_debugLineVertices.clear();
+        g_debugDrawStats = {};
     }
 
     void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32_t abgr)
     {
+        ++g_debugDrawStats.generatedLines;
         if (!isFiniteVec3(a) || !isFiniteVec3(b)) {
+            ++g_debugDrawStats.clippedLines;
+            return;
+        }
+        if (g_debugLineVertices.size() / 2 >= g_debugDrawSettings.maxDebugLines) {
+            ++g_debugDrawStats.clippedLines;
             return;
         }
         pushDebugVertex(a, abgr);
         pushDebugVertex(b, abgr);
+        ++g_debugDrawStats.submittedLines;
+    }
+
+    void addDebugLines(std::span<const DebugLinePrimitive> lines)
+    {
+        for (const DebugLinePrimitive& line : lines) {
+            addDebugLine(line.a, line.b, line.abgr);
+        }
     }
 
     void addDebugAabb(const Aabb& bounds, uint32_t abgr)
@@ -1359,12 +1375,18 @@ namespace Renderer {
         }
     }
 
+    DebugDrawStats& debugDrawStats()
+    {
+        return g_debugDrawStats;
+    }
+
     void drawDebugPrimitives(const RenderView& view)
     {
 #if !MANUAL_ENGINE_ENABLE_DEBUG_TOOLS
         (void)view;
         return;
 #else
+        g_debugDrawStats.lastFramePrimitiveBufferSize = static_cast<uint32_t>(g_debugLineVertices.size());
         if (!g_debugDrawSettings.enabled ||
             (view.layerMask & static_cast<uint32_t>(RenderLayer::Debug)) == 0 ||
             g_debugLineVertices.empty() ||

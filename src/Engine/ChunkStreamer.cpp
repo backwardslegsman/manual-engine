@@ -143,6 +143,18 @@ namespace Engine {
         return chunks;
     }
 
+    bool ChunkStreamer::visitLoadedChunkContent(
+        ChunkCoord coord,
+        const std::function<void(TerrainTileHandle, const std::vector<WorldObjectHandle>&, Renderer::RenderGroupHandle)>& visitor) const
+    {
+        const auto chunkIt = activeChunks_.find(coord);
+        if (chunkIt == activeChunks_.end()) {
+            return false;
+        }
+        visitor(chunkIt->second.terrain, chunkIt->second.objects, chunkIt->second.renderGroup);
+        return true;
+    }
+
     void ChunkStreamer::forEachLoadedChunkContent(
         const std::function<void(TerrainTileHandle, const std::vector<WorldObjectHandle>&, Renderer::RenderGroupHandle)>& visitor) const
     {

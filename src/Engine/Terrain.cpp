@@ -1,8 +1,11 @@
 #include "Engine/Terrain.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <limits>
 #include <numeric>
+#include <ranges>
 
 #include "Renderer/VertexLayouts.hpp"
 
@@ -37,6 +40,41 @@ namespace {
         indices.push_back(topRight);
         indices.push_back(bottomLeft);
         indices.push_back(bottomRight);
+    }
+
+    float sampleHeightFromGrid(
+        const glm::vec3& origin,
+        float size,
+        uint32_t resolution,
+        const std::vector<float>& heights,
+        float worldX,
+        float worldZ)
+    {
+        if (resolution < 2 || size <= 0.0f || heights.size() != static_cast<size_t>(resolution) * resolution) {
+            return 0.0f;
+        }
+
+        const float localX = std::clamp(worldX - origin.x, 0.0f, size);
+        const float localZ = std::clamp(worldZ - origin.z, 0.0f, size);
+        const float normalizedX = localX / size * static_cast<float>(resolution - 1);
+        const float normalizedZ = localZ / size * static_cast<float>(resolution - 1);
+        const uint32_t x0 = std::min(static_cast<uint32_t>(std::floor(normalizedX)), resolution - 1);
+        const uint32_t z0 = std::min(static_cast<uint32_t>(std::floor(normalizedZ)), resolution - 1);
+        const uint32_t x1 = std::min(x0 + 1, resolution - 1);
+        const uint32_t z1 = std::min(z0 + 1, resolution - 1);
+        const float tx = normalizedX - static_cast<float>(x0);
+        const float tz = normalizedZ - static_cast<float>(z0);
+        const auto heightAt = [&](uint32_t x, uint32_t z) {
+            return heights[static_cast<size_t>(z) * resolution + x];
+        };
+
+        const float h00 = heightAt(x0, z0);
+        const float h10 = heightAt(x1, z0);
+        const float h01 = heightAt(x0, z1);
+        const float h11 = heightAt(x1, z1);
+        const float hx0 = h00 + (h10 - h00) * tx;
+        const float hx1 = h01 + (h11 - h01) * tx;
+        return hx0 + (hx1 - hx0) * tz;
     }
 }
 
@@ -108,6 +146,7 @@ namespace Engine {
         terrain.origin = generated.origin;
         terrain.size = generated.size;
         terrain.resolution = generated.resolution;
+        terrain.generation = nextTileGeneration_++;
         terrain.material = material;
         terrain.biome = generated.biome;
         terrain.heights = generated.heights;
@@ -157,6 +196,7 @@ namespace Engine {
         };
         terrain.size = settings_.chunkSize;
         terrain.resolution = settings_.resolution;
+        terrain.generation = nextTileGeneration_++;
         terrain.material = material;
         terrain.biome = sampleChunkBiome(coord);
         terrain.heights.assign(heights.begin(), heights.end());
@@ -235,6 +275,198 @@ namespace Engine {
             ++result.rebuiltCount;
         }
         return result;
+    }
+
+    std::vector<TerrainRenderMeshBuildInput> TerrainSystem::collectRenderLodBuildInputs(
+        const glm::vec3& cameraPosition,
+        uint32_t maxBuilds,
+        std::span<const TerrainTileHandle> pendingTiles) const
+    {
+        std::vector<TerrainRenderMeshBuildInput> inputs;
+        for (uint32_t index = 0; index < tiles_.size(); ++index) {
+            const TerrainTile& terrain = tiles_[index];
+            if (!terrain.alive) {
+                continue;
+            }
+
+            const TerrainTileHandle handle{index};
+            const bool alreadyPending = std::ranges::any_of(pendingTiles, [handle](TerrainTileHandle pending) {
+                return pending.id == handle.id;
+            });
+            if (alreadyPending) {
+                continue;
+            }
+
+            const uint32_t desiredLod = chooseLod(terrain, cameraPosition);
+            if (desiredLod == terrain.currentLod) {
+                continue;
+            }
+
+            if (inputs.size() >= maxBuilds) {
+                break;
+            }
+
+            if (std::optional<TerrainRenderMeshBuildInput> input = renderMeshBuildInput(handle, desiredLod)) {
+                inputs.push_back(std::move(*input));
+            }
+        }
+        return inputs;
+    }
+
+    std::optional<TerrainRenderMeshBuildInput> TerrainSystem::renderMeshBuildInput(
+        TerrainTileHandle handle,
+        uint32_t lodIndex) const
+    {
+        const TerrainTile* terrain = tile(handle);
+        if (!terrain || terrain->resolution < 2 || terrain->heights.empty()) {
+            return std::nullopt;
+        }
+
+        const uint32_t lod = std::min<uint32_t>(lodIndex, static_cast<uint32_t>(settings_.lodLevels.size() - 1));
+        TerrainRenderMeshBuildInput input;
+        input.tile = handle;
+        input.coord = terrain->coord;
+        input.generation = terrain->generation;
+        input.lodIndex = lod;
+        input.renderResolution = std::max(settings_.lodLevels[lod].resolution, 2u);
+        input.origin = terrain->origin;
+        input.size = terrain->size;
+        input.cpuResolution = terrain->resolution;
+        input.heights = terrain->heights;
+        input.skirtDepth = settings_.skirtDepth;
+        return input;
+    }
+
+    TerrainRenderMeshBuildResult TerrainSystem::buildRenderMeshData(const TerrainRenderMeshBuildInput& input)
+    {
+        using Clock = std::chrono::steady_clock;
+        const auto started = Clock::now();
+
+        TerrainRenderMeshBuildResult result;
+        result.mesh.tile = input.tile;
+        result.mesh.coord = input.coord;
+        result.mesh.generation = input.generation;
+        result.mesh.lodIndex = input.lodIndex;
+        result.mesh.renderResolution = std::max(input.renderResolution, 2u);
+        if (input.cpuResolution < 2 ||
+            input.size <= 0.0f ||
+            input.heights.size() != static_cast<size_t>(input.cpuResolution) * input.cpuResolution) {
+            result.message = "Invalid terrain render mesh build input.";
+            return result;
+        }
+
+        const uint32_t resolution = result.mesh.renderResolution;
+        const float spacing = input.size / static_cast<float>(resolution - 1);
+        result.mesh.vertices.reserve(static_cast<size_t>(resolution) * resolution + static_cast<size_t>(resolution) * 8);
+        result.mesh.bounds.min = {input.origin.x, std::numeric_limits<float>::max(), input.origin.z};
+        result.mesh.bounds.max = {input.origin.x + input.size, std::numeric_limits<float>::lowest(), input.origin.z + input.size};
+
+        for (uint32_t z = 0; z < resolution; ++z) {
+            for (uint32_t x = 0; x < resolution; ++x) {
+                const float worldX = input.origin.x + static_cast<float>(x) * spacing;
+                const float worldZ = input.origin.z + static_cast<float>(z) * spacing;
+                const float height = sampleHeightFromGrid(input.origin, input.size, input.cpuResolution, input.heights, worldX, worldZ);
+                const float left = sampleHeightFromGrid(input.origin, input.size, input.cpuResolution, input.heights, worldX - spacing, worldZ);
+                const float right = sampleHeightFromGrid(input.origin, input.size, input.cpuResolution, input.heights, worldX + spacing, worldZ);
+                const float down = sampleHeightFromGrid(input.origin, input.size, input.cpuResolution, input.heights, worldX, worldZ - spacing);
+                const float up = sampleHeightFromGrid(input.origin, input.size, input.cpuResolution, input.heights, worldX, worldZ + spacing);
+                const glm::vec3 normal = terrainNormalFromHeights(left, right, down, up, spacing);
+                result.mesh.bounds.min.y = std::min(result.mesh.bounds.min.y, height - input.skirtDepth);
+                result.mesh.bounds.max.y = std::max(result.mesh.bounds.max.y, height);
+
+                result.mesh.vertices.push_back({
+                    worldX,
+                    height,
+                    worldZ,
+                    normal.x,
+                    normal.y,
+                    normal.z,
+                    1.0f,
+                    0.0f,
+                    0.0f,
+                    static_cast<float>(x) / static_cast<float>(resolution - 1),
+                    static_cast<float>(z) / static_cast<float>(resolution - 1),
+                });
+            }
+        }
+
+        result.mesh.indices.reserve(
+            static_cast<size_t>(resolution - 1) * (resolution - 1) * 6 +
+            static_cast<size_t>(resolution - 1) * 24);
+        for (uint32_t z = 0; z + 1 < resolution; ++z) {
+            for (uint32_t x = 0; x + 1 < resolution; ++x) {
+                const uint32_t topLeft = z * resolution + x;
+                const uint32_t topRight = topLeft + 1;
+                const uint32_t bottomLeft = (z + 1) * resolution + x;
+                const uint32_t bottomRight = bottomLeft + 1;
+                pushQuad(result.mesh.indices, topLeft, topRight, bottomLeft, bottomRight);
+            }
+        }
+
+        const auto addSkirtVertex = [&](uint32_t sourceIndex) {
+            Renderer::MeshVertex vertex = result.mesh.vertices[sourceIndex];
+            vertex.py -= input.skirtDepth;
+            result.mesh.vertices.push_back(vertex);
+            return static_cast<uint32_t>(result.mesh.vertices.size() - 1);
+        };
+
+        if (input.skirtDepth > 0.0f) {
+            for (uint32_t x = 0; x + 1 < resolution; ++x) {
+                const uint32_t topA = x;
+                const uint32_t topB = x + 1;
+                const uint32_t topSkirtA = addSkirtVertex(topA);
+                const uint32_t topSkirtB = addSkirtVertex(topB);
+                pushQuad(result.mesh.indices, topA, topB, topSkirtA, topSkirtB);
+
+                const uint32_t bottomA = (resolution - 1) * resolution + x;
+                const uint32_t bottomB = bottomA + 1;
+                const uint32_t bottomSkirtB = addSkirtVertex(bottomB);
+                const uint32_t bottomSkirtA = addSkirtVertex(bottomA);
+                pushQuad(result.mesh.indices, bottomB, bottomA, bottomSkirtB, bottomSkirtA);
+            }
+
+            for (uint32_t z = 0; z + 1 < resolution; ++z) {
+                const uint32_t leftA = z * resolution;
+                const uint32_t leftB = (z + 1) * resolution;
+                const uint32_t leftSkirtB = addSkirtVertex(leftB);
+                const uint32_t leftSkirtA = addSkirtVertex(leftA);
+                pushQuad(result.mesh.indices, leftB, leftA, leftSkirtB, leftSkirtA);
+
+                const uint32_t rightA = z * resolution + (resolution - 1);
+                const uint32_t rightB = (z + 1) * resolution + (resolution - 1);
+                const uint32_t rightSkirtA = addSkirtVertex(rightA);
+                const uint32_t rightSkirtB = addSkirtVertex(rightB);
+                pushQuad(result.mesh.indices, rightA, rightB, rightSkirtA, rightSkirtB);
+            }
+        }
+
+        result.success = !result.mesh.vertices.empty() && !result.mesh.indices.empty();
+        result.message = result.success ? "Terrain render mesh built." : "Terrain render mesh build produced no geometry.";
+        result.buildMs = std::chrono::duration<float, std::milli>(Clock::now() - started).count();
+        return result;
+    }
+
+    bool TerrainSystem::commitRendererMesh(const TerrainRenderMeshData& mesh)
+    {
+        TerrainTile* terrain = tile(mesh.tile);
+        if (!terrain ||
+            terrain->generation != mesh.generation ||
+            !settings_.createRendererResources ||
+            mesh.vertices.empty() ||
+            mesh.indices.empty()) {
+            return false;
+        }
+
+        Renderer::destroyTerrainTile(terrain->rendererTerrain);
+        terrain->currentLod = mesh.lodIndex;
+        terrain->rendererTerrain = Renderer::createTerrainTile(mesh.vertices, mesh.indices, terrain->material);
+        return terrain->rendererTerrain.id != UINT32_MAX;
+    }
+
+    uint64_t TerrainSystem::tileGeneration(TerrainTileHandle handle) const
+    {
+        const TerrainTile* terrain = tile(handle);
+        return terrain ? terrain->generation : 0;
     }
 
     std::array<uint32_t, TerrainLodLevelCount> TerrainSystem::lodCounts() const
@@ -735,87 +967,20 @@ namespace Engine {
     Renderer::TerrainHandle TerrainSystem::createRendererTerrain(const TerrainTile& tile, uint32_t lodIndex) const
     {
         const uint32_t lod = std::min<uint32_t>(lodIndex, static_cast<uint32_t>(settings_.lodLevels.size() - 1));
-        const uint32_t resolution = std::max(settings_.lodLevels[lod].resolution, 2u);
-        const float spacing = tile.size / static_cast<float>(resolution - 1);
-
-        std::vector<Renderer::MeshVertex> vertices;
-        vertices.reserve(static_cast<size_t>(resolution) * resolution + static_cast<size_t>(resolution) * 8);
-        for (uint32_t z = 0; z < resolution; ++z) {
-            for (uint32_t x = 0; x < resolution; ++x) {
-                const float worldX = tile.origin.x + static_cast<float>(x) * spacing;
-                const float worldZ = tile.origin.z + static_cast<float>(z) * spacing;
-                const float height = generatedHeight(worldX, worldZ);
-                const float left = generatedHeight(worldX - spacing, worldZ);
-                const float right = generatedHeight(worldX + spacing, worldZ);
-                const float down = generatedHeight(worldX, worldZ - spacing);
-                const float up = generatedHeight(worldX, worldZ + spacing);
-                const glm::vec3 normal = terrainNormalFromHeights(left, right, down, up, spacing);
-
-                vertices.push_back({
-                    worldX,
-                    height,
-                    worldZ,
-                    normal.x,
-                    normal.y,
-                    normal.z,
-                    1.0f,
-                    0.0f,
-                    0.0f,
-                    static_cast<float>(x) / static_cast<float>(resolution - 1),
-                    static_cast<float>(z) / static_cast<float>(resolution - 1),
-                });
-            }
+        TerrainRenderMeshBuildInput input;
+        input.coord = tile.coord;
+        input.generation = tile.generation;
+        input.lodIndex = lod;
+        input.renderResolution = std::max(settings_.lodLevels[lod].resolution, 2u);
+        input.origin = tile.origin;
+        input.size = tile.size;
+        input.cpuResolution = tile.resolution;
+        input.heights = tile.heights;
+        input.skirtDepth = settings_.skirtDepth;
+        TerrainRenderMeshBuildResult result = buildRenderMeshData(input);
+        if (!result.success) {
+            return {};
         }
-
-        std::vector<uint32_t> indices;
-        indices.reserve(static_cast<size_t>(resolution - 1) * (resolution - 1) * 6 + static_cast<size_t>(resolution - 1) * 24);
-        for (uint32_t z = 0; z + 1 < resolution; ++z) {
-            for (uint32_t x = 0; x + 1 < resolution; ++x) {
-                const uint32_t topLeft = z * resolution + x;
-                const uint32_t topRight = topLeft + 1;
-                const uint32_t bottomLeft = (z + 1) * resolution + x;
-                const uint32_t bottomRight = bottomLeft + 1;
-                pushQuad(indices, topLeft, topRight, bottomLeft, bottomRight);
-            }
-        }
-
-        const auto addSkirtVertex = [&](uint32_t sourceIndex) {
-            Renderer::MeshVertex vertex = vertices[sourceIndex];
-            vertex.py -= settings_.skirtDepth;
-            vertices.push_back(vertex);
-            return static_cast<uint32_t>(vertices.size() - 1);
-        };
-
-        if (settings_.skirtDepth > 0.0f) {
-            for (uint32_t x = 0; x + 1 < resolution; ++x) {
-                const uint32_t topA = x;
-                const uint32_t topB = x + 1;
-                const uint32_t topSkirtA = addSkirtVertex(topA);
-                const uint32_t topSkirtB = addSkirtVertex(topB);
-                pushQuad(indices, topA, topB, topSkirtA, topSkirtB);
-
-                const uint32_t bottomA = (resolution - 1) * resolution + x;
-                const uint32_t bottomB = bottomA + 1;
-                const uint32_t bottomSkirtB = addSkirtVertex(bottomB);
-                const uint32_t bottomSkirtA = addSkirtVertex(bottomA);
-                pushQuad(indices, bottomB, bottomA, bottomSkirtB, bottomSkirtA);
-            }
-
-            for (uint32_t z = 0; z + 1 < resolution; ++z) {
-                const uint32_t leftA = z * resolution;
-                const uint32_t leftB = (z + 1) * resolution;
-                const uint32_t leftSkirtB = addSkirtVertex(leftB);
-                const uint32_t leftSkirtA = addSkirtVertex(leftA);
-                pushQuad(indices, leftB, leftA, leftSkirtB, leftSkirtA);
-
-                const uint32_t rightA = z * resolution + (resolution - 1);
-                const uint32_t rightB = (z + 1) * resolution + (resolution - 1);
-                const uint32_t rightSkirtA = addSkirtVertex(rightA);
-                const uint32_t rightSkirtB = addSkirtVertex(rightB);
-                pushQuad(indices, rightA, rightB, rightSkirtA, rightSkirtB);
-            }
-        }
-
-        return Renderer::createTerrainTile(vertices, indices, tile.material);
+        return Renderer::createTerrainTile(result.mesh.vertices, result.mesh.indices, tile.material);
     }
 }

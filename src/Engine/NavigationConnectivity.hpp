@@ -77,6 +77,40 @@ namespace Engine {
         std::vector<ChunkNavConnectivity> chunks;
     };
 
+    enum class NavigationConnectivityBuildPhase : uint32_t {
+        StartChunk,
+        NorthEdge,
+        SouthEdge,
+        EastEdge,
+        WestEdge,
+        RelinkNeighbors,
+        FinalizeChunk,
+        Complete,
+    };
+
+    struct NavigationConnectivityBuildHandle {
+        uint64_t id = UINT64_MAX;
+    };
+
+    inline bool operator==(NavigationConnectivityBuildHandle lhs, NavigationConnectivityBuildHandle rhs)
+    {
+        return lhs.id == rhs.id;
+    }
+
+    struct NavigationConnectivityBuildRequest {
+        std::vector<ChunkCoord> chunks;
+        bool clearExisting = false;
+    };
+
+    struct NavigationConnectivityBuildStepResult {
+        bool ranStep = false;
+        bool complete = false;
+        ChunkCoord coord;
+        NavigationConnectivityBuildPhase phase = NavigationConnectivityBuildPhase::Complete;
+        uint32_t samplesProcessed = 0;
+        std::string label;
+    };
+
     class NavigationConnectivitySystem {
     public:
         explicit NavigationConnectivitySystem(NavigationConnectivitySettings settings = {});
@@ -96,6 +130,15 @@ namespace Engine {
             const NavigationSystem& navigation,
             const TerrainSystem& terrain,
             const NavAgentSettings& agent);
+        NavigationConnectivityBuildHandle beginRebuild(NavigationConnectivityBuildRequest request);
+        NavigationConnectivityBuildStepResult stepRebuild(
+            NavigationConnectivityBuildHandle handle,
+            const NavigationSystem& navigation,
+            const TerrainSystem& terrain,
+            const NavAgentSettings& agent,
+            uint32_t maxSamples);
+        void cancelRebuild(NavigationConnectivityBuildHandle handle);
+        bool hasActiveRebuild(NavigationConnectivityBuildHandle handle) const;
         void removeChunk(ChunkCoord coord);
         void relinkChunkAndNeighbors(ChunkCoord coord);
         void clear();
@@ -122,9 +165,23 @@ namespace Engine {
             NavigationPortalEdgeDiagnostics& diagnostics) const;
         bool shouldMergePortal(const std::vector<ChunkNavPortal>& portals, const glm::vec3& position) const;
         void markLoadedNeighborConnections();
+        static const char* phaseLabel(NavigationConnectivityBuildPhase phase);
+
+        struct ActiveRebuild {
+            NavigationConnectivityBuildHandle handle;
+            std::vector<ChunkCoord> chunks;
+            size_t chunkIndex = 0;
+            NavigationConnectivityBuildPhase phase = NavigationConnectivityBuildPhase::StartChunk;
+            uint32_t sampleIndex = 0;
+            std::optional<Renderer::Aabb> bounds;
+            ChunkNavConnectivity connectivity;
+            ChunkPortalDiagnostics diagnostics;
+        };
 
         NavigationConnectivitySettings settings_;
         std::unordered_map<ChunkCoord, ChunkNavConnectivity, ChunkCoordHash> connectivity_;
         std::unordered_map<ChunkCoord, ChunkPortalDiagnostics, ChunkCoordHash> diagnostics_;
+        std::optional<ActiveRebuild> activeRebuild_;
+        uint64_t nextBuildHandleId_ = 1;
     };
 }

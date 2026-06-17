@@ -545,6 +545,17 @@ namespace Renderer::DebugUi {
             navigation.navTileWorkerBuildsQueuedThisFrame,
             navigation.navTileWorkerBuildsCompletedThisFrame,
             navigation.navTileWorkerBuildsFailedThisFrame);
+        ImGui::Text("World graph worker queued/completed/failed this frame: %u / %u / %u",
+            navigation.graphWorkerBuildsQueuedThisFrame,
+            navigation.graphWorkerBuildsCompletedThisFrame,
+            navigation.graphWorkerBuildsFailedThisFrame);
+        ImGui::Text("Last graph worker build: %.2f ms at %d, %d",
+            navigation.lastGraphWorkerBuildMs,
+            navigation.lastGraphWorkerBuildCenterX,
+            navigation.lastGraphWorkerBuildCenterZ);
+        if (!navigation.lastGraphWorkerBuildMessage.empty()) {
+            ImGui::TextWrapped("%s", navigation.lastGraphWorkerBuildMessage.c_str());
+        }
         ImGui::Text("Runtime nav chunks ready/pending/failed: %u / %u / %u",
             navigation.navTileReadyChunks,
             navigation.navTilePendingChunks,
@@ -555,6 +566,15 @@ namespace Renderer::DebugUi {
         ImGui::Text("Connectivity processed/deferred chunks: %u / %u",
             navigation.connectivityChunksThisFrame,
             navigation.connectivityDeferredChunks);
+        ImGui::Text("Connectivity steps/samples this frame: %u / %u",
+            navigation.connectivityStepsThisFrame,
+            navigation.connectivitySamplesThisFrame);
+        ImGui::Text("Connectivity active chunk: %d, %d",
+            navigation.connectivityActiveChunkX,
+            navigation.connectivityActiveChunkZ);
+        if (!navigation.connectivityLastStepLabel.empty()) {
+            ImGui::TextWrapped("Connectivity step: %s", navigation.connectivityLastStepLabel.c_str());
+        }
         if (!navigation.cacheLastPath.empty()) {
             ImGui::TextWrapped("Cache path: %s", navigation.cacheLastPath.c_str());
         }
@@ -596,6 +616,48 @@ namespace Renderer::DebugUi {
         ImGui::Text("Terrain LOD rebuilds this frame/pending: %u / %u",
             navigation.terrainLodRebuildsThisFrame,
             navigation.terrainLodPendingRebuilds);
+        ImGui::Text("Terrain LOD jobs queued/completed/failed: %u / %u / %u",
+            navigation.terrainLodJobsQueuedThisFrame,
+            navigation.terrainLodJobsCompletedThisFrame,
+            navigation.terrainLodJobsFailedThisFrame);
+        ImGui::Text("Terrain LOD commits/stale/pending results: %u / %u / %u",
+            navigation.terrainLodCommitsThisFrame,
+            navigation.terrainLodStaleResultsThisFrame,
+            navigation.terrainLodCompletedResults);
+        ImGui::Text("Terrain LOD pending jobs: %u", navigation.terrainLodPendingJobs);
+        ImGui::Text("Last terrain LOD worker build: %.3f ms", navigation.lastTerrainLodBuildMs);
+        if (!navigation.lastTerrainLodMessage.empty()) {
+            ImGui::TextWrapped("%s", navigation.lastTerrainLodMessage.c_str());
+        }
+        ImGui::Text("Visibility metadata chunks processed/deferred: %u / %u",
+            navigation.visibilityChunksProcessedThisFrame,
+            navigation.visibilityChunksDeferred);
+        ImGui::Text("Visibility metadata terrain/instances updated: %u / %u",
+            navigation.visibilityTerrainUpdatedThisFrame,
+            navigation.visibilityInstancesUpdatedThisFrame);
+        ImGui::Text("Visibility full reapply pending: %s", navigation.visibilityFullReapplyPending ? "yes" : "no");
+        ImGui::Separator();
+        ImGui::Text("Debug Draw Budget");
+        ImGui::Text("Lines generated/submitted/clipped: %u / %u / %u",
+            navigation.debugDrawStats.generatedLines,
+            navigation.debugDrawStats.submittedLines,
+            navigation.debugDrawStats.clippedLines);
+        ImGui::Text("Buffer vertices last frame: %u", navigation.debugDrawStats.lastFramePrimitiveBufferSize);
+        ImGui::Text("Nav mesh lines submitted/clipped: %u / %u",
+            navigation.debugDrawStats.navMeshEdges.submitted,
+            navigation.debugDrawStats.navMeshEdges.clipped);
+        ImGui::Text("Graph lines submitted/clipped: %u / %u",
+            navigation.debugDrawStats.worldGraphEdges.submitted,
+            navigation.debugDrawStats.worldGraphEdges.clipped);
+        ImGui::Text("Slope lines submitted/clipped: %u / %u",
+            navigation.debugDrawStats.terrainSlopeWarnings.submitted,
+            navigation.debugDrawStats.terrainSlopeWarnings.clipped);
+        ImGui::Text("Collision lines submitted/clipped: %u / %u",
+            navigation.debugDrawStats.collisionBounds.submitted,
+            navigation.debugDrawStats.collisionBounds.clipped);
+        ImGui::Text("Chunk/bounds lines submitted/clipped: %u / %u",
+            navigation.debugDrawStats.chunkBorders.submitted,
+            navigation.debugDrawStats.chunkBorders.clipped);
         ImGui::Text("Async workers/pending/completed/unloads: %u / %u / %u / %u",
             navigation.asyncWorkerCount,
             navigation.asyncPendingChunkJobs,
@@ -654,6 +716,34 @@ namespace Renderer::DebugUi {
             if (ImGui::SliderInt("Terrain LOD rebuilds per frame", &terrainLodRebuilds, 0, 32)) {
                 navigationControls->terrainLodRebuildsPerFrame = static_cast<uint32_t>(terrainLodRebuilds);
             }
+            int visibilityChunks = static_cast<int>(navigationControls->visibilityReapplyChunksPerStep);
+            if (ImGui::SliderInt("Visibility chunks per step", &visibilityChunks, 1, 64)) {
+                navigationControls->visibilityReapplyChunksPerStep = static_cast<uint32_t>(visibilityChunks);
+            }
+            int maxDebugLines = static_cast<int>(debugDraw.maxDebugLines);
+            if (ImGui::SliderInt("Max debug lines", &maxDebugLines, 1000, 100000)) {
+                debugDraw.maxDebugLines = static_cast<uint32_t>(maxDebugLines);
+            }
+            int maxNavMeshLines = static_cast<int>(debugDraw.maxNavMeshEdgeLines);
+            if (ImGui::SliderInt("Max navmesh edge lines", &maxNavMeshLines, 0, 50000)) {
+                debugDraw.maxNavMeshEdgeLines = static_cast<uint32_t>(maxNavMeshLines);
+            }
+            int maxGraphLines = static_cast<int>(debugDraw.maxWorldGraphEdgeLines);
+            if (ImGui::SliderInt("Max graph edge lines", &maxGraphLines, 0, 50000)) {
+                debugDraw.maxWorldGraphEdgeLines = static_cast<uint32_t>(maxGraphLines);
+            }
+            int maxSlopeLines = static_cast<int>(debugDraw.maxTerrainSlopeWarningLines);
+            if (ImGui::SliderInt("Max slope warning lines", &maxSlopeLines, 0, 20000)) {
+                debugDraw.maxTerrainSlopeWarningLines = static_cast<uint32_t>(maxSlopeLines);
+            }
+            int maxCollisionAabbs = static_cast<int>(debugDraw.maxCollisionAabbs);
+            if (ImGui::SliderInt("Max collision AABBs", &maxCollisionAabbs, 0, 10000)) {
+                debugDraw.maxCollisionAabbs = static_cast<uint32_t>(maxCollisionAabbs);
+            }
+            int maxChunkRects = static_cast<int>(debugDraw.maxChunkBorderRects);
+            if (ImGui::SliderInt("Max chunk/bounds rects", &maxChunkRects, 0, 10000)) {
+                debugDraw.maxChunkBorderRects = static_cast<uint32_t>(maxChunkRects);
+            }
             int navSyncChunks = static_cast<int>(navigationControls->navTileSyncChunksPerFrame);
             if (ImGui::SliderInt("Nav sync chunks per frame", &navSyncChunks, 1, 64)) {
                 navigationControls->navTileSyncChunksPerFrame = static_cast<uint32_t>(navSyncChunks);
@@ -661,6 +751,10 @@ namespace Renderer::DebugUi {
             int connectivityChunks = static_cast<int>(navigationControls->connectivityChunksPerFrame);
             if (ImGui::SliderInt("Connectivity chunks per frame", &connectivityChunks, 1, 64)) {
                 navigationControls->connectivityChunksPerFrame = static_cast<uint32_t>(connectivityChunks);
+            }
+            int connectivitySamples = static_cast<int>(navigationControls->connectivitySamplesPerStep);
+            if (ImGui::SliderInt("Connectivity samples per step", &connectivitySamples, 1, 64)) {
+                navigationControls->connectivitySamplesPerStep = static_cast<uint32_t>(connectivitySamples);
             }
             int graphThreshold = static_cast<int>(navigationControls->worldGraphRecenterThresholdChunks);
             if (ImGui::SliderInt("Graph recenter threshold chunks", &graphThreshold, 1, 32)) {

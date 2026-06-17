@@ -93,6 +93,7 @@ add_executable(manual_engine_navigation_tests
     src/Engine/AsyncWorkQueue.cpp
     src/Engine/Biome.cpp
     src/Engine/BlockingCollision.cpp
+    src/Engine/ChunkStreamer.cpp
     src/Engine/ChunkTypes.cpp
     src/Engine/EventQueue.cpp
     src/Engine/FrameBudget.cpp

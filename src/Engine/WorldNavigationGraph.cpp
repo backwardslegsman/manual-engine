@@ -1,10 +1,13 @@
 #include "Engine/WorldNavigationGraph.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <queue>
+#include <sstream>
 #include <unordered_set>
+#include <utility>
 
 namespace Engine {
     namespace {
@@ -61,6 +64,142 @@ namespace Engine {
             return std::sqrt(dx * dx + dz * dz);
         }
 
+        const ChunkNavConnectivity* connectivityFor(
+            const NavigationConnectivityCacheData& loadedConnectivity,
+            ChunkCoord coord)
+        {
+            const auto connectivity = std::ranges::find_if(loadedConnectivity.chunks, [coord](const ChunkNavConnectivity& chunk) {
+                return chunk.coord == coord;
+            });
+            return connectivity == loadedConnectivity.chunks.end() ? nullptr : &*connectivity;
+        }
+
+        BiomeSample sampleChunkBiome(const WorldNavigationTerrainSnapshot& terrain, ChunkCoord coord)
+        {
+            return terrain.biomes.sampleChunk(coord, terrain.chunkSize);
+        }
+
+        float generatedHeight(const WorldNavigationTerrainSnapshot& terrain, float worldX, float worldZ)
+        {
+            const BiomeSample sample = terrain.biomes.sample(worldX, worldZ);
+            const BiomeDescriptor* biome = terrain.biomes.descriptor(sample.id);
+            const float heightScale = biome ? biome->heightScale : 1.0f;
+            const float baseHeight = biome ? biome->baseHeight : 0.0f;
+            const float rollingAmplitude = biome ? biome->rollingAmplitude * biome->rollingScale : 1.0f;
+            const float rollingFrequencyX = biome ? biome->rollingFrequencyX : 0.18f;
+            const float rollingFrequencyZ = biome ? biome->rollingFrequencyZ : 0.15f;
+            const float detailAmplitude = biome ? biome->detailAmplitude * biome->detailScale : 0.35f;
+            const float detailFrequency = biome ? biome->detailFrequency : 0.07f;
+            const float rolling =
+                std::sin(worldX * rollingFrequencyX) * rollingAmplitude +
+                std::cos(worldZ * rollingFrequencyZ) * rollingAmplitude;
+            const float detail = std::sin((worldX + worldZ) * detailFrequency) * detailAmplitude;
+            return baseHeight + (rolling + detail) * terrain.heightScale * heightScale;
+        }
+
+        glm::vec3 centerForChunk(ChunkCoord coord, const WorldNavigationGraphSettings& settings, const WorldNavigationTerrainSnapshot& terrain)
+        {
+            glm::vec3 center{
+                (static_cast<float>(coord.x) + 0.5f) * settings.chunkSize,
+                0.0f,
+                (static_cast<float>(coord.z) + 0.5f) * settings.chunkSize,
+            };
+            center.y = generatedHeight(terrain, center.x, center.z);
+            return center;
+        }
+
+        float costForChunk(ChunkCoord coord, const WorldNavigationTerrainSnapshot& terrain)
+        {
+            const BiomeSample sample = sampleChunkBiome(terrain, coord);
+            return std::max(0.1f, 1.0f + sample.roughness * 2.0f + std::abs(sample.elevation) * 0.5f);
+        }
+
+        bool edgeBlockedByLoadedConnectivity(
+            ChunkCoord from,
+            NavEdgeDirection direction,
+            const NavigationConnectivityCacheData& loadedConnectivity)
+        {
+            const ChunkNavConnectivity* connectivity = connectivityFor(loadedConnectivity, from);
+            if (!connectivity) {
+                return false;
+            }
+
+            const std::vector<ChunkNavPortal>& portals = connectivity->portalsByEdge[static_cast<uint32_t>(direction)];
+            if (portals.empty()) {
+                return true;
+            }
+
+            const ChunkCoord neighbor = neighborFor(from, direction);
+            if (!connectivityFor(loadedConnectivity, neighbor)) {
+                return false;
+            }
+
+            return std::ranges::none_of(portals, [](const ChunkNavPortal& portal) {
+                return portal.connectedToLoadedNeighbor;
+            });
+        }
+
+        std::vector<WorldNavEdge> makeEdges(
+            ChunkCoord from,
+            ChunkCoord to,
+            NavEdgeDirection direction,
+            float cost,
+            bool blocked,
+            const WorldNavigationGraphSettings& settings,
+            const NavigationConnectivityCacheData& loadedConnectivity)
+        {
+            std::vector<WorldNavEdge> result;
+            glm::vec3 waypoint{
+                (static_cast<float>(from.x) + 0.5f) * settings.chunkSize,
+                0.0f,
+                (static_cast<float>(from.z) + 0.5f) * settings.chunkSize,
+            };
+            glm::vec3 ingressWaypoint{
+                (static_cast<float>(to.x) + 0.5f) * settings.chunkSize,
+                0.0f,
+                (static_cast<float>(to.z) + 0.5f) * settings.chunkSize,
+            };
+
+            if (const ChunkNavConnectivity* connectivity = connectivityFor(loadedConnectivity, from)) {
+                const std::vector<ChunkNavPortal>& portals = connectivity->portalsByEdge[static_cast<uint32_t>(direction)];
+                for (const ChunkNavPortal& portal : portals) {
+                    if (!portal.connectedToLoadedNeighbor) {
+                        continue;
+                    }
+                    result.push_back({from, to, direction, cost, blocked, portal.position, portal.connectedNeighborPosition});
+                }
+                if (!result.empty()) {
+                    return result;
+                }
+                if (!portals.empty()) {
+                    waypoint = portals.front().position;
+                }
+            }
+
+            switch (direction) {
+                case NavEdgeDirection::North:
+                    waypoint.z += settings.chunkSize * 0.5f;
+                    ingressWaypoint.z -= settings.chunkSize * 0.5f;
+                    break;
+                case NavEdgeDirection::South:
+                    waypoint.z -= settings.chunkSize * 0.5f;
+                    ingressWaypoint.z += settings.chunkSize * 0.5f;
+                    break;
+                case NavEdgeDirection::East:
+                    waypoint.x += settings.chunkSize * 0.5f;
+                    ingressWaypoint.x -= settings.chunkSize * 0.5f;
+                    break;
+                case NavEdgeDirection::West:
+                    waypoint.x -= settings.chunkSize * 0.5f;
+                    ingressWaypoint.x += settings.chunkSize * 0.5f;
+                    break;
+                case NavEdgeDirection::Count:
+                    break;
+            }
+            result.push_back({from, to, direction, cost, blocked, waypoint, ingressWaypoint});
+            return result;
+        }
+
     }
 
     WorldNavigationGraph::WorldNavigationGraph(WorldNavigationGraphSettings settings)
@@ -75,40 +214,108 @@ namespace Engine {
         const TerrainSystem& terrain,
         const NavigationConnectivitySystem& loadedConnectivity)
     {
-        clear();
-        centerChunk_ = centerChunk;
-        hasGraph_ = true;
+        const WorldNavigationGraphBuildResult result = buildCacheData(buildInput(centerChunk, settings_, terrain, loadedConnectivity));
+        loadCacheData(result.graph);
+    }
 
-        const int32_t radius = settings_.graphRadiusChunks;
-        for (int32_t z = centerChunk.z - radius; z <= centerChunk.z + radius; ++z) {
-            for (int32_t x = centerChunk.x - radius; x <= centerChunk.x + radius; ++x) {
+    WorldNavigationGraphBuildInput WorldNavigationGraph::buildInput(
+        ChunkCoord centerChunk,
+        const WorldNavigationGraphSettings& settings,
+        const TerrainSystem& terrain,
+        const NavigationConnectivitySystem& loadedConnectivity)
+    {
+        WorldNavigationGraphBuildInput input;
+        input.centerChunk = centerChunk;
+        input.settings = settings;
+        input.settings.graphRadiusChunks = std::max(input.settings.graphRadiusChunks, 0);
+        input.settings.chunkSize = std::max(input.settings.chunkSize, 1.0f);
+        input.terrain.chunkSize = terrain.settings().chunkSize;
+        input.terrain.heightScale = terrain.settings().heightScale;
+        input.terrain.biomes = terrain.settings().biomes ? *terrain.settings().biomes : BiomeSystem::sampleDefaults();
+        input.loadedConnectivity = loadedConnectivity.cacheData();
+        return input;
+    }
+
+    WorldNavigationGraphBuildResult WorldNavigationGraph::buildCacheData(const WorldNavigationGraphBuildInput& input)
+    {
+        const auto start = std::chrono::steady_clock::now();
+        WorldNavigationGraphBuildResult result;
+        result.centerChunk = input.centerChunk;
+        result.graph.centerChunk = input.centerChunk;
+        result.graph.hasGraph = true;
+
+        const int32_t radius = std::max(input.settings.graphRadiusChunks, 0);
+        const float chunkSize = std::max(input.settings.chunkSize, 1.0f);
+        WorldNavigationGraphSettings settings = input.settings;
+        settings.graphRadiusChunks = radius;
+        settings.chunkSize = chunkSize;
+        WorldNavigationTerrainSnapshot terrain = input.terrain;
+        terrain.chunkSize = std::max(terrain.chunkSize, 1.0f);
+
+        std::unordered_map<ChunkCoord, WorldNavNode, ChunkCoordHash> nodes;
+        for (int32_t z = input.centerChunk.z - radius; z <= input.centerChunk.z + radius; ++z) {
+            for (int32_t x = input.centerChunk.x - radius; x <= input.centerChunk.x + radius; ++x) {
                 const ChunkCoord coord{x, z};
-                const BiomeSample biome = terrain.sampleChunkBiome(coord);
-                nodes_.emplace(coord, WorldNavNode{
+                const BiomeSample biome = sampleChunkBiome(terrain, coord);
+                nodes.emplace(coord, WorldNavNode{
                     coord,
                     biome.id,
-                    centerForChunk(coord, terrain),
+                    centerForChunk(coord, settings, terrain),
                     costForChunk(coord, terrain),
                 });
             }
         }
 
-        for (const auto& [coord, node] : nodes_) {
-            (void)node;
+        for (const auto& [coord, node] : nodes) {
             for (uint32_t index = 0; index < NavEdgeDirectionCount; ++index) {
                 const NavEdgeDirection direction = static_cast<NavEdgeDirection>(index);
                 const ChunkCoord neighbor = neighborFor(coord, direction);
-                const auto neighborIt = nodes_.find(neighbor);
-                if (neighborIt == nodes_.end()) {
+                const auto neighborIt = nodes.find(neighbor);
+                if (neighborIt == nodes.end()) {
                     continue;
                 }
 
-                const bool blocked = edgeBlockedByLoadedConnectivity(coord, direction, loadedConnectivity);
+                const bool blocked = edgeBlockedByLoadedConnectivity(coord, direction, input.loadedConnectivity);
                 const float cost = (node.traversalCost + neighborIt->second.traversalCost) * 0.5f;
-                std::vector<WorldNavEdge> edges = makeEdges(coord, neighbor, direction, cost, blocked, loadedConnectivity);
-                edges_.insert(edges_.end(), edges.begin(), edges.end());
+                std::vector<WorldNavEdge> edges = makeEdges(coord, neighbor, direction, cost, blocked, settings, input.loadedConnectivity);
+                result.graph.edges.insert(result.graph.edges.end(), edges.begin(), edges.end());
             }
         }
+
+        result.graph.nodes.reserve(nodes.size());
+        for (const auto& [_, node] : nodes) {
+            result.graph.nodes.push_back(node);
+        }
+        std::ranges::sort(result.graph.nodes, [](const WorldNavNode& lhs, const WorldNavNode& rhs) {
+            return lhs.coord.x == rhs.coord.x ? lhs.coord.z < rhs.coord.z : lhs.coord.x < rhs.coord.x;
+        });
+        std::ranges::sort(result.graph.edges, [](const WorldNavEdge& lhs, const WorldNavEdge& rhs) {
+            if (lhs.from.x != rhs.from.x) {
+                return lhs.from.x < rhs.from.x;
+            }
+            if (lhs.from.z != rhs.from.z) {
+                return lhs.from.z < rhs.from.z;
+            }
+            if (lhs.to.x != rhs.to.x) {
+                return lhs.to.x < rhs.to.x;
+            }
+            if (lhs.to.z != rhs.to.z) {
+                return lhs.to.z < rhs.to.z;
+            }
+            if (lhs.waypoint.x != rhs.waypoint.x) {
+                return lhs.waypoint.x < rhs.waypoint.x;
+            }
+            return lhs.waypoint.z < rhs.waypoint.z;
+        });
+
+        const auto end = std::chrono::steady_clock::now();
+        result.buildMs = std::chrono::duration<float, std::milli>(end - start).count();
+        result.success = !result.graph.nodes.empty();
+        std::ostringstream message;
+        message << "Built world navigation graph with " << result.graph.nodes.size() << " nodes and "
+                << result.graph.edges.size() << " edges.";
+        result.message = message.str();
+        return result;
     }
 
     void WorldNavigationGraph::clear()
@@ -365,105 +572,4 @@ namespace Engine {
         };
     }
 
-    glm::vec3 WorldNavigationGraph::centerForChunk(ChunkCoord coord, const TerrainSystem& terrain) const
-    {
-        glm::vec3 center{
-            (static_cast<float>(coord.x) + 0.5f) * settings_.chunkSize,
-            0.0f,
-            (static_cast<float>(coord.z) + 0.5f) * settings_.chunkSize,
-        };
-        center.y = terrain.sampleHeight(center.x, center.z).value_or(terrain.generatedHeight(center.x, center.z));
-        return center;
-    }
-
-    float WorldNavigationGraph::costForChunk(ChunkCoord coord, const TerrainSystem& terrain) const
-    {
-        const BiomeSample sample = terrain.sampleChunkBiome(coord);
-        return std::max(0.1f, 1.0f + sample.roughness * 2.0f + std::abs(sample.elevation) * 0.5f);
-    }
-
-    bool WorldNavigationGraph::edgeBlockedByLoadedConnectivity(
-        ChunkCoord from,
-        NavEdgeDirection direction,
-        const NavigationConnectivitySystem& loadedConnectivity) const
-    {
-        const ChunkNavConnectivity* connectivity = loadedConnectivity.connectivity(from);
-        if (!connectivity) {
-            return false;
-        }
-
-        const std::vector<ChunkNavPortal>& portals = connectivity->portalsByEdge[static_cast<uint32_t>(direction)];
-        if (portals.empty()) {
-            return true;
-        }
-
-        const ChunkCoord neighbor = neighborFor(from, direction);
-        if (!loadedConnectivity.connectivity(neighbor)) {
-            return false;
-        }
-
-        return std::ranges::none_of(portals, [](const ChunkNavPortal& portal) {
-            return portal.connectedToLoadedNeighbor;
-        });
-    }
-
-    std::vector<WorldNavEdge> WorldNavigationGraph::makeEdges(
-        ChunkCoord from,
-        ChunkCoord to,
-        NavEdgeDirection direction,
-        float cost,
-        bool blocked,
-        const NavigationConnectivitySystem& loadedConnectivity) const
-    {
-        std::vector<WorldNavEdge> result;
-        glm::vec3 waypoint{
-            (static_cast<float>(from.x) + 0.5f) * settings_.chunkSize,
-            0.0f,
-            (static_cast<float>(from.z) + 0.5f) * settings_.chunkSize,
-        };
-        glm::vec3 ingressWaypoint{
-            (static_cast<float>(to.x) + 0.5f) * settings_.chunkSize,
-            0.0f,
-            (static_cast<float>(to.z) + 0.5f) * settings_.chunkSize,
-        };
-
-        if (const ChunkNavConnectivity* connectivity = loadedConnectivity.connectivity(from)) {
-            const std::vector<ChunkNavPortal>& portals = connectivity->portalsByEdge[static_cast<uint32_t>(direction)];
-            for (const ChunkNavPortal& portal : portals) {
-                if (!portal.connectedToLoadedNeighbor) {
-                    continue;
-                }
-                result.push_back({from, to, direction, cost, blocked, portal.position, portal.connectedNeighborPosition});
-            }
-            if (!result.empty()) {
-                return result;
-            }
-            if (!portals.empty()) {
-                waypoint = portals.front().position;
-            }
-        }
-
-        switch (direction) {
-            case NavEdgeDirection::North:
-                waypoint.z += settings_.chunkSize * 0.5f;
-                ingressWaypoint.z -= settings_.chunkSize * 0.5f;
-                break;
-            case NavEdgeDirection::South:
-                waypoint.z -= settings_.chunkSize * 0.5f;
-                ingressWaypoint.z += settings_.chunkSize * 0.5f;
-                break;
-            case NavEdgeDirection::East:
-                waypoint.x += settings_.chunkSize * 0.5f;
-                ingressWaypoint.x -= settings_.chunkSize * 0.5f;
-                break;
-            case NavEdgeDirection::West:
-                waypoint.x -= settings_.chunkSize * 0.5f;
-                ingressWaypoint.x += settings_.chunkSize * 0.5f;
-                break;
-            case NavEdgeDirection::Count:
-                break;
-        }
-        result.push_back({from, to, direction, cost, blocked, waypoint, ingressWaypoint});
-        return result;
-    }
 }

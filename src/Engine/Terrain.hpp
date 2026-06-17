@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -49,6 +50,7 @@ namespace Engine {
     struct TerrainTile {
         bool alive = false;
         ChunkCoord coord;
+        uint64_t generation = 0;
         glm::vec3 origin{};
         float size = 16.0f;
         uint32_t resolution = 17;
@@ -88,6 +90,37 @@ namespace Engine {
         bool rebuiltAny() const { return rebuiltCount > 0; }
     };
 
+    struct TerrainRenderMeshBuildInput {
+        TerrainTileHandle tile;
+        ChunkCoord coord;
+        uint64_t generation = 0;
+        uint32_t lodIndex = 0;
+        uint32_t renderResolution = 2;
+        glm::vec3 origin{};
+        float size = 16.0f;
+        uint32_t cpuResolution = 2;
+        std::vector<float> heights;
+        float skirtDepth = 0.0f;
+    };
+
+    struct TerrainRenderMeshData {
+        TerrainTileHandle tile;
+        ChunkCoord coord;
+        uint64_t generation = 0;
+        uint32_t lodIndex = 0;
+        uint32_t renderResolution = 2;
+        std::vector<Renderer::MeshVertex> vertices;
+        std::vector<uint32_t> indices;
+        Renderer::Aabb bounds;
+    };
+
+    struct TerrainRenderMeshBuildResult {
+        bool success = false;
+        TerrainRenderMeshData mesh;
+        float buildMs = 0.0f;
+        std::string message;
+    };
+
     // Owns loaded CPU heightfield tiles and their matching renderer terrain
     // tiles. Gameplay height queries always use CPU tile data; renderer LOD is
     // only a draw-mesh detail.
@@ -112,6 +145,16 @@ namespace Engine {
         Renderer::TerrainHandle rendererTerrain(TerrainTileHandle handle) const;
         bool updateLods(const glm::vec3& cameraPosition);
         TerrainLodUpdateResult updateLodsBudgeted(const glm::vec3& cameraPosition, uint32_t maxRebuilds);
+        std::vector<TerrainRenderMeshBuildInput> collectRenderLodBuildInputs(
+            const glm::vec3& cameraPosition,
+            uint32_t maxBuilds,
+            std::span<const TerrainTileHandle> pendingTiles) const;
+        std::optional<TerrainRenderMeshBuildInput> renderMeshBuildInput(
+            TerrainTileHandle handle,
+            uint32_t lodIndex) const;
+        static TerrainRenderMeshBuildResult buildRenderMeshData(const TerrainRenderMeshBuildInput& input);
+        bool commitRendererMesh(const TerrainRenderMeshData& mesh);
+        uint64_t tileGeneration(TerrainTileHandle handle) const;
         std::array<uint32_t, TerrainLodLevelCount> lodCounts() const;
 
         std::optional<float> sampleHeight(float worldX, float worldZ) const;
@@ -162,5 +205,6 @@ namespace Engine {
 
         TerrainSettings settings_;
         std::vector<TerrainTile> tiles_;
+        uint64_t nextTileGeneration_ = 1;
     };
 }

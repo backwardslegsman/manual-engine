@@ -44,6 +44,8 @@ Deferred:
 
 ## Phase P2 - Worker-Built World Navigation Graph
 
+Status: implemented. Runtime graph dirty processing now tries async graph cache reads first, then enqueues worker-safe graph builds from immutable terrain/biome/connectivity snapshots. The main thread only swaps finished graph cache data into the live graph.
+
 Move the expensive coarse graph rebuild out of the main-frame callback.
 
 Scope:
@@ -62,6 +64,8 @@ Deferred:
 - Actor-driven streaming, route reservation, road networks, gates, and off-mesh links.
 
 ## Phase P3 - Fine-Grained Connectivity Rebuild
+
+Status: implemented. `NavigationConnectivitySystem` now exposes a phased rebuild handle API that processes chunk setup, one edge at a time, relinking, and finalization through budgetable steps. App drives dirty connectivity through one active phased build and delays graph rebuilds until connectivity completion.
 
 Split loaded-chunk portal connectivity refresh below the chunk level.
 
@@ -87,6 +91,8 @@ Deferred:
 
 ## Phase P4 - Worker-Generated Terrain Render LOD Meshes
 
+Status: implemented. Terrain render LOD vertex/index generation now uses worker-safe build inputs and plain mesh results. The main thread validates tile generation and commits renderer terrain handle replacement through the existing work budget.
+
 Keep bgfx upload on the main thread, but generate terrain render mesh data on workers.
 
 Scope:
@@ -110,6 +116,8 @@ Deferred:
 
 ## Phase P5 - Incremental Renderer Visibility Metadata
 
+Status: implemented. Renderer metadata reapply now tracks dirty chunks and full-reapply queues in App, uses direct chunk lookup, and processes a capped number of chunks per budgeted step.
+
 Avoid full loaded-set scans when only a few renderables or debug knobs change.
 
 Scope:
@@ -131,6 +139,8 @@ Deferred:
 - Renderer-owned visibility graph, editor selection layers, and per-material render queues.
 
 ## Phase P6 - Debug Geometry Budgeting And Worker Preparation
+
+Status: implemented. Debug primitive generation now uses renderer global line caps plus App-side category caps for navmesh edges, graph edges, terrain slope warnings, collision bounds, and chunk/bounds visualization. Debug UI reports generated/submitted/clipped counts.
 
 Prevent debug visualization from becoming the hitch source.
 
@@ -213,9 +223,9 @@ Deferred:
 
 ## Current Priority Order
 
-1. Async navigation cache reads/writes.
-2. Worker-built world navigation graph.
-3. Fine-grained connectivity rebuild phases.
+1. Further phased resource destruction.
+2. Save/reload and editor operation budgeting.
+3. Long-frame capture history.
 4. Worker-generated terrain render LOD meshes.
 5. Incremental renderer visibility metadata.
 6. Debug geometry caps and worker preparation.

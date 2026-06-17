@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <sstream>
 
 namespace Engine {
     namespace {
@@ -98,9 +100,13 @@ namespace Engine {
         const TerrainSystem& terrain,
         const NavAgentSettings& agent)
     {
-        connectivity_.clear();
-        diagnostics_.clear();
-        rebuildChunks(loadedNavChunks, navigation, terrain, agent);
+        NavigationConnectivityBuildRequest request;
+        request.chunks = loadedNavChunks;
+        request.clearExisting = true;
+        const NavigationConnectivityBuildHandle handle = beginRebuild(std::move(request));
+        while (hasActiveRebuild(handle)) {
+            stepRebuild(handle, navigation, terrain, agent, std::numeric_limits<uint32_t>::max());
+        }
     }
 
     void NavigationConnectivitySystem::rebuildChunk(
@@ -118,61 +124,181 @@ namespace Engine {
         const TerrainSystem& terrain,
         const NavAgentSettings& agent)
     {
-        for (ChunkCoord coord : coords) {
-            connectivity_.erase(coord);
-            diagnostics_.erase(coord);
-            if (!navigation.hasTile(coord)) {
-                continue;
+        NavigationConnectivityBuildRequest request;
+        request.chunks.assign(coords.begin(), coords.end());
+        request.clearExisting = false;
+        const NavigationConnectivityBuildHandle handle = beginRebuild(std::move(request));
+        while (hasActiveRebuild(handle)) {
+            stepRebuild(handle, navigation, terrain, agent, std::numeric_limits<uint32_t>::max());
+        }
+    }
+
+    NavigationConnectivityBuildHandle NavigationConnectivitySystem::beginRebuild(NavigationConnectivityBuildRequest request)
+    {
+        if (request.clearExisting) {
+            connectivity_.clear();
+            diagnostics_.clear();
+        }
+
+        std::ranges::sort(request.chunks, [](ChunkCoord lhs, ChunkCoord rhs) {
+            return lhs.x == rhs.x ? lhs.z < rhs.z : lhs.x < rhs.x;
+        });
+        request.chunks.erase(std::unique(request.chunks.begin(), request.chunks.end()), request.chunks.end());
+
+        ActiveRebuild rebuild;
+        rebuild.handle = {nextBuildHandleId_++};
+        if (rebuild.handle.id == UINT64_MAX) {
+            rebuild.handle.id = nextBuildHandleId_++;
+        }
+        rebuild.chunks = std::move(request.chunks);
+        activeRebuild_ = std::move(rebuild);
+        return activeRebuild_->handle;
+    }
+
+    NavigationConnectivityBuildStepResult NavigationConnectivitySystem::stepRebuild(
+        NavigationConnectivityBuildHandle handle,
+        const NavigationSystem& navigation,
+        const TerrainSystem& terrain,
+        const NavAgentSettings& agent,
+        uint32_t maxSamples)
+    {
+        NavigationConnectivityBuildStepResult result;
+        result.complete = true;
+        result.label = "no active connectivity rebuild";
+        if (!activeRebuild_ || !(activeRebuild_->handle == handle)) {
+            return result;
+        }
+
+        ActiveRebuild& rebuild = *activeRebuild_;
+        result.complete = false;
+        maxSamples = std::max(maxSamples, 1u);
+
+        if (rebuild.chunkIndex >= rebuild.chunks.size()) {
+            result.ranStep = true;
+            result.phase = NavigationConnectivityBuildPhase::Complete;
+            result.complete = true;
+            result.label = "connectivity rebuild complete";
+            activeRebuild_.reset();
+            return result;
+        }
+
+        const ChunkCoord coord = rebuild.chunks[rebuild.chunkIndex];
+        result.coord = coord;
+        result.phase = rebuild.phase;
+        result.label = phaseLabel(rebuild.phase);
+
+        switch (rebuild.phase) {
+            case NavigationConnectivityBuildPhase::StartChunk: {
+                result.ranStep = true;
+                connectivity_.erase(coord);
+                diagnostics_.erase(coord);
+                rebuild.bounds.reset();
+                rebuild.connectivity = {};
+                rebuild.diagnostics = {};
+                rebuild.connectivity.coord = coord;
+                rebuild.diagnostics.coord = coord;
+
+                if (!navigation.hasTile(coord)) {
+                    ++rebuild.chunkIndex;
+                    rebuild.phase = NavigationConnectivityBuildPhase::StartChunk;
+                    result.label = "connectivity start skipped missing nav tile";
+                    break;
+                }
+
+                rebuild.bounds = navigation.tileBounds(coord);
+                if (!rebuild.bounds) {
+                    ++rebuild.chunkIndex;
+                    rebuild.phase = NavigationConnectivityBuildPhase::StartChunk;
+                    result.label = "connectivity start skipped missing tile bounds";
+                    break;
+                }
+
+                rebuild.connectivity.biomeId = terrain.sampleChunkBiome(coord).id;
+                rebuild.connectivity.traversalCost = std::max(0.0f, rebuild.bounds->max.x - rebuild.bounds->min.x);
+                rebuild.sampleIndex = 0;
+                rebuild.phase = NavigationConnectivityBuildPhase::NorthEdge;
+                break;
             }
-
-            const std::optional<Renderer::Aabb> bounds = navigation.tileBounds(coord);
-            if (!bounds) {
-                continue;
-            }
-
-            ChunkNavConnectivity connectivity;
-            connectivity.coord = coord;
-            connectivity.biomeId = terrain.sampleChunkBiome(coord).id;
-            connectivity.traversalCost = std::max(0.0f, bounds->max.x - bounds->min.x);
-            ChunkPortalDiagnostics diagnostics;
-            diagnostics.coord = coord;
-
-            for (uint32_t directionIndex = 0; directionIndex < NavEdgeDirectionCount; ++directionIndex) {
+            case NavigationConnectivityBuildPhase::NorthEdge:
+            case NavigationConnectivityBuildPhase::SouthEdge:
+            case NavigationConnectivityBuildPhase::EastEdge:
+            case NavigationConnectivityBuildPhase::WestEdge: {
+                result.ranStep = true;
+                const uint32_t directionIndex = static_cast<uint32_t>(rebuild.phase) -
+                    static_cast<uint32_t>(NavigationConnectivityBuildPhase::NorthEdge);
                 const NavEdgeDirection direction = static_cast<NavEdgeDirection>(directionIndex);
-                std::vector<ChunkNavPortal>& portals = connectivity.portalsByEdge[directionIndex];
-                NavigationPortalEdgeDiagnostics& edgeDiagnostics = diagnostics.edges[directionIndex];
+                std::vector<ChunkNavPortal>& portals = rebuild.connectivity.portalsByEdge[directionIndex];
+                NavigationPortalEdgeDiagnostics& edgeDiagnostics = rebuild.diagnostics.edges[directionIndex];
                 const uint32_t samples = std::max(settings_.samplesPerEdge, 1u);
-                for (uint32_t sample = 0; sample < samples; ++sample) {
+
+                while (rebuild.sampleIndex < samples && result.samplesProcessed < maxSamples) {
                     ++edgeDiagnostics.sampleCount;
                     const float t = samples == 1
                         ? 0.5f
-                        : static_cast<float>(sample) / static_cast<float>(samples - 1);
+                        : static_cast<float>(rebuild.sampleIndex) / static_cast<float>(samples - 1);
                     std::optional<ChunkNavPortal> portal =
-                        buildPortalSample(coord, direction, t, *bounds, navigation, terrain, agent, edgeDiagnostics);
-                    if (!portal) {
-                        continue;
+                        buildPortalSample(coord, direction, t, *rebuild.bounds, navigation, terrain, agent, edgeDiagnostics);
+                    if (portal) {
+                        if (shouldMergePortal(portals, portal->position)) {
+                            ++edgeDiagnostics.mergedDuplicateCount;
+                        } else {
+                            portals.push_back(*portal);
+                            ++edgeDiagnostics.acceptedPortalCount;
+                        }
                     }
-                    if (shouldMergePortal(portals, portal->position)) {
-                        ++edgeDiagnostics.mergedDuplicateCount;
-                        continue;
-                    }
-                    portals.push_back(*portal);
-                    ++edgeDiagnostics.acceptedPortalCount;
+                    ++rebuild.sampleIndex;
+                    ++result.samplesProcessed;
                 }
-            }
 
-            uint32_t edgeCountWithPortals = 0;
-            for (const std::vector<ChunkNavPortal>& portals : connectivity.portalsByEdge) {
-                if (!portals.empty()) {
-                    ++edgeCountWithPortals;
+                if (rebuild.sampleIndex >= samples) {
+                    rebuild.sampleIndex = 0;
+                    if (rebuild.phase == NavigationConnectivityBuildPhase::WestEdge) {
+                        rebuild.phase = NavigationConnectivityBuildPhase::RelinkNeighbors;
+                    } else {
+                        rebuild.phase = static_cast<NavigationConnectivityBuildPhase>(static_cast<uint32_t>(rebuild.phase) + 1u);
+                    }
                 }
+                break;
             }
-            connectivity.partial = edgeCountWithPortals < NavEdgeDirectionCount;
-            diagnostics_.emplace(coord, diagnostics);
-            connectivity_.emplace(coord, std::move(connectivity));
+            case NavigationConnectivityBuildPhase::RelinkNeighbors:
+                result.ranStep = true;
+                rebuild.phase = NavigationConnectivityBuildPhase::FinalizeChunk;
+                break;
+            case NavigationConnectivityBuildPhase::FinalizeChunk: {
+                result.ranStep = true;
+                uint32_t edgeCountWithPortals = 0;
+                for (const std::vector<ChunkNavPortal>& portals : rebuild.connectivity.portalsByEdge) {
+                    if (!portals.empty()) {
+                        ++edgeCountWithPortals;
+                    }
+                }
+                rebuild.connectivity.partial = edgeCountWithPortals < NavEdgeDirectionCount;
+                diagnostics_[coord] = rebuild.diagnostics;
+                connectivity_[coord] = std::move(rebuild.connectivity);
+                markLoadedNeighborConnections();
+                ++rebuild.chunkIndex;
+                rebuild.phase = NavigationConnectivityBuildPhase::StartChunk;
+                break;
+            }
+            case NavigationConnectivityBuildPhase::Complete:
+                result.ranStep = true;
+                result.complete = true;
+                activeRebuild_.reset();
+                break;
         }
+        return result;
+    }
 
-        markLoadedNeighborConnections();
+    void NavigationConnectivitySystem::cancelRebuild(NavigationConnectivityBuildHandle handle)
+    {
+        if (activeRebuild_ && activeRebuild_->handle == handle) {
+            activeRebuild_.reset();
+        }
+    }
+
+    bool NavigationConnectivitySystem::hasActiveRebuild(NavigationConnectivityBuildHandle handle) const
+    {
+        return activeRebuild_ && activeRebuild_->handle == handle;
     }
 
     void NavigationConnectivitySystem::removeChunk(ChunkCoord coord)
@@ -189,6 +315,7 @@ namespace Engine {
 
     void NavigationConnectivitySystem::clear()
     {
+        activeRebuild_.reset();
         connectivity_.clear();
         diagnostics_.clear();
     }
@@ -245,6 +372,7 @@ namespace Engine {
 
     void NavigationConnectivitySystem::loadCacheData(const NavigationConnectivityCacheData& cacheData)
     {
+        activeRebuild_.reset();
         connectivity_.clear();
         diagnostics_.clear();
         for (const ChunkNavConnectivity& connectivity : cacheData.chunks) {
@@ -354,6 +482,20 @@ namespace Engine {
 
     void NavigationConnectivitySystem::markLoadedNeighborConnections()
     {
+        for (auto& [_, connectivity] : connectivity_) {
+            for (std::vector<ChunkNavPortal>& portals : connectivity.portalsByEdge) {
+                for (ChunkNavPortal& portal : portals) {
+                    portal.connectedToLoadedNeighbor = false;
+                    portal.connectedNeighborPosition = {};
+                }
+            }
+        }
+        for (auto& [_, diagnostics] : diagnostics_) {
+            for (NavigationPortalEdgeDiagnostics& edge : diagnostics.edges) {
+                edge.connectedPortalCount = 0;
+            }
+        }
+
         const float linkDistanceSquared = settings_.neighborLinkDistance * settings_.neighborLinkDistance;
         for (auto& [coord, connectivity] : connectivity_) {
             (void)coord;
@@ -404,5 +546,28 @@ namespace Engine {
                 }
             }
         }
+    }
+
+    const char* NavigationConnectivitySystem::phaseLabel(NavigationConnectivityBuildPhase phase)
+    {
+        switch (phase) {
+            case NavigationConnectivityBuildPhase::StartChunk:
+                return "start chunk";
+            case NavigationConnectivityBuildPhase::NorthEdge:
+                return "north edge";
+            case NavigationConnectivityBuildPhase::SouthEdge:
+                return "south edge";
+            case NavigationConnectivityBuildPhase::EastEdge:
+                return "east edge";
+            case NavigationConnectivityBuildPhase::WestEdge:
+                return "west edge";
+            case NavigationConnectivityBuildPhase::RelinkNeighbors:
+                return "relink neighbors";
+            case NavigationConnectivityBuildPhase::FinalizeChunk:
+                return "finalize chunk";
+            case NavigationConnectivityBuildPhase::Complete:
+                return "complete";
+        }
+        return "unknown";
     }
 }

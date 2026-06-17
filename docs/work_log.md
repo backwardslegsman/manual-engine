@@ -605,3 +605,71 @@ Changed:
 Rationale:
 - App should compose services and choose scheduling policy, while reusable cache I/O job construction belongs in Engine.
 - The performance work added new worker/main-thread contracts that need to be explicit in public headers and persistent guidance.
+
+## 2026-06-15 - Worker-Built World Navigation Graph
+
+Changed:
+- Added worker-safe world navigation graph build snapshots and `WorldNavigationGraph::buildCacheData`.
+- Switched runtime graph dirty processing to async cache read first, then worker graph build on cache miss or cache-disabled paths.
+- Added graph worker build counters and last-build diagnostics to the navigation debug UI.
+- Added tests covering worker graph parity with synchronous rebuilds and radius-zero graph data.
+
+Rationale:
+- Coarse graph rebuilds can cover a large generated region and should not run inside a main-thread frame callback.
+- Keeping the output as `WorldNavigationGraphCacheData` preserves the live graph interface while moving construction to immutable worker snapshots.
+
+## 2026-06-16 - Fine-Grained Connectivity Rebuild
+
+Changed:
+- Added phased `NavigationConnectivitySystem` rebuild handles that step through chunk setup, each edge, neighbor relinking, and finalization.
+- Switched App dirty connectivity processing to run one budgeted connectivity step at a time and delay world graph refresh until connectivity finishes.
+- Added Dear ImGui counters for connectivity samples, active chunk, and current step label.
+- Added navigation tests covering phased/synchronous parity, one-sample stepping, cancellation, and clear-existing behavior.
+
+Rationale:
+- Loaded nav tiles can arrive in bursts, and rebuilding all affected portals in one callback can still hitch even when nav generation is asynchronous.
+- Keeping connectivity on the main thread preserves the live Detour query boundary, while phased stepping gives the frame budget enough control to spread portal sampling across frames.
+
+## 2026-06-16 - Worker-Generated Terrain Render LOD Meshes
+
+Changed:
+- Added terrain render mesh build inputs/results so LOD vertex/index generation can run on worker threads from immutable CPU tile snapshots.
+- Split terrain LOD replacement into worker mesh generation and budgeted main-thread renderer terrain handle commits.
+- Added debug stats for terrain LOD jobs, commits, stale results, pending work, and last worker build time.
+- Added tests for deterministic terrain render mesh generation, stale generation rejection, and unchanged CPU height queries.
+
+Rationale:
+- Terrain LOD changes are visual work; CPU terrain remains authoritative for gameplay, picking, nav build data, and height queries.
+- Moving vertex/index generation off the frame thread leaves only bgfx upload/destruction as main-thread work, making terrain LOD spikes easier to budget and diagnose.
+
+## 2026-06-16 - Incremental Renderer Visibility Metadata
+
+Changed:
+- Replaced broad renderer metadata reapply with App-owned dirty chunk tracking and a capped full-reapply queue.
+- Added direct `ChunkStreamer::visitLoadedChunkContent` lookup so local visibility metadata changes do not scan every loaded chunk.
+- Added debug UI counters and controls for visibility chunks processed/deferred, terrain updates, instance updates, and full-reapply state.
+- Added a focused test for direct loaded chunk content lookup.
+
+Rationale:
+- Terrain LOD commits, object edits, and chunk loads usually affect one chunk, so applying renderer material/layer/group/distance metadata across the whole loaded world is unnecessary.
+- Keeping metadata orchestration in App preserves the current renderer handle API while making the expensive path budgetable and visible in the Performance panel.
+
+## 2026-06-16 - Debug Geometry Budgeting
+
+Changed:
+- Added renderer debug draw caps, primitive batch types, and per-frame debug draw stats.
+- Routed expensive debug visualization groups through App-side category caps for navmesh edges, world graph edges, terrain slope warnings, collision bounds, and chunk/bounds lines.
+- Added Dear ImGui controls for debug draw caps and counters for generated, submitted, and clipped lines.
+
+Rationale:
+- Debug visualization can cover thousands of navigation and graph lines in the large-world profile.
+- Capping debug geometry keeps diagnostic tools useful without allowing them to become the next frame hitch source.
+
+## 2026-06-17 - Destruction Profiling Buckets
+
+Changed:
+- Extended the navigation CPU profile report with teardown buckets for Detour tile destruction, nav-system clear, connectivity chunk removal, graph clear, world object destruction with spatial unregister, chunk detach bookkeeping, and CPU terrain tile destruction.
+
+Rationale:
+- P7 should only split resource destruction further if teardown is actually visible in frame-time data.
+- The headless profiler now distinguishes CPU teardown costs from generation/build/query costs, while keeping real renderer/bgfx destruction as a runtime-only measurement concern.

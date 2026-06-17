@@ -66,6 +66,27 @@ namespace Engine {
         std::vector<WorldNavEdge> edges;
     };
 
+    struct WorldNavigationTerrainSnapshot {
+        float chunkSize = 24.0f;
+        float heightScale = 1.0f;
+        BiomeSystem biomes;
+    };
+
+    struct WorldNavigationGraphBuildInput {
+        ChunkCoord centerChunk{};
+        WorldNavigationGraphSettings settings;
+        WorldNavigationTerrainSnapshot terrain;
+        NavigationConnectivityCacheData loadedConnectivity;
+    };
+
+    struct WorldNavigationGraphBuildResult {
+        ChunkCoord centerChunk{};
+        WorldNavigationGraphCacheData graph;
+        float buildMs = 0.0f;
+        bool success = false;
+        std::string message;
+    };
+
     class WorldNavigationGraph {
     public:
         explicit WorldNavigationGraph(WorldNavigationGraphSettings settings = {});
@@ -74,6 +95,12 @@ namespace Engine {
             ChunkCoord centerChunk,
             const TerrainSystem& terrain,
             const NavigationConnectivitySystem& loadedConnectivity);
+        static WorldNavigationGraphBuildInput buildInput(
+            ChunkCoord centerChunk,
+            const WorldNavigationGraphSettings& settings,
+            const TerrainSystem& terrain,
+            const NavigationConnectivitySystem& loadedConnectivity);
+        static WorldNavigationGraphBuildResult buildCacheData(const WorldNavigationGraphBuildInput& input);
         void clear();
 
         WorldNavRoute findRoute(const glm::vec3& startWorldPosition, const glm::vec3& endWorldPosition) const;
@@ -88,16 +115,6 @@ namespace Engine {
 
     private:
         ChunkCoord coordForWorldPosition(const glm::vec3& position) const;
-        glm::vec3 centerForChunk(ChunkCoord coord, const TerrainSystem& terrain) const;
-        float costForChunk(ChunkCoord coord, const TerrainSystem& terrain) const;
-        bool edgeBlockedByLoadedConnectivity(ChunkCoord from, NavEdgeDirection direction, const NavigationConnectivitySystem& loadedConnectivity) const;
-        std::vector<WorldNavEdge> makeEdges(
-            ChunkCoord from,
-            ChunkCoord to,
-            NavEdgeDirection direction,
-            float cost,
-            bool blocked,
-            const NavigationConnectivitySystem& loadedConnectivity) const;
         WorldNavRoute findRouteInternal(
             const glm::vec3& startWorldPosition,
             const glm::vec3& endWorldPosition,
