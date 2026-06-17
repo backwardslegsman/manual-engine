@@ -23,6 +23,7 @@ add_executable(manual_engine
     src/Engine/ActorCommand.cpp
     src/Engine/ActorController.cpp
     src/Engine/ActorSelection.cpp
+    src/Engine/AuthoredScene.cpp
     src/Engine/AsyncWorkQueue.cpp
     src/Engine/AssetCache.cpp
     src/Engine/Biome.cpp
@@ -124,6 +125,101 @@ target_link_libraries(manual_engine_navigation_tests
 
 add_test(NAME manual_engine_navigation_tests COMMAND manual_engine_navigation_tests)
 
+add_executable(manual_engine_asset_import_tests
+    tests/assets/AssetImportTestRunner.cpp
+    src/Assets/Assimp/Importer.cpp
+)
+
+target_include_directories(manual_engine_asset_import_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_asset_import_tests
+    PRIVATE
+        assimp::assimp
+        glm::glm
+)
+
+add_test(NAME manual_engine_asset_import_tests COMMAND manual_engine_asset_import_tests)
+
+add_executable(manual_engine_authored_scene_tests
+    tests/authored_scene/AuthoredSceneTestRunner.cpp
+    tests/authored_scene/RendererOwnershipStubs.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Engine/AssetCache.cpp
+    src/Engine/AuthoredScene.cpp
+    src/Engine/FrameBudget.cpp
+)
+
+target_include_directories(manual_engine_authored_scene_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_authored_scene_tests
+    PRIVATE
+        assimp::assimp
+        glm::glm
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_authored_scene_tests COMMAND manual_engine_authored_scene_tests)
+
+add_executable(manual_engine_texture_tests
+    tests/renderer/TextureTestRunner.cpp
+    src/Renderer/Texture.cpp
+    src/Renderer/core.cpp
+)
+
+target_include_directories(manual_engine_texture_tests
+    PRIVATE
+        src
+        ${Stb_INCLUDE_DIR}
+)
+
+target_link_libraries(manual_engine_texture_tests
+    PRIVATE
+        SDL3::SDL3
+        bgfx::bgfx
+)
+
+add_test(NAME manual_engine_texture_tests COMMAND manual_engine_texture_tests)
+
+add_executable(manual_engine_authored_scene_smoke_tests
+    tests/authored_scene/AuthoredSceneRendererSmoke.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Engine/AssetCache.cpp
+    src/Engine/AuthoredScene.cpp
+    src/Engine/FrameBudget.cpp
+    src/Renderer/Scene.cpp
+    src/Renderer/Texture.cpp
+    src/Renderer/core.cpp
+    src/Renderer/VertexLayouts.cpp
+)
+
+target_include_directories(manual_engine_authored_scene_smoke_tests
+    PRIVATE
+        src
+        ${Stb_INCLUDE_DIR}
+)
+
+target_compile_definitions(manual_engine_authored_scene_smoke_tests
+    PRIVATE
+        MANUAL_ENGINE_ENABLE_DEBUG_TOOLS=0
+)
+
+target_link_libraries(manual_engine_authored_scene_smoke_tests
+    PRIVATE
+        SDL3::SDL3
+        assimp::assimp
+        bgfx::bgfx
+        glm::glm
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_authored_scene_smoke_tests COMMAND manual_engine_authored_scene_smoke_tests)
+
 set(SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/src")
 set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/dx11")
 find_program(BGFX_SHADERC shaderc
@@ -216,3 +312,4 @@ add_custom_target(manual_engine_shaders
 )
 
 add_dependencies(manual_engine manual_engine_shaders)
+add_dependencies(manual_engine_authored_scene_smoke_tests manual_engine_shaders)

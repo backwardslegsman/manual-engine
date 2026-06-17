@@ -12,6 +12,8 @@ ManualEngine is intended to grow into a simple open world game engine. Keep chan
 - Do not introduce an ECS, task graph, scripting layer, editor layer, or streaming system until a simpler interface proves insufficient.
 - Keep `docs/engine_overview.md` current when subsystem ownership or data flow changes.
 - Consult `docs/system_contracts.md` before changing cross-system behavior, and update it when adding features, public interface contracts, or initialization dependencies.
+- Consult `docs/system_inboxes.md` before adding message-driven cross-system communication; prefer receiver-owned typed inboxes and explicit publish-only sinks over global bus registries.
+- Consult `docs/authored_scene_roadmap.md` before adding glTF/PBR authored scene loading, material, texture, lighting, or scene streaming work.
 - After each feature/refactor pass, append a short dated entry to `docs/work_log.md` describing what changed and why.
 
 ## Open World Direction

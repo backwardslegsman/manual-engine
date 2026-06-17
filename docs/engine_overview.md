@@ -2,7 +2,7 @@
 
 ManualEngine is currently a deliberately small SDL + bgfx open-world prototype. The guiding shape is: `src/App` composes services and owns platform/frame flow, `src/Engine` owns deterministic simulation and world-state rules, `src/Renderer` owns bgfx resources/submission, and `src/Assets` decodes source files into CPU-side data.
 
-Keep this document current whenever subsystem ownership, data flow, or save-facing contracts change. Use `docs/system_contracts.md` as the detailed checklist for currently available systems, renderer features, initialization order, and cross-system contracts. Use `docs/performance_roadmap.md` when planning worker offload, frame budgeting, streaming, and hitch-reduction work.
+Keep this document current whenever subsystem ownership, data flow, or save-facing contracts change. Use `docs/system_contracts.md` as the detailed checklist for currently available systems, renderer features, initialization order, and cross-system contracts. Use `docs/system_inboxes.md` when adding message-driven cross-system input. Use `docs/performance_roadmap.md` when planning worker offload, frame budgeting, streaming, and hitch-reduction work. Use `docs/authored_scene_roadmap.md` when planning glTF/PBR authored scene loading and streaming work.
 
 ## Runtime Ownership
 
@@ -16,6 +16,7 @@ Keep this document current whenever subsystem ownership, data flow, or save-faci
 - SDL events are fed to Dear ImGui first. If ImGui wants mouse or keyboard capture, the game input snapshot does not receive those events.
 - `InputState` records physical SDL input for the frame. `InputMapping` converts it to semantic `InputActionEvent`s.
 - Camera, actor controller, and interaction systems consume semantic events rather than physical keys/buttons.
+- Future message-driven system inputs should use receiver-owned typed inboxes exposed through publish-only sinks. App/composition code wires sink references and owns explicit flush order; avoid global dynamic event bus registries.
 - `World` owns transient object handles, transforms, optional stable `ObjectId`s, CPU bounds, collision flags, angular velocity, and explicit renderer instance bindings.
 - `World::syncRenderState()` pushes CPU transforms into renderer instances. Renderer resources never own world object lifetime.
 - Chunk streaming owns loaded chunk membership, render group metadata, terrain tile handles, and prop object lists. App stages missing desired chunks through `AsyncWorkQueue`, where jobs produce plain generated terrain/prop data and optional Detour tile bytes. Main-thread load commit is split into budgeted work items that create render groups, CPU terrain tiles, renderer terrain buffers, world objects, renderer instances, spatial entries, and live navigation tiles. Runtime unload also runs in budgeted phases for nav removal, prop destruction, terrain destruction, render-group destruction, and dirty finalization. Chunk streaming does not own mesh/material/texture assets.

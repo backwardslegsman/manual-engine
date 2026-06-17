@@ -41,3 +41,7 @@ Desktop.ini
 
 # Generated derived data
 generated/navigation_cache/
+generated/authored_scene_cache/
+
+# Local large authored scene assets
+assets/main_sponza/

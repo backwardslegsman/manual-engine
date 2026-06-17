@@ -17,6 +17,8 @@ namespace Renderer::DebugUi {
         bool enableDistanceCulling = true;
         float propMaxDrawDistance = 160.0f;
         float terrainMaxDrawDistance = 280.0f;
+        std::string sceneMode = "Procedural";
+        std::string sceneStatus;
     };
 
     struct TerrainLodDebugStats {

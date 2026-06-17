@@ -673,3 +673,67 @@ Changed:
 Rationale:
 - P7 should only split resource destruction further if teardown is actually visible in frame-time data.
 - The headless profiler now distinguishes CPU teardown costs from generation/build/query costs, while keeping real renderer/bgfx destruction as a runtime-only measurement concern.
+
+## 2026-06-17 - System Inbox Architecture Note
+
+Changed:
+- Added `docs/system_inboxes.md` to formalize receiver-owned typed inboxes, publish-only sinks, explicit flush order, and constraints around lifetime, threading, debugging, and tests.
+- Cross-linked the inbox guidance from the overview, system contracts, and agent guide.
+
+Rationale:
+- Future event-style communication should keep ownership and dependencies visible instead of introducing a global dynamic event bus registry.
+- The pattern gives systems flexible input surfaces while preserving deterministic frame ordering, testability, and main-thread mutation contracts.
+
+## 2026-06-17 - Authored Scene Roadmap
+
+Changed:
+- Added `docs/authored_scene_roadmap.md` covering the path from source glTF import through material/texture/PBR rendering, Release Sponza mode, authored scene streaming, runtime caches, and diagnostics.
+- Cross-linked the roadmap from the overview and agent guide.
+
+Rationale:
+- The Sponza asset exposes requirements beyond the current procedural sample renderer, including scene graph transforms, packed PBR textures, alpha/double-sided materials, large texture handling, and authored-scene lifetime.
+- The roadmap keeps the target on a stable general scene pipeline instead of a one-off minimal Sponza load.
+
+## 2026-06-17 - Authored Scene CPU Import Boundary
+
+Changed:
+- Added a CPU-only Assimp authored scene import API with scene nodes, transforms, mesh primitives, material/texture references, light records, bounds, and diagnostics.
+- Added a headless asset import CTest target with a small embedded glTF fixture and optional Sponza validation.
+
+Rationale:
+- Authored scene loading needs a renderer-independent data boundary before GPU resource ownership, PBR material mapping, and Release scene mode can be built.
+- Keeping the existing static mesh importer intact preserves current renderer behavior while giving later phases richer scene data.
+
+## 2026-06-17 - Authored Scene Runtime Ownership
+
+Changed:
+- Added an Engine-owned authored scene runtime loader that creates renderer materials, static meshes, and mesh instances from imported CPU scene data, applies node world transforms, records diagnostics, and tears resources down in renderer-safe order.
+- Added a renderer CPU static mesh creation API plus stubbed ownership and hidden-window renderer smoke tests.
+
+Rationale:
+- Authored scenes need explicit runtime resource ownership before Release scene mode, PBR material expansion, and streaming can be added.
+- The smoke path verifies the new ownership layer can submit through the real renderer without changing the procedural sample app startup.
+
+## 2026-06-17 - Authored Scene Sector Streaming
+
+Changed:
+- Added deterministic authored scene partition metadata with sector bounds, node/mesh/material/texture/light references, and payload estimates.
+- Added a partitioned authored scene owner that loads and unloads sector renderer resources through budgeted main-thread work while sharing materials and cached textures across loaded sectors.
+- Switched authored app mode to the partitioned loader and exposed sector counts through authored diagnostics/status.
+- Added authored scene tests for partition determinism, sector streaming, render group cleanup, shared material references, and renderer smoke coverage.
+
+Rationale:
+- Large authored scenes should not remain an all-or-nothing renderer resource set.
+- Sector manifests and budgeted commits create the ownership boundary needed for streaming now, while leaving derived scene caches and compressed texture pipelines to later phases.
+
+## 2026-06-17 - Authored Scene Runtime Cache
+
+Changed:
+- Added an authored scene derived-data cache with manifest identity based on source hash, importer/material/texture/vertex/partition versions, and partition settings.
+- Stored scene metadata and sector manifests in YAML plus renderer-ready mesh vertex/index payloads in binary files under `generated/authored_scene_cache`.
+- Wired partitioned authored scene loading to use cache hits when enabled and to fall back to source import on miss, stale, or corrupt cache data.
+- Added tests for cache round trips, cache policy behavior, stale/corrupt fallback, partition identity changes, and cached partitioned scene loading.
+
+Rationale:
+- Release authored scene startup should be able to skip source glTF parsing when a matching derived cache exists.
+- Keeping cache files derived and optional preserves robust source fallback while preparing for later texture/cache processing phases.

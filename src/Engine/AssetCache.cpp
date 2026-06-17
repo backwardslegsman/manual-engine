@@ -22,6 +22,28 @@ namespace {
         return resolveAssetPath(path).generic_string();
     }
 
+    template <typename Enum>
+    uint32_t enumValue(Enum value)
+    {
+        return static_cast<uint32_t>(value);
+    }
+
+    std::string textureDescriptorKey(const Renderer::TextureDescriptor& descriptor)
+    {
+        std::ostringstream key;
+        key << "slot=" << enumValue(descriptor.slot)
+            << ";color=" << enumValue(descriptor.colorSpace)
+            << ";wrap=" << enumValue(descriptor.wrapU) << "," << enumValue(descriptor.wrapV)
+            << ";filter=" << enumValue(descriptor.minFilter) << "," << enumValue(descriptor.magFilter) << "," << enumValue(descriptor.mipFilter)
+            << ";mips=" << (descriptor.generateMips ? 1 : 0);
+        return key.str();
+    }
+
+    std::string textureKey(const std::filesystem::path& path, const Renderer::TextureDescriptor& descriptor)
+    {
+        return pathKey(path) + "|" + textureDescriptorKey(descriptor);
+    }
+
     std::string solidTextureKey(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
     {
         std::ostringstream key;
@@ -85,7 +107,12 @@ namespace Engine {
 
     CachedTexture AssetCache::acquireTexture(const std::filesystem::path& path)
     {
-        const std::string key = pathKey(path);
+        return acquireTexture(path, {});
+    }
+
+    CachedTexture AssetCache::acquireTexture(const std::filesystem::path& path, const Renderer::TextureDescriptor& descriptor)
+    {
+        const std::string key = textureKey(path, descriptor);
         for (uint32_t index = 0; index < textures_.size(); ++index) {
             TextureEntry& entry = textures_[index];
             if (entry.alive && entry.key == key) {
@@ -94,7 +121,7 @@ namespace Engine {
             }
         }
 
-        Renderer::TextureHandle texture = Renderer::loadTexture(path);
+        Renderer::TextureHandle texture = Renderer::loadTexture(path, descriptor);
         if (!Renderer::isValid(texture)) {
             return {};
         }

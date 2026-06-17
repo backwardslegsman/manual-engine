@@ -12,6 +12,8 @@
 #include "Renderer/VertexLayouts.hpp"
 
 namespace Renderer {
+    constexpr uint32_t MaxForwardLights = 16;
+
     enum class RenderLayer : uint32_t {
         None = 0,
         Terrain = 1u << 0,
@@ -103,13 +105,118 @@ namespace Renderer {
         int32_t chunkZ = 0;
     };
 
+    enum class LightType {
+        Directional,
+        Point,
+        Spot,
+    };
+
+    struct LightHandle {
+        uint32_t id = UINT32_MAX;
+    };
+
+    struct LightDescriptor {
+        std::string name;
+        LightType type = LightType::Point;
+        glm::vec3 color{1.0f};
+        float intensity = 1.0f;
+        glm::vec3 position{0.0f};
+        glm::vec3 direction{0.0f, -1.0f, 0.0f};
+        float range = 0.0f;
+        float innerConeAngle = 0.0f;
+        float outerConeAngle = 0.7853982f;
+        bool enabled = true;
+    };
+
+    struct LightDiagnostics {
+        bool valid = false;
+        LightDescriptor descriptor;
+        bool active = false;
+        bool inForwardBudget = false;
+    };
+
+    enum class MaterialRenderPass {
+        Opaque,
+        AlphaMask,
+        AlphaBlend,
+    };
+
     struct MaterialDescriptor {
         std::string name;
         glm::vec4 baseColorFactor{1.0f};
         TextureHandle baseColorTexture;
         TextureHandle normalTexture;
+        float normalScale = 1.0f;
         float metallicFactor = 0.0f;
         float roughnessFactor = 1.0f;
+        TextureHandle metallicTexture;
+        TextureHandle roughnessTexture;
+        TextureHandle metallicRoughnessTexture;
+        TextureHandle occlusionTexture;
+        float occlusionStrength = 1.0f;
+        TextureHandle emissiveTexture;
+        glm::vec3 emissiveFactor{0.0f};
+        enum class AlphaMode {
+            Opaque,
+            Mask,
+            Blend,
+        };
+        enum class TextureChannel {
+            R = 0,
+            G = 1,
+            B = 2,
+            A = 3,
+        };
+        enum class TextureColorSpace {
+            Linear,
+            Srgb,
+        };
+        enum class TextureWrap {
+            Repeat,
+            ClampToEdge,
+            MirroredRepeat,
+        };
+        enum class TextureFilter {
+            Nearest,
+            Linear,
+        };
+        struct TextureSlotHints {
+            TextureColorSpace colorSpace = TextureColorSpace::Linear;
+            TextureWrap wrapU = TextureWrap::Repeat;
+            TextureWrap wrapV = TextureWrap::Repeat;
+            TextureFilter minFilter = TextureFilter::Linear;
+            TextureFilter magFilter = TextureFilter::Linear;
+        };
+        TextureChannel metallicRoughnessMetallicChannel = TextureChannel::B;
+        TextureChannel metallicRoughnessRoughnessChannel = TextureChannel::G;
+        AlphaMode alphaMode = AlphaMode::Opaque;
+        float alphaCutoff = 0.5f;
+        bool doubleSided = false;
+        TextureSlotHints baseColorTextureHints{TextureColorSpace::Srgb};
+        TextureSlotHints normalTextureHints;
+        TextureSlotHints metallicTextureHints;
+        TextureSlotHints roughnessTextureHints;
+        TextureSlotHints metallicRoughnessTextureHints;
+        TextureSlotHints occlusionTextureHints;
+        TextureSlotHints emissiveTextureHints{TextureColorSpace::Srgb};
+    };
+
+    struct MaterialDiagnostics {
+        bool valid = false;
+        std::string name;
+        bool hasBaseColorTexture = false;
+        bool hasNormalTexture = false;
+        bool hasMetallicTexture = false;
+        bool hasRoughnessTexture = false;
+        bool hasPackedMetallicRoughnessTexture = false;
+        bool hasOcclusionTexture = false;
+        bool hasEmissiveTexture = false;
+        MaterialDescriptor::TextureChannel packedMetallicChannel = MaterialDescriptor::TextureChannel::B;
+        MaterialDescriptor::TextureChannel packedRoughnessChannel = MaterialDescriptor::TextureChannel::G;
+        MaterialDescriptor::AlphaMode alphaMode = MaterialDescriptor::AlphaMode::Opaque;
+        float alphaCutoff = 0.5f;
+        bool doubleSided = false;
+        MaterialRenderPass renderPass = MaterialRenderPass::Opaque;
     };
 
     struct AtmosphereSettings {
@@ -120,6 +227,11 @@ namespace Renderer {
         glm::vec3 sunDirection{-0.35f, -0.85f, -0.25f};
         glm::vec3 sunColor{1.0f, 0.94f, 0.84f};
         float sunIntensity = 1.0f;
+        float exposure = 1.0f;
+        float ambientIntensity = 0.08f;
+        glm::vec3 environmentDiffuseColor{1.0f};
+        float environmentDiffuseIntensity = 1.0f;
+        bool environmentEnabled = true;
     };
 
     struct Frustum {
@@ -155,7 +267,16 @@ namespace Renderer {
         uint32_t distanceCulledMeshInstances = 0;
         uint32_t visibleMeshDrawItems = 0;
         uint32_t submittedMeshDrawItems = 0;
+        uint32_t visibleOpaqueMeshDrawItems = 0;
+        uint32_t visibleAlphaMaskMeshDrawItems = 0;
+        uint32_t visibleAlphaBlendMeshDrawItems = 0;
+        uint32_t submittedOpaqueMeshDrawItems = 0;
+        uint32_t submittedAlphaMaskMeshDrawItems = 0;
+        uint32_t submittedAlphaBlendMeshDrawItems = 0;
         uint32_t meshBatchCount = 0;
+        uint32_t opaqueMeshBatchCount = 0;
+        uint32_t alphaMaskMeshBatchCount = 0;
+        uint32_t alphaBlendMeshBatchCount = 0;
         uint32_t largestMeshBatchSize = 0;
         uint32_t liveTerrainTiles = 0;
         uint32_t visibleTerrainTiles = 0;
@@ -163,6 +284,11 @@ namespace Renderer {
         uint32_t layerOrFlagCulledTerrainTiles = 0;
         uint32_t frustumCulledTerrainTiles = 0;
         uint32_t distanceCulledTerrainTiles = 0;
+        uint32_t liveLightCount = 0;
+        uint32_t activeLightCount = 0;
+        uint32_t submittedForwardLightCount = 0;
+        uint32_t disabledLightCount = 0;
+        uint32_t overBudgetLightCount = 0;
         std::vector<RenderGroupDrawStats> renderGroups;
     };
 
@@ -196,19 +322,36 @@ namespace Renderer {
         uint32_t id = UINT32_MAX;
     };
 
+    struct StaticSubmeshDescriptor {
+        std::vector<MeshVertex> vertices;
+        std::vector<uint32_t> indices;
+        MaterialHandle material;
+    };
+
+    struct StaticMeshDescriptor {
+        std::string name;
+        std::vector<StaticSubmeshDescriptor> submeshes;
+    };
+
     bool initSceneRenderer();
     void shutdownSceneRenderer();
 
     RenderGroupHandle createRenderGroup(const RenderGroupDescriptor& descriptor);
     void destroyRenderGroup(RenderGroupHandle group);
+    LightHandle createLight(const LightDescriptor& descriptor);
+    void destroyLight(LightHandle light);
+    void setLightDescriptor(LightHandle light, const LightDescriptor& descriptor);
+    LightDiagnostics lightDiagnostics(LightHandle light);
     MaterialHandle createMaterial(const MaterialDescriptor& descriptor);
     void destroyMaterial(MaterialHandle material);
     void setMaterialDescriptor(MaterialHandle material, const MaterialDescriptor& descriptor);
+    MaterialDiagnostics materialDiagnostics(MaterialHandle material);
     void setAtmosphereSettings(const AtmosphereSettings& settings);
     const AtmosphereSettings& atmosphereSettings();
     void setDebugDrawSettings(const DebugDrawSettings& settings);
     const DebugDrawSettings& debugDrawSettings();
     StaticMeshHandle loadStaticMesh(const std::filesystem::path& path);
+    StaticMeshHandle createStaticMesh(const StaticMeshDescriptor& descriptor);
     StaticMeshHandle createTexturedCubeMesh();
     void destroyStaticMesh(StaticMeshHandle mesh);
     MeshInstanceHandle createInstance(StaticMeshHandle mesh);

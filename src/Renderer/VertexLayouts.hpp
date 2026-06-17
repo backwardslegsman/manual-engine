@@ -22,8 +22,12 @@ namespace Renderer {
         float tx;
         float ty;
         float tz;
+        float tw;
         float u;
         float v;
+        float u1;
+        float v1;
+        uint32_t abgr = 0xffffffff;
 
         static bgfx::VertexLayout layout;
     };

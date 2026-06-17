@@ -207,6 +207,11 @@ namespace Renderer::DebugUi {
         if (ImGui::BeginTabBar("DebugTabs")) {
         if (ImGui::BeginTabItem("Render")) {
         ImGui::Text("Layers");
+        ImGui::Text("Scene mode: %s", settings.sceneMode.c_str());
+        if (!settings.sceneStatus.empty()) {
+            ImGui::TextWrapped("%s", settings.sceneStatus.c_str());
+        }
+        ImGui::Separator();
         layerCheckbox("Terrain", RenderLayer::Terrain);
         layerCheckbox("Props", RenderLayer::Props);
         layerCheckbox("Debug", RenderLayer::Debug);
@@ -244,6 +249,18 @@ namespace Renderer::DebugUi {
         ImGui::SliderFloat3("Sun direction", &atmosphere.sunDirection[0], -1.0f, 1.0f);
         ImGui::ColorEdit3("Sun color", &atmosphere.sunColor[0]);
         ImGui::SliderFloat("Sun intensity", &atmosphere.sunIntensity, 0.0f, 4.0f);
+        ImGui::SliderFloat("Exposure", &atmosphere.exposure, 0.0f, 4.0f);
+        ImGui::SliderFloat("Ambient intensity", &atmosphere.ambientIntensity, 0.0f, 1.0f);
+        ImGui::Checkbox("Environment enabled", &atmosphere.environmentEnabled);
+        ImGui::ColorEdit3("Environment diffuse", &atmosphere.environmentDiffuseColor[0]);
+        ImGui::SliderFloat("Environment intensity", &atmosphere.environmentDiffuseIntensity, 0.0f, 4.0f);
+        ImGui::Separator();
+        ImGui::Text("Lights");
+        ImGui::Text("Live: %u", stats.liveLightCount);
+        ImGui::Text("Active: %u", stats.activeLightCount);
+        ImGui::Text("Submitted forward: %u / %u", stats.submittedForwardLightCount, Renderer::MaxForwardLights);
+        ImGui::Text("Disabled: %u", stats.disabledLightCount);
+        ImGui::Text("Over budget: %u", stats.overBudgetLightCount);
         ImGui::Separator();
         ImGui::Text("Mesh instances");
         ImGui::Text("Live: %u", stats.liveMeshInstances);
@@ -256,6 +273,13 @@ namespace Renderer::DebugUi {
         ImGui::Text("Submitted draw items: %u", stats.submittedMeshDrawItems);
         ImGui::Text("Batches: %u", stats.meshBatchCount);
         ImGui::Text("Largest batch: %u", stats.largestMeshBatchSize);
+        ImGui::Text("Opaque draws: %u / %u", stats.submittedOpaqueMeshDrawItems, stats.visibleOpaqueMeshDrawItems);
+        ImGui::Text("Alpha mask draws: %u / %u", stats.submittedAlphaMaskMeshDrawItems, stats.visibleAlphaMaskMeshDrawItems);
+        ImGui::Text("Alpha blend draws: %u / %u", stats.submittedAlphaBlendMeshDrawItems, stats.visibleAlphaBlendMeshDrawItems);
+        ImGui::Text("Pass batches O/M/B: %u / %u / %u",
+            stats.opaqueMeshBatchCount,
+            stats.alphaMaskMeshBatchCount,
+            stats.alphaBlendMeshBatchCount);
         ImGui::Separator();
         ImGui::Text("Terrain tiles");
         ImGui::Text("Live: %u", stats.liveTerrainTiles);

@@ -9,10 +9,12 @@
 #include <cstdio>
 #include <deque>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -24,6 +26,7 @@
 #include "Engine/ActorCommand.hpp"
 #include "Engine/ActorController.hpp"
 #include "Engine/ActorSelection.hpp"
+#include "Engine/AuthoredScene.hpp"
 #include "Engine/AsyncWorkQueue.hpp"
 #include "Engine/AssetCache.hpp"
 #include "Engine/Biome.hpp"
@@ -563,6 +566,511 @@ namespace {
         descriptor.metallicFactor = 0.0f;
         descriptor.roughnessFactor = 1.0f;
         return Renderer::createMaterial(descriptor);
+    }
+
+    bool pressedAction(const Engine::EventQueue& events, std::string_view actionName);
+    Renderer::DebugUi::CameraDebugStats makeCameraDebugStats(const Engine::OrbitCameraController& camera);
+
+    enum class AppSceneMode {
+        Procedural,
+        Authored,
+    };
+
+    struct AppSceneSelection {
+        AppSceneMode mode = BuildDebugToolsEnabled ? AppSceneMode::Procedural : AppSceneMode::Authored;
+        std::filesystem::path authoredPath = "assets/main_sponza/NewSponza_Main_glTF_003.gltf";
+    };
+
+    std::string_view sceneModeName(AppSceneMode mode)
+    {
+        return mode == AppSceneMode::Authored ? "Authored" : "Procedural";
+    }
+
+    AppSceneSelection parseSceneSelection(int argc, char** argv)
+    {
+        AppSceneSelection selection;
+        for (int index = 1; index < argc; ++index) {
+            const std::string_view argument = argv[index] ? std::string_view{argv[index]} : std::string_view{};
+            if (argument == "--scene" && index + 1 < argc) {
+                const std::string_view value = argv[++index] ? std::string_view{argv[index]} : std::string_view{};
+                if (value == "authored") {
+                    selection.mode = AppSceneMode::Authored;
+                } else if (value == "procedural") {
+                    selection.mode = AppSceneMode::Procedural;
+                } else {
+                    SDL_Log("Invalid --scene value '%.*s'; using %s.",
+                        static_cast<int>(value.size()),
+                        value.data(),
+                        sceneModeName(selection.mode).data());
+                }
+            } else if (argument == "--scene-path" && index + 1 < argc) {
+                selection.authoredPath = argv[++index];
+            } else if (argument == "--scene" || argument == "--scene-path") {
+                SDL_Log("Missing value for %.*s; using default scene selection.",
+                    static_cast<int>(argument.size()),
+                    argument.data());
+            }
+        }
+        return selection;
+    }
+
+    std::filesystem::path absolutePathWithoutThrow(const std::filesystem::path& path)
+    {
+        std::error_code error;
+        std::filesystem::path absolute = std::filesystem::absolute(path, error);
+        return error ? path : absolute;
+    }
+
+    std::filesystem::path normalizedPathForLookup(const std::filesystem::path& path)
+    {
+        std::error_code error;
+        std::filesystem::path normalized = std::filesystem::weakly_canonical(path, error);
+        return error ? absolutePathWithoutThrow(path) : normalized;
+    }
+
+    void appendUniquePathCandidate(
+        std::vector<std::filesystem::path>& candidates,
+        const std::filesystem::path& candidate)
+    {
+        if (candidate.empty()) {
+            return;
+        }
+
+        const std::filesystem::path normalized = normalizedPathForLookup(candidate);
+        if (std::find(candidates.begin(), candidates.end(), normalized) == candidates.end()) {
+            candidates.push_back(normalized);
+        }
+    }
+
+    void appendRelativePathSearch(
+        std::vector<std::filesystem::path>& candidates,
+        const std::filesystem::path& base,
+        const std::filesystem::path& relativePath)
+    {
+        if (base.empty() || relativePath.empty()) {
+            return;
+        }
+
+        std::filesystem::path cursor = absolutePathWithoutThrow(base);
+        for (int depth = 0; depth < 8 && !cursor.empty(); ++depth) {
+            appendUniquePathCandidate(candidates, cursor / relativePath);
+
+            const std::filesystem::path parent = cursor.parent_path();
+            if (parent == cursor) {
+                break;
+            }
+            cursor = parent;
+        }
+    }
+
+    std::filesystem::path executableBasePath()
+    {
+        const char* basePath = SDL_GetBasePath();
+        return basePath ? std::filesystem::path{basePath} : std::filesystem::path{};
+    }
+
+    std::filesystem::path resolveAuthoredScenePath(const std::filesystem::path& requestedPath)
+    {
+        if (requestedPath.empty() || requestedPath.is_absolute()) {
+            return requestedPath;
+        }
+
+        std::vector<std::filesystem::path> candidates;
+        appendUniquePathCandidate(candidates, requestedPath);
+
+        std::error_code error;
+        const std::filesystem::path currentPath = std::filesystem::current_path(error);
+        if (!error) {
+            appendRelativePathSearch(candidates, currentPath, requestedPath);
+        }
+        appendRelativePathSearch(candidates, executableBasePath(), requestedPath);
+
+        for (const std::filesystem::path& candidate : candidates) {
+            std::error_code existsError;
+            if (std::filesystem::exists(candidate, existsError) && !existsError) {
+                return candidate;
+            }
+        }
+
+        return candidates.empty() ? requestedPath : candidates.front();
+    }
+
+    struct AuthoredFallbackScene {
+        Renderer::StaticMeshHandle mesh;
+        Renderer::MeshInstanceHandle instance;
+
+        void shutdown()
+        {
+            Renderer::destroyInstance(instance);
+            Renderer::destroyStaticMesh(mesh);
+            instance = {};
+            mesh = {};
+        }
+    };
+
+    struct AuthoredRuntime {
+        Engine::AuthoredScene scene;
+        Engine::PartitionedAuthoredScene streamingScene;
+        AuthoredFallbackScene fallback;
+        bool usingFallback = false;
+        bool usingStreaming = false;
+        std::string status;
+        Renderer::Aabb bounds{{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}};
+
+        void shutdown()
+        {
+            streamingScene.shutdown();
+            scene.shutdown();
+            fallback.shutdown();
+        }
+    };
+
+    void logAuthoredDiagnostics(const Engine::AuthoredSceneDiagnostics& diagnostics)
+    {
+        const auto cacheStatusName = [](Engine::AuthoredSceneCacheStatus status) {
+            switch (status) {
+                case Engine::AuthoredSceneCacheStatus::Hit:
+                    return "hit";
+                case Engine::AuthoredSceneCacheStatus::Stale:
+                    return "stale";
+                case Engine::AuthoredSceneCacheStatus::Corrupt:
+                    return "corrupt";
+                case Engine::AuthoredSceneCacheStatus::WriteSuccess:
+                    return "write-success";
+                case Engine::AuthoredSceneCacheStatus::WriteFailed:
+                    return "write-failed";
+                case Engine::AuthoredSceneCacheStatus::Cancelled:
+                    return "cancelled";
+                case Engine::AuthoredSceneCacheStatus::Miss:
+                default:
+                    return "miss";
+            }
+        };
+        SDL_Log(
+            "Authored scene diagnostics: imported nodes=%u meshes=%u primitives=%u materials=%u textures=%u lights=%u; "
+            "created meshes=%u materials=%u instances=%u lights=%u; textures ok=%u failed=%u fallback=%u bytes=%llu; "
+            "sectors total=%u loaded=%u pendingLoad=%u pendingUnload=%u failed=%u sectorBytes=%llu; "
+            "cache=%s loadedFromCache=%s reads=%u writes=%u stale=%u corrupt=%u identity=%s path=%s message=%s.",
+            diagnostics.importedNodeCount,
+            diagnostics.importedMeshCount,
+            diagnostics.importedPrimitiveCount,
+            diagnostics.importedMaterialCount,
+            diagnostics.importedTextureCount,
+            diagnostics.importedLightCount,
+            diagnostics.createdMeshCount,
+            diagnostics.createdMaterialCount,
+            diagnostics.createdInstanceCount,
+            diagnostics.createdLightCount,
+            diagnostics.textureLoadSuccessCount,
+            diagnostics.textureLoadFailureCount,
+            diagnostics.fallbackTextureCount,
+            static_cast<unsigned long long>(diagnostics.textureEstimatedBytes),
+            diagnostics.totalSectorCount,
+            diagnostics.loadedSectorCount,
+            diagnostics.pendingLoadSectorCount,
+            diagnostics.pendingUnloadSectorCount,
+            diagnostics.failedSectorCount,
+            static_cast<unsigned long long>(diagnostics.sectorEstimatedBytes),
+            cacheStatusName(diagnostics.cacheStatus),
+            diagnostics.loadedFromCache ? "true" : "false",
+            diagnostics.cacheReadCount,
+            diagnostics.cacheWriteCount,
+            diagnostics.cacheStaleCount,
+            diagnostics.cacheCorruptCount,
+            diagnostics.cacheIdentityHash.c_str(),
+            diagnostics.cachePath.string().c_str(),
+            diagnostics.cacheMessage.c_str());
+        for (const std::string& warning : diagnostics.warnings) {
+            SDL_Log("Authored scene warning: %s", warning.c_str());
+        }
+    }
+
+    Renderer::Aabb authoredBoundsOrFallback(const Engine::AuthoredSceneBounds& bounds)
+    {
+        if (!bounds.valid) {
+            return {{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}};
+        }
+        return {bounds.min, bounds.max};
+    }
+
+    void frameCameraForBounds(Engine::OrbitCameraController& camera, const Renderer::Aabb& bounds)
+    {
+        const glm::vec3 center = (bounds.min + bounds.max) * 0.5f;
+        const glm::vec3 extents = glm::max(bounds.max - bounds.min, glm::vec3{2.0f});
+        const float radius = std::max(glm::length(extents) * 0.5f, 2.0f);
+        Engine::CameraSettings settings = camera.settings();
+        const float padding = std::max(radius * 0.5f, 10.0f);
+        settings.nearPlane = 0.05f;
+        settings.farPlane = std::max(radius * 8.0f, 500.0f);
+        settings.maxDistance = std::max(radius * 3.0f, 80.0f);
+        settings.minPivotXZ = {bounds.min.x - padding, bounds.min.z - padding};
+        settings.maxPivotXZ = {bounds.max.x + padding, bounds.max.z + padding};
+        settings.edgePanSpeed = std::max(radius * 0.35f, 20.0f);
+        settings.mousePanSensitivity = std::max(radius * 0.0015f, 0.08f);
+        settings.zoomSensitivity = std::max(radius * 0.08f, 8.0f);
+        camera.settings() = settings;
+
+        Engine::CameraState state;
+        state.mode = Engine::CameraMode::Free;
+        state.pivot = center;
+        state.yawRadians = glm::radians(35.0f);
+        state.pitchRadians = glm::radians(-28.0f);
+        state.distance = std::clamp(radius * 1.55f, settings.minDistance, settings.maxDistance);
+        camera.setState(state);
+    }
+
+    void applyAuthoredAtmosphereDefaults(Renderer::AtmosphereSettings& atmosphere)
+    {
+        atmosphere.skyColor = {0.08f, 0.09f, 0.11f, 1.0f};
+        atmosphere.fogColor = {0.16f, 0.17f, 0.18f, 1.0f};
+        atmosphere.fogEnabled = false;
+        atmosphere.sunDirection = {-0.35f, -0.75f, -0.25f};
+        atmosphere.sunColor = {1.0f, 0.95f, 0.86f};
+        atmosphere.sunIntensity = 2.0f;
+        atmosphere.exposure = 1.1f;
+        atmosphere.ambientIntensity = 0.12f;
+        atmosphere.environmentDiffuseColor = {0.85f, 0.9f, 1.0f};
+        atmosphere.environmentDiffuseIntensity = 1.0f;
+        atmosphere.environmentEnabled = true;
+    }
+
+    AuthoredRuntime loadAuthoredRuntime(
+        const std::filesystem::path& path,
+        Engine::AssetCache& assetCache)
+    {
+        AuthoredRuntime runtime;
+        const std::filesystem::path resolvedPath = resolveAuthoredScenePath(path);
+        if (std::filesystem::exists(resolvedPath)) {
+            Engine::AuthoredSceneStreamingSettings settings;
+            settings.load.loadTextures = true;
+            settings.cache.policy = Engine::AuthoredSceneCachePolicy::ReadOnly;
+            settings.partition.sectorSize = 25.0f;
+            settings.loadRadius = 45.0f;
+            settings.unloadRadius = 75.0f;
+            settings.maxSectorLoadCommitsPerFrame = 1;
+            settings.maxSectorUnloadCommitsPerFrame = 2;
+            settings.loadInitialSectorsImmediately = true;
+            Engine::PartitionedAuthoredSceneLoadResult result = Engine::loadPartitionedAuthoredScene(resolvedPath, assetCache, settings);
+            if (result.success) {
+                runtime.streamingScene = std::move(result.scene);
+                runtime.usingStreaming = true;
+                runtime.bounds = authoredBoundsOrFallback(runtime.streamingScene.bounds());
+                runtime.status = "Loaded streaming authored scene: " + resolvedPath.generic_string();
+                logAuthoredDiagnostics(runtime.streamingScene.diagnostics());
+                SDL_Log("%s", runtime.status.c_str());
+                return runtime;
+            }
+            SDL_Log("Failed to load authored scene '%s': %s", resolvedPath.string().c_str(), result.message.c_str());
+        } else {
+            std::error_code error;
+            const std::filesystem::path currentPath = std::filesystem::current_path(error);
+            SDL_Log("Authored scene file is missing: %s (resolved: %s, cwd: %s, base: %s)",
+                path.string().c_str(),
+                resolvedPath.string().c_str(),
+                error ? "<unavailable>" : currentPath.string().c_str(),
+                executableBasePath().string().c_str());
+        }
+
+        runtime.usingFallback = true;
+        runtime.fallback.mesh = Renderer::createTexturedCubeMesh();
+        runtime.fallback.instance = Renderer::createInstance(runtime.fallback.mesh);
+        runtime.bounds = {{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}};
+        runtime.status = "Authored scene unavailable; showing fallback cube for " + resolvedPath.generic_string();
+        SDL_Log("%s", runtime.status.c_str());
+        return runtime;
+    }
+
+    void shutdownSharedRuntime(
+        Engine::AssetCache& assetCache,
+        bool debugUiEnabled,
+        SDL_Window* window)
+    {
+        assetCache.shutdown();
+        if (debugUiEnabled) {
+            Renderer::DebugUi::shutdown();
+        }
+        Renderer::shutdownSceneRenderer();
+        bgfx::shutdown();
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+    }
+
+    int runAuthoredSceneMode(
+        SDL_Window* window,
+        bool debugUiEnabled,
+        Engine::AssetCache& assetCache,
+        Renderer::AtmosphereSettings& atmosphere,
+        const AppSceneSelection& sceneSelection)
+    {
+        applyAuthoredAtmosphereDefaults(atmosphere);
+        Renderer::setAtmosphereSettings(atmosphere);
+
+        AuthoredRuntime runtime = loadAuthoredRuntime(sceneSelection.authoredPath, assetCache);
+
+        Engine::CameraSettings cameraSettings;
+        cameraSettings.farPlane = 1000.0f;
+        cameraSettings.maxDistance = 500.0f;
+        cameraSettings.edgePanSpeed = 60.0f;
+        cameraSettings.mousePanSensitivity = 0.12f;
+        cameraSettings.zoomSensitivity = 24.0f;
+        Engine::OrbitCameraController camera(cameraSettings);
+        frameCameraForBounds(camera, runtime.bounds);
+
+        Engine::InputMappingLoadResult inputMappingLoad = Engine::InputMapping::loadFromYaml("assets/config/input.yaml");
+        if (!inputMappingLoad.success) {
+            SDL_Log("Using default input mapping: %s", inputMappingLoad.error.c_str());
+        }
+        Engine::InputMapping inputMapping = inputMappingLoad.mapping;
+        Engine::InputState input;
+        Engine::EventQueue events;
+        Renderer::DebugUi::RendererDebugSettings debugSettings;
+        debugSettings.sceneMode = runtime.usingFallback ? "Authored fallback" : "Authored";
+        debugSettings.sceneStatus = runtime.status;
+        debugSettings.propMaxDrawDistance = 0.0f;
+        Renderer::DebugDrawSettings debugDrawSettings;
+        Renderer::DebugUi::WorldSaveDebugControls worldSaveControls;
+        worldSaveControls.status = runtime.status;
+        Renderer::DebugUi::CameraDebugControls cameraDebugControls;
+        cameraDebugControls.followSmoothing = camera.followSettings().followSmoothing;
+        cameraDebugControls.maxFollowLag = camera.followSettings().maxFollowLag;
+
+        bool running = true;
+        bool debugUiWantsMouse = false;
+        bool debugUiWantsKeyboard = false;
+        auto previousFrameTime = std::chrono::steady_clock::now();
+        Engine::MainThreadWorkQueue authoredStreamingWork;
+        Engine::FrameBudget authoredStreamingBudget;
+        while (running) {
+            const auto frameStart = std::chrono::steady_clock::now();
+            const float dt = std::chrono::duration<float>(frameStart - previousFrameTime).count();
+            previousFrameTime = frameStart;
+            input.beginFrame();
+            events.clear();
+
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                if (debugUiEnabled) {
+                    Renderer::DebugUi::processEvent(event);
+                }
+                bool sendToGameInput = true;
+                switch (event.type) {
+                    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                    case SDL_EVENT_MOUSE_BUTTON_UP:
+                    case SDL_EVENT_MOUSE_MOTION:
+                    case SDL_EVENT_MOUSE_WHEEL:
+                        sendToGameInput = !debugUiWantsMouse;
+                        break;
+                    case SDL_EVENT_KEY_DOWN:
+                    case SDL_EVENT_KEY_UP:
+                    case SDL_EVENT_TEXT_INPUT:
+                        sendToGameInput = !debugUiWantsKeyboard;
+                        break;
+                    default:
+                        break;
+                }
+                if (sendToGameInput) {
+                    input.processEvent(event);
+                }
+                if (event.type == SDL_EVENT_QUIT) {
+                    running = false;
+                }
+            }
+
+            int width = 1280;
+            int height = 720;
+            SDL_GetWindowSize(window, &width, &height);
+            width = std::max(width, 1);
+            height = std::max(height, 1);
+            if (debugUiEnabled) {
+                Renderer::DebugUi::beginFrame(viewportExtent(width), viewportExtent(height));
+                debugUiWantsMouse = Renderer::DebugUi::wantsMouseCapture();
+                debugUiWantsKeyboard = Renderer::DebugUi::wantsKeyboardCapture();
+            }
+
+            inputMapping.publishEvents(input, events);
+            if (pressedAction(events, "app.quit")) {
+                running = false;
+            }
+            camera.followSettings().followSmoothing = cameraDebugControls.followSmoothing;
+            camera.followSettings().maxFollowLag = cameraDebugControls.maxFollowLag;
+            if (cameraDebugControls.setFreeModeRequested) {
+                cameraDebugControls.setFreeModeRequested = false;
+                camera.setMode(Engine::CameraMode::Free);
+            }
+            if (cameraDebugControls.recenterRequested) {
+                cameraDebugControls.recenterRequested = false;
+                frameCameraForBounds(camera, runtime.bounds);
+            }
+            camera.update(events, dt);
+            if (runtime.usingStreaming) {
+                runtime.streamingScene.updateStreaming(camera.position(), authoredStreamingWork);
+                authoredStreamingBudget.beginFrame({2.0f, true});
+                authoredStreamingWork.drain(authoredStreamingBudget);
+                const Engine::AuthoredSceneDiagnostics& diagnostics = runtime.streamingScene.diagnostics();
+                debugSettings.sceneStatus = runtime.status +
+                    " | sectors " + std::to_string(diagnostics.loadedSectorCount) +
+                    "/" + std::to_string(diagnostics.totalSectorCount) +
+                    " pending " + std::to_string(diagnostics.pendingLoadSectorCount + diagnostics.pendingUnloadSectorCount);
+            }
+
+            Renderer::setAtmosphereSettings(atmosphere);
+            if (BuildDebugToolsEnabled) {
+                Renderer::setDebugDrawSettings(debugDrawSettings);
+            }
+
+            bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, clearColorFromLinearRgba(atmosphere.skyColor), 1.0f, 0);
+            bgfx::setViewRect(0, 0, 0, viewportExtent(width), viewportExtent(height));
+            if (debugUiEnabled) {
+                const bgfx::ViewId viewOrder[] = {0, 1};
+                bgfx::setViewOrder(0, 2, viewOrder);
+            }
+
+            const float aspect = static_cast<float>(width) / static_cast<float>(height);
+            const Engine::CameraMatrices cameraMatrices = camera.matrices(aspect);
+            bgfx::setViewTransform(0, &cameraMatrices.view, &cameraMatrices.projection);
+            const Renderer::RenderView renderView{
+                0,
+                cameraMatrices.view,
+                cameraMatrices.projection,
+                cameraMatrices.projection * cameraMatrices.view,
+                camera.position(),
+                viewportExtent(width),
+                viewportExtent(height),
+                debugSettings.layerMask,
+                debugSettings.enableDistanceCulling,
+            };
+
+            const Renderer::SceneDrawStats drawStats = Renderer::drawScene(renderView);
+            if (BuildDebugToolsEnabled) {
+                Renderer::drawDebugPrimitives(renderView);
+            }
+            if (debugUiEnabled) {
+                Renderer::DebugUi::showRendererDebug(
+                    drawStats,
+                    debugSettings,
+                    atmosphere,
+                    debugDrawSettings,
+                    {},
+                    {},
+                    {},
+                    nullptr,
+                    makeCameraDebugStats(camera),
+                    &cameraDebugControls,
+                    {},
+                    {},
+                    {},
+                    &worldSaveControls,
+                    {});
+                Renderer::DebugUi::render(1, viewportExtent(width), viewportExtent(height));
+            }
+
+            bgfx::touch(0);
+            bgfx::frame();
+        }
+
+        runtime.shutdown();
+        shutdownSharedRuntime(assetCache, debugUiEnabled, window);
+        return 0;
     }
 
     const RuntimeObjectArchetypeVisual* findVisual(
@@ -1642,8 +2150,9 @@ namespace {
     }
 }
 
-int main(int, char**)
+int main(int argc, char** argv)
 {
+    const AppSceneSelection sceneSelection = parseSceneSelection(argc, argv);
     SDL_Window* window = nullptr;
     if (Renderer::initWindow(window) != 0) {
         return 1;
@@ -1678,6 +2187,10 @@ int main(int, char**)
     bgfx::setViewRect(0, 0, 0, viewportExtent(currentWidth), viewportExtent(currentHeight));
 
     Engine::AssetCache assetCache;
+    if (sceneSelection.mode == AppSceneMode::Authored) {
+        return runAuthoredSceneMode(window, debugUiEnabled, assetCache, atmosphere, sceneSelection);
+    }
+
     const Engine::CachedTexture yellowTexture = assetCache.acquireSolidTexture(220, 190, 70);
     const Engine::CachedTexture squadRedTexture = assetCache.acquireSolidTexture(220, 80, 80);
     const Engine::CachedTexture squadGreenTexture = assetCache.acquireSolidTexture(80, 200, 120);

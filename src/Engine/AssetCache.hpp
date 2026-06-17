@@ -28,6 +28,7 @@ namespace Engine {
         void release(CachedStaticMesh mesh);
 
         CachedTexture acquireTexture(const std::filesystem::path& path);
+        CachedTexture acquireTexture(const std::filesystem::path& path, const Renderer::TextureDescriptor& descriptor);
         CachedTexture acquireSolidTexture(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255);
         void release(CachedTexture texture);
 

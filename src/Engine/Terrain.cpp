@@ -384,8 +384,12 @@ namespace Engine {
                     1.0f,
                     0.0f,
                     0.0f,
+                    1.0f,
                     static_cast<float>(x) / static_cast<float>(resolution - 1),
                     static_cast<float>(z) / static_cast<float>(resolution - 1),
+                    static_cast<float>(x) / static_cast<float>(resolution - 1),
+                    static_cast<float>(z) / static_cast<float>(resolution - 1),
+                    0xffffffff,
                 });
             }
         }
