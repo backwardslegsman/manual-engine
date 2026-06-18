@@ -23,7 +23,11 @@ add_executable(manual_engine
     src/Engine/ActorCommand.cpp
     src/Engine/ActorController.cpp
     src/Engine/ActorSelection.cpp
+    src/Engine/AnimatedModel.cpp
+    src/Engine/AnimatedModelAsync.cpp
+    src/Engine/AnimatedModelCache.cpp
     src/Engine/AuthoredScene.cpp
+    src/Engine/AuthoredSceneAsync.cpp
     src/Engine/AsyncWorkQueue.cpp
     src/Engine/AssetCache.cpp
     src/Engine/Biome.cpp
@@ -147,8 +151,13 @@ add_executable(manual_engine_authored_scene_tests
     tests/authored_scene/AuthoredSceneTestRunner.cpp
     tests/authored_scene/RendererOwnershipStubs.cpp
     src/Assets/Assimp/Importer.cpp
+    src/Engine/AnimatedModel.cpp
+    src/Engine/AnimatedModelAsync.cpp
+    src/Engine/AnimatedModelCache.cpp
     src/Engine/AssetCache.cpp
     src/Engine/AuthoredScene.cpp
+    src/Engine/AuthoredSceneAsync.cpp
+    src/Engine/AsyncWorkQueue.cpp
     src/Engine/FrameBudget.cpp
 )
 
@@ -190,7 +199,12 @@ add_executable(manual_engine_authored_scene_smoke_tests
     tests/authored_scene/AuthoredSceneRendererSmoke.cpp
     src/Assets/Assimp/Importer.cpp
     src/Engine/AssetCache.cpp
+    src/Engine/AnimatedModel.cpp
+    src/Engine/AnimatedModelAsync.cpp
+    src/Engine/AnimatedModelCache.cpp
     src/Engine/AuthoredScene.cpp
+    src/Engine/AuthoredSceneAsync.cpp
+    src/Engine/AsyncWorkQueue.cpp
     src/Engine/FrameBudget.cpp
     src/Renderer/Scene.cpp
     src/Renderer/Texture.cpp
@@ -230,6 +244,7 @@ find_program(BGFX_SHADERC shaderc
 add_custom_command(
     OUTPUT
         "${SHADER_OUTPUT_DIR}/vs_mesh.bin"
+        "${SHADER_OUTPUT_DIR}/vs_skinned_mesh.bin"
         "${SHADER_OUTPUT_DIR}/fs_mesh.bin"
         "${SHADER_OUTPUT_DIR}/vs_imgui.bin"
         "${SHADER_OUTPUT_DIR}/fs_imgui.bin"
@@ -249,6 +264,15 @@ add_custom_command(
         -f "${SHADER_SOURCE_DIR}/fs_mesh.fs"
         -o "${SHADER_OUTPUT_DIR}/fs_mesh.bin"
         --type fragment
+        --platform windows
+        -p s_5_0
+        --varyingdef "${SHADER_SOURCE_DIR}/varying.def.sc"
+        -i "${SHADER_SOURCE_DIR}"
+        -i "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/bgfx"
+    COMMAND "${BGFX_SHADERC}"
+        -f "${SHADER_SOURCE_DIR}/vs_skinned_mesh.vs"
+        -o "${SHADER_OUTPUT_DIR}/vs_skinned_mesh.bin"
+        --type vertex
         --platform windows
         -p s_5_0
         --varyingdef "${SHADER_SOURCE_DIR}/varying.def.sc"
@@ -292,6 +316,7 @@ add_custom_command(
         -i "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/bgfx"
     DEPENDS
         "${SHADER_SOURCE_DIR}/vs_mesh.vs"
+        "${SHADER_SOURCE_DIR}/vs_skinned_mesh.vs"
         "${SHADER_SOURCE_DIR}/fs_mesh.fs"
         "${SHADER_SOURCE_DIR}/vs_imgui.vs"
         "${SHADER_SOURCE_DIR}/fs_imgui.fs"
@@ -304,6 +329,7 @@ add_custom_command(
 add_custom_target(manual_engine_shaders
     DEPENDS
         "${SHADER_OUTPUT_DIR}/vs_mesh.bin"
+        "${SHADER_OUTPUT_DIR}/vs_skinned_mesh.bin"
         "${SHADER_OUTPUT_DIR}/fs_mesh.bin"
         "${SHADER_OUTPUT_DIR}/vs_imgui.bin"
         "${SHADER_OUTPUT_DIR}/fs_imgui.bin"

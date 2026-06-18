@@ -211,6 +211,128 @@ namespace Renderer::DebugUi {
         if (!settings.sceneStatus.empty()) {
             ImGui::TextWrapped("%s", settings.sceneStatus.c_str());
         }
+        if (settings.hasAuthoredSceneDiagnostics) {
+            ImGui::Separator();
+            ImGui::Text("Authored Scene");
+            if (!settings.authoredScenePath.empty()) {
+                ImGui::TextWrapped("Path: %s", settings.authoredScenePath.c_str());
+            }
+            if (!settings.authoredSourceFormat.empty()) {
+                ImGui::Text("Source format: %s", settings.authoredSourceFormat.c_str());
+            }
+            ImGui::Text("Imported N/M/P/Mt/T/L: %u / %u / %u / %u / %u / %u",
+                settings.authoredImportedNodes,
+                settings.authoredImportedMeshes,
+                settings.authoredImportedPrimitives,
+                settings.authoredImportedMaterials,
+                settings.authoredImportedTextures,
+                settings.authoredImportedLights);
+            ImGui::Text("Created mesh/material/instance/light: %u / %u / %u / %u",
+                settings.authoredCreatedMeshes,
+                settings.authoredCreatedMaterials,
+                settings.authoredCreatedInstances,
+                settings.authoredCreatedLights);
+            ImGui::Text("Textures ok/failed/fallback: %u / %u / %u",
+                settings.authoredTextureLoaded,
+                settings.authoredTextureFailed,
+                settings.authoredTextureFallback);
+            ImGui::Text("Texture bytes: %llu", static_cast<unsigned long long>(settings.authoredTextureBytes));
+            ImGui::Text("Sectors loaded/pending/failed: %u/%u, %u, %u",
+                settings.authoredLoadedSectors,
+                settings.authoredTotalSectors,
+                settings.authoredPendingLoadSectors + settings.authoredPendingUnloadSectors,
+                settings.authoredFailedSectors);
+            ImGui::Text("Sector bytes: %llu", static_cast<unsigned long long>(settings.authoredSectorBytes));
+            ImGui::Text("Authored lights active/zero/over-budget: %u / %u / %u",
+                settings.authoredActiveLights,
+                settings.authoredDisabledZeroLights,
+                settings.authoredSkippedOverBudgetLights);
+            ImGui::Text("Cache: %s", settings.authoredCacheStatus.c_str());
+            if (!settings.authoredCacheMessage.empty()) {
+                ImGui::TextWrapped("Cache message: %s", settings.authoredCacheMessage.c_str());
+            }
+            ImGui::Text("Async: %s queued/completed/failed/pending %u/%u/%u/%u",
+                settings.authoredAsyncPhase.c_str(),
+                settings.authoredAsyncQueued,
+                settings.authoredAsyncCompleted,
+                settings.authoredAsyncFailed,
+                settings.authoredAsyncPending);
+            ImGui::Text("Async ms cache/import/write: %.3f / %.3f / %.3f",
+                settings.authoredCacheReadMs,
+                settings.authoredImportMs,
+                settings.authoredCacheWriteMs);
+            if (!settings.authoredAsyncMessage.empty()) {
+                ImGui::TextWrapped("Async message: %s", settings.authoredAsyncMessage.c_str());
+            }
+            ImGui::Text("Warnings: %u", settings.authoredWarnings);
+        }
+        if (settings.hasAnimationDiagnostics) {
+            ImGui::Separator();
+            ImGui::Text("Animation");
+            if (!settings.animationPath.empty()) {
+                ImGui::TextWrapped("Path: %s", settings.animationPath.c_str());
+            }
+            if (!settings.animationStatus.empty()) {
+                ImGui::TextWrapped("%s", settings.animationStatus.c_str());
+            }
+            ImGui::Text("Loaded: %s", settings.animationLoaded ? "yes" : "no");
+            ImGui::Text("Async: %s queued/completed/failed/pending %u/%u/%u/%u",
+                settings.animationAsyncPhase.c_str(),
+                settings.animationAsyncQueued,
+                settings.animationAsyncCompleted,
+                settings.animationAsyncFailed,
+                settings.animationAsyncPending);
+            ImGui::Text("Cache: %s identity %s",
+                settings.animationCacheStatus.c_str(),
+                settings.animationCacheIdentity.c_str());
+            if (!settings.animationCacheMessage.empty()) {
+                ImGui::TextWrapped("Cache message: %s", settings.animationCacheMessage.c_str());
+            }
+            ImGui::Text("Async ms cache/import/write: %.3f / %.3f / %.3f",
+                settings.animationCacheReadMs,
+                settings.animationImportMs,
+                settings.animationCacheWriteMs);
+            if (!settings.animationAsyncMessage.empty()) {
+                ImGui::TextWrapped("Async message: %s", settings.animationAsyncMessage.c_str());
+            }
+            ImGui::Checkbox("Animation enabled", &settings.animationEnabled);
+            ImGui::Checkbox("Animation playing", &settings.animationPlaying);
+            ImGui::Checkbox("Animation loop", &settings.animationLooping);
+            int clipIndex = static_cast<int>(settings.animationClipIndex);
+            const int maxClipIndex = settings.animationClipCount > 0
+                ? static_cast<int>(settings.animationClipCount - 1)
+                : 0;
+            if (ImGui::SliderInt("Animation clip", &clipIndex, 0, maxClipIndex)) {
+                settings.animationClipIndex = static_cast<uint32_t>(std::max(clipIndex, 0));
+                settings.animationTimeSeconds = 0.0f;
+            }
+            const float maxTime = std::max(settings.animationClipDurationSeconds, 0.001f);
+            ImGui::SliderFloat("Animation time", &settings.animationTimeSeconds, 0.0f, maxTime);
+            ImGui::SliderFloat("Animation speed", &settings.animationPlaybackSpeed, -3.0f, 3.0f);
+            ImGui::Text("Clips/joints/skinned instances: %u / %u / %u",
+                settings.animationClipCount,
+                settings.animationJointCount,
+                settings.animationSkinnedInstanceCount);
+            ImGui::Text("Created skinned meshes: %u", settings.animationCreatedSkinnedMeshCount);
+            ImGui::Text("Texture fallbacks: %u", settings.animationTextureFallbackCount);
+            ImGui::Text("Sampled/failed pose updates: %u / %u",
+                settings.animationSampledFrameCount,
+                settings.animationFailedPoseUpdateCount);
+            ImGui::Text("Warnings: %u", settings.animationWarningCount);
+            if (!settings.animationLastWarning.empty()) {
+                ImGui::TextWrapped("Last warning: %s", settings.animationLastWarning.c_str());
+            }
+            ImGui::Text("Clip duration: %.3fs", settings.animationClipDurationSeconds);
+            ImGui::Text("Crossfade: %s", settings.animationCrossfadeActive ? "active" : "inactive");
+            if (settings.animationCrossfadeActive) {
+                ImGui::Text("Target/elapsed/duration/weight: %u / %.3fs / %.3fs / %.2f",
+                    settings.animationCrossfadeTargetClipIndex,
+                    settings.animationCrossfadeElapsedSeconds,
+                    settings.animationCrossfadeDurationSeconds,
+                    settings.animationCrossfadeWeight);
+            }
+            ImGui::Text("Completed crossfades: %u", settings.animationCompletedCrossfadeCount);
+        }
         ImGui::Separator();
         layerCheckbox("Terrain", RenderLayer::Terrain);
         layerCheckbox("Props", RenderLayer::Props);
@@ -280,6 +402,19 @@ namespace Renderer::DebugUi {
             stats.opaqueMeshBatchCount,
             stats.alphaMaskMeshBatchCount,
             stats.alphaBlendMeshBatchCount);
+        ImGui::Separator();
+        ImGui::Text("Skinned mesh instances");
+        ImGui::Text("Live: %u", stats.liveSkinnedMeshInstances);
+        ImGui::Text("Visible: %u", stats.visibleSkinnedMeshInstances);
+        ImGui::Text("Submitted: %u", stats.submittedSkinnedMeshInstances);
+        ImGui::Text("Layer/flag culled: %u", stats.layerOrFlagCulledSkinnedMeshInstances);
+        ImGui::Text("Frustum culled: %u", stats.frustumCulledSkinnedMeshInstances);
+        ImGui::Text("Distance culled: %u", stats.distanceCulledSkinnedMeshInstances);
+        ImGui::Text("Visible draw items: %u", stats.visibleSkinnedMeshDrawItems);
+        ImGui::Text("Submitted draw items: %u", stats.submittedSkinnedMeshDrawItems);
+        ImGui::Text("Joint palettes submitted/truncated: %u / %u",
+            stats.submittedSkinnedJointPaletteCount,
+            stats.truncatedSkinnedJointPaletteCount);
         ImGui::Separator();
         ImGui::Text("Terrain tiles");
         ImGui::Text("Live: %u", stats.liveTerrainTiles);

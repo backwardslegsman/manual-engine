@@ -66,9 +66,27 @@ namespace {
 
     struct StaticMeshResource {
         bool alive = false;
+        std::string name;
         Renderer::Aabb localBounds;
         bool hasBounds = false;
         std::vector<SubmeshResource> submeshes;
+    };
+
+    struct SkinnedMeshResource {
+        bool alive = false;
+        std::string name;
+        Renderer::Aabb localBounds;
+        bool hasBounds = false;
+        std::vector<SubmeshResource> submeshes;
+        uint32_t vertexCount = 0;
+        uint32_t indexCount = 0;
+        uint32_t jointCount = 0;
+        uint32_t maxInfluenceCount = 0;
+        uint32_t truncatedInfluenceVertexCount = 0;
+        uint32_t zeroWeightVertexCount = 0;
+        uint32_t normalizedWeightVertexCount = 0;
+        uint32_t validMaterialReferenceCount = 0;
+        uint32_t invalidMaterialReferenceCount = 0;
     };
 
     struct MeshInstanceResource {
@@ -83,6 +101,17 @@ namespace {
         Renderer::MaterialHandle materialOverride;
         bool hasMaterialOverride = false;
         Renderer::RenderGroupHandle renderGroup;
+    };
+
+    struct SkinnedMeshInstanceResource {
+        bool alive = false;
+        Renderer::SkinnedMeshHandle mesh;
+        Renderer::RenderVisibility visibility;
+        glm::mat4 transform{1.0f};
+        Renderer::RenderGroupHandle renderGroup;
+        std::vector<glm::mat4> jointMatrices;
+        uint32_t submittedJointCount = 0;
+        uint32_t truncatedJointCount = 0;
     };
 
     struct TerrainTileResource {
@@ -101,11 +130,14 @@ namespace {
     std::vector<LightResource> g_lights;
     std::vector<MaterialResource> g_materials;
     std::vector<StaticMeshResource> g_meshes;
+    std::vector<SkinnedMeshResource> g_skinnedMeshes;
     std::vector<MeshInstanceResource> g_instances;
+    std::vector<SkinnedMeshInstanceResource> g_skinnedInstances;
     std::vector<TerrainTileResource> g_terrainTiles;
     std::vector<Renderer::PosColorVertex> g_debugLineVertices;
 
     bgfx::ProgramHandle g_meshProgram = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle g_skinnedMeshProgram = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle g_debugLineProgram = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle g_baseColorSampler = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle g_normalSampler = BGFX_INVALID_HANDLE;
@@ -131,6 +163,7 @@ namespace {
     bgfx::UniformHandle g_forwardLightSpotParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle g_fogColor = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle g_fogParams = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle g_jointPalette = BGFX_INVALID_HANDLE;
 
     Renderer::TextureHandle g_whiteTexture;
     Renderer::TextureHandle g_flatNormalTexture;
@@ -149,9 +182,19 @@ namespace {
         return handle.id < g_materials.size() && g_materials[handle.id].alive;
     }
 
+    bool isValidSkinnedMesh(Renderer::SkinnedMeshHandle handle)
+    {
+        return handle.id < g_skinnedMeshes.size() && g_skinnedMeshes[handle.id].alive;
+    }
+
     bool isValidMeshInstance(Renderer::MeshInstanceHandle handle)
     {
         return handle.id < g_instances.size() && g_instances[handle.id].alive;
+    }
+
+    bool isValidSkinnedMeshInstance(Renderer::SkinnedMeshInstanceHandle handle)
+    {
+        return handle.id < g_skinnedInstances.size() && g_skinnedInstances[handle.id].alive;
     }
 
     bool isValidTerrain(Renderer::TerrainHandle handle)
@@ -451,9 +494,25 @@ namespace {
         return {id};
     }
 
+    Renderer::SkinnedMeshHandle addSkinnedMesh(SkinnedMeshResource mesh)
+    {
+        mesh.alive = true;
+        for (uint32_t index = 0; index < g_skinnedMeshes.size(); ++index) {
+            if (!g_skinnedMeshes[index].alive) {
+                g_skinnedMeshes[index] = std::move(mesh);
+                return {index};
+            }
+        }
+
+        const uint32_t id = static_cast<uint32_t>(g_skinnedMeshes.size());
+        g_skinnedMeshes.push_back(std::move(mesh));
+        return {id};
+    }
+
     StaticMeshResource makeStaticMeshResource(const Renderer::StaticMeshDescriptor& descriptor)
     {
         StaticMeshResource mesh;
+        mesh.name = descriptor.name;
         mesh.submeshes.reserve(descriptor.submeshes.size());
         mesh.localBounds = emptyAabb();
 
@@ -484,6 +543,67 @@ namespace {
             submesh.material = isValidMaterial(sourceSubmesh.material) ? sourceSubmesh.material : Renderer::MaterialHandle{0};
 
             if (bgfx::isValid(submesh.vertexBuffer) && bgfx::isValid(submesh.indexBuffer)) {
+                mesh.submeshes.push_back(submesh);
+            } else {
+                if (bgfx::isValid(submesh.vertexBuffer)) {
+                    bgfx::destroy(submesh.vertexBuffer);
+                }
+                if (bgfx::isValid(submesh.indexBuffer)) {
+                    bgfx::destroy(submesh.indexBuffer);
+                }
+            }
+        }
+
+        return mesh;
+    }
+
+    SkinnedMeshResource makeSkinnedMeshResource(const Renderer::SkinnedMeshDescriptor& descriptor)
+    {
+        SkinnedMeshResource mesh;
+        mesh.name = descriptor.name;
+        mesh.submeshes.reserve(descriptor.submeshes.size());
+        mesh.localBounds = emptyAabb();
+        mesh.jointCount = descriptor.jointCount;
+        mesh.maxInfluenceCount = descriptor.maxInfluencesPerVertex;
+        mesh.truncatedInfluenceVertexCount = descriptor.truncatedInfluenceVertexCount;
+        mesh.zeroWeightVertexCount = descriptor.zeroWeightVertexCount;
+        mesh.normalizedWeightVertexCount = descriptor.normalizedWeightVertexCount;
+
+        for (const Renderer::SkinnedSubmeshDescriptor& sourceSubmesh : descriptor.submeshes) {
+            if (sourceSubmesh.vertices.empty() || sourceSubmesh.indices.empty()) {
+                continue;
+            }
+
+            for (const Renderer::SkinnedMeshVertex& vertex : sourceSubmesh.vertices) {
+                includePoint(mesh.localBounds, {vertex.px, vertex.py, vertex.pz});
+                mesh.hasBounds = true;
+            }
+
+            SubmeshResource submesh;
+            submesh.vertexBuffer = bgfx::createVertexBuffer(
+                bgfx::copy(
+                    sourceSubmesh.vertices.data(),
+                    static_cast<uint32_t>(sourceSubmesh.vertices.size() * sizeof(Renderer::SkinnedMeshVertex))),
+                Renderer::SkinnedMeshVertex::layout
+            );
+            submesh.indexBuffer = bgfx::createIndexBuffer(
+                bgfx::copy(
+                    sourceSubmesh.indices.data(),
+                    static_cast<uint32_t>(sourceSubmesh.indices.size() * sizeof(uint32_t))),
+                BGFX_BUFFER_INDEX32
+            );
+            submesh.indexCount = static_cast<uint32_t>(sourceSubmesh.indices.size());
+            if (isValidMaterial(sourceSubmesh.material)) {
+                submesh.material = sourceSubmesh.material;
+                ++mesh.validMaterialReferenceCount;
+            } else {
+                submesh.material = Renderer::MaterialHandle{0};
+                ++mesh.invalidMaterialReferenceCount;
+            }
+
+            if (bgfx::isValid(submesh.vertexBuffer) && bgfx::isValid(submesh.indexBuffer)) {
+                mesh.vertexCount += static_cast<uint32_t>(sourceSubmesh.vertices.size());
+                mesh.indexCount += static_cast<uint32_t>(sourceSubmesh.indices.size());
                 mesh.submeshes.push_back(submesh);
             } else {
                 if (bgfx::isValid(submesh.vertexBuffer)) {
@@ -605,6 +725,18 @@ namespace {
         float cameraDistanceSquared = 0.0f;
     };
 
+    struct VisibleSkinnedMeshDrawItem {
+        Renderer::SkinnedMeshInstanceHandle instance;
+        Renderer::SkinnedMeshHandle mesh;
+        uint32_t submeshIndex = 0;
+        Renderer::MaterialHandle material;
+        Renderer::RenderGroupHandle renderGroup;
+        glm::mat4 transform{1.0f};
+        Renderer::Aabb worldBounds;
+        Renderer::MaterialRenderPass pass = Renderer::MaterialRenderPass::Opaque;
+        float cameraDistanceSquared = 0.0f;
+    };
+
     void setMaterialAndSceneUniforms(
         const MaterialResource& material,
         const SceneUniforms& uniforms,
@@ -690,6 +822,13 @@ namespace {
             lhs.material.id == rhs.material.id;
     }
 
+    bool sameBatch(const VisibleSkinnedMeshDrawItem& lhs, const VisibleSkinnedMeshDrawItem& rhs)
+    {
+        return lhs.mesh.id == rhs.mesh.id &&
+            lhs.submeshIndex == rhs.submeshIndex &&
+            lhs.material.id == rhs.material.id;
+    }
+
     void sortDepthWritingDrawItems(std::vector<VisibleMeshDrawItem>& drawItems)
     {
         std::sort(
@@ -710,12 +849,46 @@ namespace {
         );
     }
 
+    void sortDepthWritingDrawItems(std::vector<VisibleSkinnedMeshDrawItem>& drawItems)
+    {
+        std::sort(
+            drawItems.begin(),
+            drawItems.end(),
+            [](const VisibleSkinnedMeshDrawItem& lhs, const VisibleSkinnedMeshDrawItem& rhs) {
+                if (lhs.mesh.id != rhs.mesh.id) {
+                    return lhs.mesh.id < rhs.mesh.id;
+                }
+                if (lhs.submeshIndex != rhs.submeshIndex) {
+                    return lhs.submeshIndex < rhs.submeshIndex;
+                }
+                if (lhs.material.id != rhs.material.id) {
+                    return lhs.material.id < rhs.material.id;
+                }
+                return lhs.instance.id < rhs.instance.id;
+            }
+        );
+    }
+
     void sortAlphaBlendDrawItems(std::vector<VisibleMeshDrawItem>& drawItems)
     {
         std::sort(
             drawItems.begin(),
             drawItems.end(),
             [](const VisibleMeshDrawItem& lhs, const VisibleMeshDrawItem& rhs) {
+                if (lhs.cameraDistanceSquared != rhs.cameraDistanceSquared) {
+                    return lhs.cameraDistanceSquared > rhs.cameraDistanceSquared;
+                }
+                return lhs.instance.id < rhs.instance.id;
+            }
+        );
+    }
+
+    void sortAlphaBlendDrawItems(std::vector<VisibleSkinnedMeshDrawItem>& drawItems)
+    {
+        std::sort(
+            drawItems.begin(),
+            drawItems.end(),
+            [](const VisibleSkinnedMeshDrawItem& lhs, const VisibleSkinnedMeshDrawItem& rhs) {
                 if (lhs.cameraDistanceSquared != rhs.cameraDistanceSquared) {
                     return lhs.cameraDistanceSquared > rhs.cameraDistanceSquared;
                 }
@@ -820,6 +993,75 @@ namespace {
         }
     }
 
+    void submitSkinnedMeshDrawItems(
+        const std::vector<VisibleSkinnedMeshDrawItem>& drawItems,
+        const SceneUniforms& sceneUniforms,
+        bgfx::ViewId viewId,
+        Renderer::SceneDrawStats& stats)
+    {
+        uint32_t currentBatchSize = 0;
+        VisibleSkinnedMeshDrawItem previousItem;
+        bool hasPreviousItem = false;
+
+        for (const VisibleSkinnedMeshDrawItem& item : drawItems) {
+            if (!isValidSkinnedMesh(item.mesh) ||
+                !isValidSkinnedMeshInstance(item.instance) ||
+                item.submeshIndex >= g_skinnedMeshes[item.mesh.id].submeshes.size() ||
+                !isValidMaterial(item.material)) {
+                continue;
+            }
+
+            if (!hasPreviousItem || !sameBatch(previousItem, item)) {
+                if (currentBatchSize > stats.largestMeshBatchSize) {
+                    stats.largestMeshBatchSize = currentBatchSize;
+                }
+                currentBatchSize = 0;
+                addBatchPassStats(stats, item.pass);
+                hasPreviousItem = true;
+            }
+            previousItem = item;
+            ++currentBatchSize;
+
+            const SubmeshResource& submesh = g_skinnedMeshes[item.mesh.id].submeshes[item.submeshIndex];
+            if (!bgfx::isValid(submesh.vertexBuffer) || !bgfx::isValid(submesh.indexBuffer)) {
+                continue;
+            }
+
+            SkinnedMeshInstanceResource& instance = g_skinnedInstances[item.instance.id];
+            const uint32_t submittedJointCount = std::min(
+                static_cast<uint32_t>(instance.jointMatrices.size()),
+                Renderer::MaxSkinnedJointsPerMesh);
+            instance.submittedJointCount = submittedJointCount;
+            instance.truncatedJointCount = instance.jointMatrices.size() > Renderer::MaxSkinnedJointsPerMesh
+                ? static_cast<uint32_t>(instance.jointMatrices.size() - Renderer::MaxSkinnedJointsPerMesh)
+                : 0;
+
+            std::array<glm::mat4, Renderer::MaxSkinnedJointsPerMesh> jointPalette;
+            jointPalette.fill(glm::mat4{1.0f});
+            for (uint32_t jointIndex = 0; jointIndex < submittedJointCount; ++jointIndex) {
+                jointPalette[jointIndex] = instance.jointMatrices[jointIndex];
+            }
+
+            const MaterialResource& material = g_materials[item.material.id];
+            bgfx::setTransform(&item.transform[0][0]);
+            setMaterialAndSceneUniforms(material, sceneUniforms, item.pass);
+            bgfx::setUniform(g_jointPalette, jointPalette.data(), Renderer::MaxSkinnedJointsPerMesh);
+            bgfx::setVertexBuffer(0, submesh.vertexBuffer);
+            bgfx::setIndexBuffer(submesh.indexBuffer, 0, submesh.indexCount);
+            bgfx::setState(renderStateFor(material, item.pass));
+            bgfx::submit(viewId, g_skinnedMeshProgram);
+            ++stats.submittedMeshDrawItems;
+            ++stats.submittedSkinnedMeshDrawItems;
+            stats.submittedSkinnedJointPaletteCount += submittedJointCount;
+            stats.truncatedSkinnedJointPaletteCount += instance.truncatedJointCount;
+            addSubmittedPassStats(stats, item.pass);
+        }
+
+        if (currentBatchSize > stats.largestMeshBatchSize) {
+            stats.largestMeshBatchSize = currentBatchSize;
+        }
+    }
+
     void pushDebugVertex(const glm::vec3& position, uint32_t abgr)
     {
 #if MANUAL_ENGINE_ENABLE_DEBUG_TOOLS
@@ -851,6 +1093,23 @@ namespace Renderer {
 
         g_meshProgram = bgfx::createProgram(vsh, fsh, true);
         if (!bgfx::isValid(g_meshProgram)) {
+            return false;
+        }
+
+        bgfx::ShaderHandle skinnedVsh = loadShader("vs_skinned_mesh.bin");
+        bgfx::ShaderHandle skinnedFsh = loadShader("fs_mesh.bin");
+        if (!bgfx::isValid(skinnedVsh) || !bgfx::isValid(skinnedFsh)) {
+            if (bgfx::isValid(skinnedVsh)) {
+                bgfx::destroy(skinnedVsh);
+            }
+            if (bgfx::isValid(skinnedFsh)) {
+                bgfx::destroy(skinnedFsh);
+            }
+            return false;
+        }
+
+        g_skinnedMeshProgram = bgfx::createProgram(skinnedVsh, skinnedFsh, true);
+        if (!bgfx::isValid(g_skinnedMeshProgram)) {
             return false;
         }
 
@@ -908,6 +1167,10 @@ namespace Renderer {
             MaxForwardLights);
         g_fogColor = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
         g_fogParams = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
+        g_jointPalette = bgfx::createUniform(
+            "u_jointPalette",
+            bgfx::UniformType::Mat4,
+            MaxSkinnedJointsPerMesh);
 
         MaterialResource defaultMaterial;
         defaultMaterial.name = "default";
@@ -948,6 +1211,17 @@ namespace Renderer {
         }
 
         for (StaticMeshResource& mesh : g_meshes) {
+            if (!mesh.alive) {
+                continue;
+            }
+            for (SubmeshResource& submesh : mesh.submeshes) {
+                if (submesh.material.id == material.id) {
+                    submesh.material = MaterialHandle{0};
+                }
+            }
+        }
+
+        for (SkinnedMeshResource& mesh : g_skinnedMeshes) {
             if (!mesh.alive) {
                 continue;
             }
@@ -1133,8 +1407,26 @@ namespace Renderer {
             }
         }
         g_meshes.clear();
+        for (SkinnedMeshResource& mesh : g_skinnedMeshes) {
+            if (!mesh.alive) {
+                continue;
+            }
+
+            for (SubmeshResource& submesh : mesh.submeshes) {
+                if (bgfx::isValid(submesh.vertexBuffer)) {
+                    bgfx::destroy(submesh.vertexBuffer);
+                    submesh.vertexBuffer = BGFX_INVALID_HANDLE;
+                }
+                if (bgfx::isValid(submesh.indexBuffer)) {
+                    bgfx::destroy(submesh.indexBuffer);
+                    submesh.indexBuffer = BGFX_INVALID_HANDLE;
+                }
+            }
+        }
+        g_skinnedMeshes.clear();
         g_materials.clear();
         g_instances.clear();
+        g_skinnedInstances.clear();
         g_lights.clear();
         g_renderGroups.clear();
 
@@ -1176,6 +1468,7 @@ namespace Renderer {
             g_forwardLightSpotParams,
             g_fogColor,
             g_fogParams,
+            g_jointPalette,
         };
         for (bgfx::UniformHandle uniform : uniforms) {
             if (bgfx::isValid(uniform)) {
@@ -1186,6 +1479,10 @@ namespace Renderer {
         if (bgfx::isValid(g_meshProgram)) {
             bgfx::destroy(g_meshProgram);
             g_meshProgram = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(g_skinnedMeshProgram)) {
+            bgfx::destroy(g_skinnedMeshProgram);
+            g_skinnedMeshProgram = BGFX_INVALID_HANDLE;
         }
         if (bgfx::isValid(g_debugLineProgram)) {
             bgfx::destroy(g_debugLineProgram);
@@ -1275,6 +1572,16 @@ namespace Renderer {
         return addMesh(std::move(mesh));
     }
 
+    SkinnedMeshHandle createSkinnedMesh(const SkinnedMeshDescriptor& descriptor)
+    {
+        SkinnedMeshResource mesh = makeSkinnedMeshResource(descriptor);
+        if (mesh.submeshes.empty()) {
+            return {};
+        }
+
+        return addSkinnedMesh(std::move(mesh));
+    }
+
     StaticMeshHandle createTexturedCubeMesh()
     {
         const MeshVertex vertices[] = {
@@ -1332,6 +1639,154 @@ namespace Renderer {
             }
         }
         resource = {};
+    }
+
+    void destroySkinnedMesh(SkinnedMeshHandle mesh)
+    {
+        if (!isValidSkinnedMesh(mesh)) {
+            return;
+        }
+
+        for (SkinnedMeshInstanceResource& instance : g_skinnedInstances) {
+            if (instance.alive && instance.mesh.id == mesh.id) {
+                instance = {};
+            }
+        }
+
+        SkinnedMeshResource& resource = g_skinnedMeshes[mesh.id];
+        for (SubmeshResource& submesh : resource.submeshes) {
+            if (bgfx::isValid(submesh.vertexBuffer)) {
+                bgfx::destroy(submesh.vertexBuffer);
+            }
+            if (bgfx::isValid(submesh.indexBuffer)) {
+                bgfx::destroy(submesh.indexBuffer);
+            }
+        }
+        resource = {};
+    }
+
+    SkinnedMeshDiagnostics skinnedMeshDiagnostics(SkinnedMeshHandle mesh)
+    {
+        SkinnedMeshDiagnostics diagnostics;
+        if (!isValidSkinnedMesh(mesh)) {
+            return diagnostics;
+        }
+
+        const SkinnedMeshResource& resource = g_skinnedMeshes[mesh.id];
+        diagnostics.valid = true;
+        diagnostics.name = resource.name;
+        diagnostics.submeshCount = static_cast<uint32_t>(resource.submeshes.size());
+        diagnostics.vertexCount = resource.vertexCount;
+        diagnostics.indexCount = resource.indexCount;
+        diagnostics.jointCount = resource.jointCount;
+        diagnostics.maxInfluenceCount = resource.maxInfluenceCount;
+        diagnostics.truncatedInfluenceVertexCount = resource.truncatedInfluenceVertexCount;
+        diagnostics.zeroWeightVertexCount = resource.zeroWeightVertexCount;
+        diagnostics.normalizedWeightVertexCount = resource.normalizedWeightVertexCount;
+        diagnostics.validMaterialReferenceCount = resource.validMaterialReferenceCount;
+        diagnostics.invalidMaterialReferenceCount = resource.invalidMaterialReferenceCount;
+        return diagnostics;
+    }
+
+    SkinnedMeshInstanceHandle createSkinnedInstance(SkinnedMeshHandle mesh)
+    {
+        if (!isValidSkinnedMesh(mesh)) {
+            return {};
+        }
+
+        for (uint32_t index = 0; index < g_skinnedInstances.size(); ++index) {
+            if (!g_skinnedInstances[index].alive) {
+                g_skinnedInstances[index] = {};
+                g_skinnedInstances[index].alive = true;
+                g_skinnedInstances[index].mesh = mesh;
+                g_skinnedInstances[index].visibility = {RenderLayer::Props, VisibilityFlags::Visible, 0.0f};
+                return {index};
+            }
+        }
+
+        const uint32_t index = static_cast<uint32_t>(g_skinnedInstances.size());
+        SkinnedMeshInstanceResource instance;
+        instance.alive = true;
+        instance.mesh = mesh;
+        instance.visibility = {RenderLayer::Props, VisibilityFlags::Visible, 0.0f};
+        g_skinnedInstances.push_back(std::move(instance));
+        return {index};
+    }
+
+    void destroySkinnedInstance(SkinnedMeshInstanceHandle instance)
+    {
+        if (isValidSkinnedMeshInstance(instance)) {
+            g_skinnedInstances[instance.id] = {};
+        }
+    }
+
+    void setSkinnedInstanceTransform(SkinnedMeshInstanceHandle instance, const glm::mat4& transform)
+    {
+        if (isValidSkinnedMeshInstance(instance)) {
+            g_skinnedInstances[instance.id].transform = transform;
+        }
+    }
+
+    void setSkinnedInstanceRenderLayer(SkinnedMeshInstanceHandle instance, RenderLayer layer)
+    {
+        if (isValidSkinnedMeshInstance(instance)) {
+            g_skinnedInstances[instance.id].visibility.layer = layer;
+        }
+    }
+
+    void setSkinnedInstanceMaxDrawDistance(SkinnedMeshInstanceHandle instance, float maxDrawDistance)
+    {
+        if (isValidSkinnedMeshInstance(instance)) {
+            g_skinnedInstances[instance.id].visibility.maxDrawDistance = std::max(maxDrawDistance, 0.0f);
+        }
+    }
+
+    void setSkinnedInstanceRenderGroup(SkinnedMeshInstanceHandle instance, RenderGroupHandle group)
+    {
+        if (isValidSkinnedMeshInstance(instance) && isValidRenderGroup(group)) {
+            g_skinnedInstances[instance.id].renderGroup = group;
+        }
+    }
+
+    void clearSkinnedInstanceRenderGroup(SkinnedMeshInstanceHandle instance)
+    {
+        if (isValidSkinnedMeshInstance(instance)) {
+            g_skinnedInstances[instance.id].renderGroup = {};
+        }
+    }
+
+    void setSkinnedInstanceJointMatrices(SkinnedMeshInstanceHandle instance, std::span<const glm::mat4> matrices)
+    {
+        if (!isValidSkinnedMeshInstance(instance)) {
+            return;
+        }
+
+        SkinnedMeshInstanceResource& resource = g_skinnedInstances[instance.id];
+        resource.jointMatrices.assign(matrices.begin(), matrices.end());
+        resource.submittedJointCount = std::min(
+            static_cast<uint32_t>(resource.jointMatrices.size()),
+            MaxSkinnedJointsPerMesh);
+        resource.truncatedJointCount = resource.jointMatrices.size() > MaxSkinnedJointsPerMesh
+            ? static_cast<uint32_t>(resource.jointMatrices.size() - MaxSkinnedJointsPerMesh)
+            : 0;
+    }
+
+    SkinnedInstanceDiagnostics skinnedInstanceDiagnostics(SkinnedMeshInstanceHandle instance)
+    {
+        SkinnedInstanceDiagnostics diagnostics;
+        if (!isValidSkinnedMeshInstance(instance)) {
+            return diagnostics;
+        }
+
+        const SkinnedMeshInstanceResource& resource = g_skinnedInstances[instance.id];
+        diagnostics.valid = true;
+        diagnostics.mesh = resource.mesh;
+        diagnostics.visibility = resource.visibility;
+        diagnostics.renderGroup = resource.renderGroup;
+        diagnostics.submittedJointCount = resource.submittedJointCount;
+        diagnostics.truncatedJointCount = resource.truncatedJointCount;
+        diagnostics.boundsValid = isValidSkinnedMesh(resource.mesh) && g_skinnedMeshes[resource.mesh.id].hasBounds;
+        return diagnostics;
     }
 
     MeshInstanceHandle createInstance(StaticMeshHandle mesh)
@@ -1641,6 +2096,9 @@ namespace Renderer {
         std::vector<VisibleMeshDrawItem> opaqueMeshDrawItems;
         std::vector<VisibleMeshDrawItem> alphaMaskMeshDrawItems;
         std::vector<VisibleMeshDrawItem> alphaBlendMeshDrawItems;
+        std::vector<VisibleSkinnedMeshDrawItem> opaqueSkinnedMeshDrawItems;
+        std::vector<VisibleSkinnedMeshDrawItem> alphaMaskSkinnedMeshDrawItems;
+        std::vector<VisibleSkinnedMeshDrawItem> alphaBlendSkinnedMeshDrawItems;
 
         for (const TerrainTileResource& terrain : g_terrainTiles) {
             if (!terrain.alive ||
@@ -1796,13 +2254,113 @@ namespace Renderer {
             }
         }
 
+        for (const SkinnedMeshInstanceResource& instance : g_skinnedInstances) {
+            if (!instance.alive || !isValidSkinnedMesh(instance.mesh)) {
+                continue;
+            }
+            ++stats.liveSkinnedMeshInstances;
+            Renderer::RenderGroupDrawStats* groupStats = findGroupStats(stats, instance.renderGroup);
+            if (groupStats) {
+                ++groupStats->liveSkinnedMeshInstances;
+            }
+            if (!passesLayerAndFlags(instance.visibility, view.layerMask)) {
+                ++stats.layerOrFlagCulledSkinnedMeshInstances;
+                if (groupStats) {
+                    ++groupStats->layerOrFlagCulledSkinnedMeshInstances;
+                }
+                continue;
+            }
+
+            const SkinnedMeshResource& mesh = g_skinnedMeshes[instance.mesh.id];
+            const Aabb worldBounds = mesh.hasBounds ? transformAabb(mesh.localBounds, instance.transform) : Aabb{};
+            if (mesh.hasBounds && !intersects(frustum, worldBounds)) {
+                ++stats.frustumCulledSkinnedMeshInstances;
+                if (groupStats) {
+                    ++groupStats->frustumCulledSkinnedMeshInstances;
+                }
+                continue;
+            }
+            if (mesh.hasBounds && exceedsMaxDrawDistance(
+                instance.visibility,
+                worldBounds,
+                view.cameraPosition,
+                view.enableDistanceCulling)) {
+                ++stats.distanceCulledSkinnedMeshInstances;
+                if (groupStats) {
+                    ++groupStats->distanceCulledSkinnedMeshInstances;
+                }
+                continue;
+            }
+            ++stats.visibleSkinnedMeshInstances;
+            if (groupStats) {
+                ++groupStats->visibleSkinnedMeshInstances;
+            }
+
+            bool submittedInstance = false;
+            for (uint32_t submeshIndex = 0; submeshIndex < mesh.submeshes.size(); ++submeshIndex) {
+                const SubmeshResource& submesh = mesh.submeshes[submeshIndex];
+                if (!bgfx::isValid(submesh.vertexBuffer) ||
+                    !bgfx::isValid(submesh.indexBuffer) ||
+                    !isValidMaterial(submesh.material)) {
+                    continue;
+                }
+
+                const MaterialHandle materialHandle = submesh.material;
+                const MaterialResource& material = g_materials[materialHandle.id];
+                const MaterialRenderPass pass = renderPassFor(material.alphaMode);
+                const glm::vec3 sortCenter = mesh.hasBounds ? centerOf(worldBounds) : glm::vec3{instance.transform[3]};
+                const float cameraDistanceSquared = glm::dot(sortCenter - view.cameraPosition, sortCenter - view.cameraPosition);
+                VisibleSkinnedMeshDrawItem item{
+                    SkinnedMeshInstanceHandle{static_cast<uint32_t>(&instance - g_skinnedInstances.data())},
+                    instance.mesh,
+                    submeshIndex,
+                    materialHandle,
+                    instance.renderGroup,
+                    instance.transform,
+                    worldBounds,
+                    pass,
+                    cameraDistanceSquared,
+                };
+                switch (pass) {
+                    case MaterialRenderPass::AlphaMask:
+                        alphaMaskSkinnedMeshDrawItems.push_back(item);
+                        break;
+                    case MaterialRenderPass::AlphaBlend:
+                        alphaBlendSkinnedMeshDrawItems.push_back(item);
+                        break;
+                    case MaterialRenderPass::Opaque:
+                    default:
+                        opaqueSkinnedMeshDrawItems.push_back(item);
+                        break;
+                }
+                submittedInstance = true;
+            }
+
+            if (submittedInstance) {
+                ++stats.submittedSkinnedMeshInstances;
+                if (groupStats) {
+                    ++groupStats->submittedSkinnedMeshInstances;
+                }
+            }
+        }
+
         sortDepthWritingDrawItems(opaqueMeshDrawItems);
         sortDepthWritingDrawItems(alphaMaskMeshDrawItems);
         sortAlphaBlendDrawItems(alphaBlendMeshDrawItems);
+        sortDepthWritingDrawItems(opaqueSkinnedMeshDrawItems);
+        sortDepthWritingDrawItems(alphaMaskSkinnedMeshDrawItems);
+        sortAlphaBlendDrawItems(alphaBlendSkinnedMeshDrawItems);
 
         addVisiblePassStats(stats, MaterialRenderPass::Opaque, static_cast<uint32_t>(opaqueMeshDrawItems.size()));
         addVisiblePassStats(stats, MaterialRenderPass::AlphaMask, static_cast<uint32_t>(alphaMaskMeshDrawItems.size()));
         addVisiblePassStats(stats, MaterialRenderPass::AlphaBlend, static_cast<uint32_t>(alphaBlendMeshDrawItems.size()));
+        addVisiblePassStats(stats, MaterialRenderPass::Opaque, static_cast<uint32_t>(opaqueSkinnedMeshDrawItems.size()));
+        addVisiblePassStats(stats, MaterialRenderPass::AlphaMask, static_cast<uint32_t>(alphaMaskSkinnedMeshDrawItems.size()));
+        addVisiblePassStats(stats, MaterialRenderPass::AlphaBlend, static_cast<uint32_t>(alphaBlendSkinnedMeshDrawItems.size()));
+        stats.visibleSkinnedMeshDrawItems = static_cast<uint32_t>(
+            opaqueSkinnedMeshDrawItems.size() +
+            alphaMaskSkinnedMeshDrawItems.size() +
+            alphaBlendSkinnedMeshDrawItems.size());
         stats.visibleMeshDrawItems = stats.visibleOpaqueMeshDrawItems +
             stats.visibleAlphaMaskMeshDrawItems +
             stats.visibleAlphaBlendMeshDrawItems;
@@ -1810,6 +2368,9 @@ namespace Renderer {
         submitMeshDrawItems(opaqueMeshDrawItems, sceneUniforms, view.viewId, stats);
         submitMeshDrawItems(alphaMaskMeshDrawItems, sceneUniforms, view.viewId, stats);
         submitMeshDrawItems(alphaBlendMeshDrawItems, sceneUniforms, view.viewId, stats);
+        submitSkinnedMeshDrawItems(opaqueSkinnedMeshDrawItems, sceneUniforms, view.viewId, stats);
+        submitSkinnedMeshDrawItems(alphaMaskSkinnedMeshDrawItems, sceneUniforms, view.viewId, stats);
+        submitSkinnedMeshDrawItems(alphaBlendSkinnedMeshDrawItems, sceneUniforms, view.viewId, stats);
 
         return stats;
     }

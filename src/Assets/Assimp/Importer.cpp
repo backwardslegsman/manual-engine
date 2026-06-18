@@ -1,8 +1,11 @@
 #include "Assets/Assimp/Importer.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <string>
@@ -18,6 +21,21 @@
 
 namespace {
     constexpr uint32_t InvalidIndex = UINT32_MAX;
+
+    std::string lowercaseExtension(const std::filesystem::path& path)
+    {
+        std::string extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+        return extension;
+    }
+
+    bool isGltfLike(Assets::Assimp::ImportedSceneSourceFormat format)
+    {
+        return format == Assets::Assimp::ImportedSceneSourceFormat::Gltf ||
+            format == Assets::Assimp::ImportedSceneSourceFormat::Glb;
+    }
 
     std::filesystem::path readTexturePath(const aiMaterial& material, aiTextureType type)
     {
@@ -223,6 +241,19 @@ namespace {
         return Assets::Assimp::ImportedSceneTextureSemantic::Unknown;
     }
 
+    std::filesystem::path firstTexturePath(
+        const aiMaterial& material,
+        std::initializer_list<aiTextureType> types)
+    {
+        for (aiTextureType type : types) {
+            std::filesystem::path path = readTexturePath(material, type);
+            if (!path.empty()) {
+                return path;
+            }
+        }
+        return {};
+    }
+
     void addTextureRecord(
         Assets::Assimp::ImportedScene& result,
         uint32_t materialIndex,
@@ -262,6 +293,18 @@ namespace {
             return;
         }
 
+        const auto duplicate = std::find_if(
+            result.textures.begin(),
+            result.textures.end(),
+            [&](const Assets::Assimp::ImportedSceneTexture& existing) {
+                return existing.materialIndex == materialIndex &&
+                    existing.semantic == semantic &&
+                    existing.path == path;
+            });
+        if (duplicate != result.textures.end()) {
+            return;
+        }
+
         Assets::Assimp::ImportedSceneTexture texture;
         texture.path = path;
         texture.semantic = semanticForType(type) == Assets::Assimp::ImportedSceneTextureSemantic::Unknown
@@ -297,7 +340,10 @@ namespace {
         result.textures.push_back(std::move(texture));
     }
 
-    Assets::Assimp::ImportedSceneMaterial importSceneMaterial(const aiMaterial& aiMat)
+    Assets::Assimp::ImportedSceneMaterial importSceneMaterial(
+        const aiMaterial& aiMat,
+        Assets::Assimp::ImportedSceneSourceFormat sourceFormat,
+        Assets::Assimp::ImportedSceneDiagnostics& diagnostics)
     {
         Assets::Assimp::ImportedSceneMaterial material;
 
@@ -326,14 +372,20 @@ namespace {
             material.normalTexture = readTexturePath(aiMat, aiTextureType_NORMAL_CAMERA);
             material.normalTextureHints = readTextureHints(aiMat, aiTextureType_NORMAL_CAMERA, Assets::Assimp::ImportedSceneTextureColorSpace::Linear);
         }
+        if (sourceFormat == Assets::Assimp::ImportedSceneSourceFormat::Fbx && material.normalTexture.empty()) {
+            material.normalTexture = firstTexturePath(aiMat, {aiTextureType_HEIGHT, aiTextureType_DISPLACEMENT});
+            material.normalTextureHints = readTextureHints(aiMat, aiTextureType_HEIGHT, Assets::Assimp::ImportedSceneTextureColorSpace::Linear);
+        }
         material.normalScale = readFloatProperty(aiMat, "$mat.gltf.normalTexture.scale", 0, 0, 1.0f);
         material.metallicTexture = readTexturePath(aiMat, aiTextureType_METALNESS);
         material.metallicTextureHints = readTextureHints(aiMat, aiTextureType_METALNESS, Assets::Assimp::ImportedSceneTextureColorSpace::Linear);
         material.roughnessTexture = readTexturePath(aiMat, aiTextureType_DIFFUSE_ROUGHNESS);
         material.roughnessTextureHints = readTextureHints(aiMat, aiTextureType_DIFFUSE_ROUGHNESS, Assets::Assimp::ImportedSceneTextureColorSpace::Linear);
-        material.metallicRoughnessTexture = readTexturePath(aiMat, aiTextureType_UNKNOWN);
-        material.metallicRoughnessTextureHints = readTextureHints(aiMat, aiTextureType_UNKNOWN, Assets::Assimp::ImportedSceneTextureColorSpace::Linear);
-        if (material.metallicRoughnessTexture.empty() && !material.metallicTexture.empty() &&
+        if (isGltfLike(sourceFormat)) {
+            material.metallicRoughnessTexture = readTexturePath(aiMat, aiTextureType_UNKNOWN);
+            material.metallicRoughnessTextureHints = readTextureHints(aiMat, aiTextureType_UNKNOWN, Assets::Assimp::ImportedSceneTextureColorSpace::Linear);
+        }
+        if (isGltfLike(sourceFormat) && material.metallicRoughnessTexture.empty() && !material.metallicTexture.empty() &&
             material.metallicTexture == material.roughnessTexture) {
             material.metallicRoughnessTexture = material.metallicTexture;
             material.metallicRoughnessTextureHints = material.metallicTextureHints;
@@ -357,6 +409,18 @@ namespace {
         material.alphaMode = readAlphaMode(aiMat, opacity);
         material.alphaCutoff = readFloatProperty(aiMat, "$mat.gltf.alphaCutoff", 0, 0, 0.5f);
         material.doubleSided = readBoolProperty(aiMat, AI_MATKEY_TWOSIDED, false);
+
+        if (sourceFormat == Assets::Assimp::ImportedSceneSourceFormat::Fbx) {
+            material.metallicFactor = readFloatProperty(aiMat, AI_MATKEY_METALLIC_FACTOR, 0.0f);
+            material.roughnessFactor = readFloatProperty(aiMat, AI_MATKEY_ROUGHNESS_FACTOR, 1.0f);
+            const bool missingPbr =
+                material.metallicTexture.empty() &&
+                material.roughnessTexture.empty() &&
+                material.metallicRoughnessTexture.empty();
+            if (missingPbr) {
+                ++diagnostics.missingPbrMaterialCount;
+            }
+        }
 
         return material;
     }
@@ -502,6 +566,293 @@ namespace {
         }
     }
 
+    void addUnique(std::vector<uint32_t>& values, uint32_t value)
+    {
+        if (std::find(values.begin(), values.end(), value) == values.end()) {
+            values.push_back(value);
+        }
+    }
+
+    std::vector<uint32_t> nodesReferencingMesh(
+        const Assets::Assimp::ImportedScene& result,
+        uint32_t meshIndex)
+    {
+        std::vector<uint32_t> nodes;
+        for (uint32_t nodeIndex = 0; nodeIndex < result.nodes.size(); ++nodeIndex) {
+            const std::vector<uint32_t>& meshIndices = result.nodes[nodeIndex].meshIndices;
+            if (std::find(meshIndices.begin(), meshIndices.end(), meshIndex) != meshIndices.end()) {
+                nodes.push_back(nodeIndex);
+            }
+        }
+        return nodes;
+    }
+
+    uint32_t findJointParent(
+        uint32_t nodeIndex,
+        const Assets::Assimp::ImportedScene& result,
+        const std::unordered_map<uint32_t, uint32_t>& jointByNode)
+    {
+        uint32_t parentNode = result.nodes[nodeIndex].parentIndex;
+        while (parentNode != InvalidIndex && parentNode < result.nodes.size()) {
+            if (const auto joint = jointByNode.find(parentNode); joint != jointByNode.end()) {
+                return joint->second;
+            }
+            parentNode = result.nodes[parentNode].parentIndex;
+        }
+        return InvalidIndex;
+    }
+
+    uint32_t findSkeletonRoot(
+        const Assets::Assimp::ImportedScene& result,
+        const std::vector<uint32_t>& jointIndices)
+    {
+        for (uint32_t jointIndex : jointIndices) {
+            if (jointIndex >= result.joints.size() || !result.joints[jointIndex].nodeIndex) {
+                continue;
+            }
+            const uint32_t nodeIndex = *result.joints[jointIndex].nodeIndex;
+            const uint32_t parentNode = result.nodes[nodeIndex].parentIndex;
+            bool parentIsJoint = false;
+            for (uint32_t otherJointIndex : jointIndices) {
+                if (otherJointIndex < result.joints.size() &&
+                    result.joints[otherJointIndex].nodeIndex &&
+                    *result.joints[otherJointIndex].nodeIndex == parentNode) {
+                    parentIsJoint = true;
+                    break;
+                }
+            }
+            if (!parentIsJoint) {
+                return nodeIndex;
+            }
+        }
+        return InvalidIndex;
+    }
+
+    void importSkinsAndVertexInfluences(
+        const aiScene& scene,
+        Assets::Assimp::ImportedScene& result,
+        const std::unordered_map<std::string, uint32_t>& nodeByName)
+    {
+        std::unordered_map<std::string, uint32_t> jointByName;
+        std::unordered_map<uint32_t, uint32_t> jointByNode;
+
+        const auto getOrCreateJoint = [&](const aiBone& bone) -> uint32_t {
+            const std::string name = bone.mName.C_Str();
+            if (const auto found = jointByName.find(name); found != jointByName.end()) {
+                const uint32_t jointIndex = found->second;
+                Assets::Assimp::ImportedSceneJoint& joint = result.joints[jointIndex];
+                joint.inverseBindMatrix = toGlm(bone.mOffsetMatrix);
+                joint.hasInverseBindMatrix = true;
+                return jointIndex;
+            }
+
+            Assets::Assimp::ImportedSceneJoint joint;
+            joint.name = name;
+            joint.inverseBindMatrix = toGlm(bone.mOffsetMatrix);
+            joint.hasInverseBindMatrix = true;
+            if (const auto node = nodeByName.find(name); node != nodeByName.end()) {
+                joint.nodeIndex = node->second;
+                joint.localBindTransform = result.nodes[node->second].localTransform;
+                joint.worldBindTransform = result.nodes[node->second].worldTransform;
+            } else {
+                result.diagnostics.warnings.push_back("Imported skin joint did not resolve to a scene node: " + name);
+            }
+
+            const uint32_t jointIndex = static_cast<uint32_t>(result.joints.size());
+            result.joints.push_back(std::move(joint));
+            jointByName[name] = jointIndex;
+            if (result.joints[jointIndex].nodeIndex) {
+                jointByNode[*result.joints[jointIndex].nodeIndex] = jointIndex;
+            }
+            return jointIndex;
+        };
+
+        for (unsigned int meshIndex = 0; meshIndex < scene.mNumMeshes; ++meshIndex) {
+            const aiMesh* aiMesh = scene.mMeshes[meshIndex];
+            if (!aiMesh || !aiMesh->HasBones() || meshIndex >= result.meshes.size()) {
+                continue;
+            }
+            if (result.meshes[meshIndex].primitives.empty()) {
+                result.diagnostics.warnings.push_back("Skinned mesh had no imported primitive to receive joint weights.");
+                continue;
+            }
+
+            ++result.diagnostics.skinnedMeshCount;
+            Assets::Assimp::ImportedSceneSkin skin;
+            skin.name = std::string{aiMesh->mName.C_Str()} + ".skin";
+            skin.meshIndices.push_back(meshIndex);
+            skin.nodeIndices = nodesReferencingMesh(result, meshIndex);
+            skin.jointIndices.reserve(aiMesh->mNumBones);
+
+            for (unsigned int boneIndex = 0; boneIndex < aiMesh->mNumBones; ++boneIndex) {
+                const aiBone* aiBone = aiMesh->mBones[boneIndex];
+                if (!aiBone) {
+                    result.diagnostics.warnings.push_back("Encountered null bone while importing skinned mesh.");
+                    continue;
+                }
+
+                const uint32_t jointIndex = getOrCreateJoint(*aiBone);
+                addUnique(skin.jointIndices, jointIndex);
+                if (result.joints[jointIndex].hasInverseBindMatrix) {
+                    ++skin.inverseBindMatrixCount;
+                }
+
+                for (unsigned int weightIndex = 0; weightIndex < aiBone->mNumWeights; ++weightIndex) {
+                    const aiVertexWeight& weight = aiBone->mWeights[weightIndex];
+                    if (weight.mVertexId >= result.meshes[meshIndex].primitives.front().vertices.size()) {
+                        result.diagnostics.warnings.push_back("Bone weight referenced a vertex outside the imported mesh.");
+                        continue;
+                    }
+                    Assets::Assimp::ImportedSceneVertexInfluence influence;
+                    influence.jointIndex = jointIndex;
+                    influence.weight = weight.mWeight;
+                    result.meshes[meshIndex].primitives.front().vertices[weight.mVertexId].influences.push_back(influence);
+                }
+            }
+
+            const uint32_t skeletonRoot = findSkeletonRoot(result, skin.jointIndices);
+            if (skeletonRoot != InvalidIndex) {
+                skin.skeletonRootNodeIndex = skeletonRoot;
+            }
+            result.skins.push_back(std::move(skin));
+        }
+
+        for (uint32_t jointIndex = 0; jointIndex < result.joints.size(); ++jointIndex) {
+            Assets::Assimp::ImportedSceneJoint& joint = result.joints[jointIndex];
+            if (joint.nodeIndex) {
+                joint.parentJointIndex = findJointParent(*joint.nodeIndex, result, jointByNode);
+            }
+        }
+
+        for (Assets::Assimp::ImportedSceneMesh& mesh : result.meshes) {
+            for (Assets::Assimp::ImportedScenePrimitive& primitive : mesh.primitives) {
+                for (Assets::Assimp::ImportedSceneVertex& vertex : primitive.vertices) {
+                    std::sort(vertex.influences.begin(), vertex.influences.end(), [](const auto& lhs, const auto& rhs) {
+                        return lhs.weight > rhs.weight;
+                    });
+                    const uint32_t influenceCount = static_cast<uint32_t>(vertex.influences.size());
+                    result.diagnostics.maxInfluencesPerVertex = std::max(result.diagnostics.maxInfluencesPerVertex, influenceCount);
+                    if (influenceCount == 0) {
+                        if (!result.skins.empty()) {
+                            ++result.diagnostics.zeroWeightVertexCount;
+                        }
+                        continue;
+                    }
+                    ++result.diagnostics.influencedVertexCount;
+                    if (influenceCount > 4) {
+                        ++result.diagnostics.overFourInfluenceVertexCount;
+                    }
+                    float weightSum = 0.0f;
+                    for (const Assets::Assimp::ImportedSceneVertexInfluence& influence : vertex.influences) {
+                        weightSum += influence.weight;
+                    }
+                    if (std::abs(weightSum - 1.0f) > 0.01f) {
+                        ++result.diagnostics.nonNormalizedWeightVertexCount;
+                    }
+                }
+            }
+        }
+
+        if (result.diagnostics.overFourInfluenceVertexCount > 0) {
+            result.diagnostics.warnings.push_back("One or more vertices have more than four joint influences; renderer packing is deferred.");
+        }
+        if (result.diagnostics.nonNormalizedWeightVertexCount > 0) {
+            result.diagnostics.warnings.push_back("One or more skinned vertices have non-normalized joint weights.");
+        }
+        if (result.diagnostics.zeroWeightVertexCount > 0) {
+            result.diagnostics.warnings.push_back("One or more vertices in a skinned scene have no joint weights.");
+        }
+        result.diagnostics.skinCount = static_cast<uint32_t>(result.skins.size());
+        result.diagnostics.jointCount = static_cast<uint32_t>(result.joints.size());
+    }
+
+    void importAnimations(
+        const aiScene& scene,
+        Assets::Assimp::ImportedScene& result,
+        const std::unordered_map<std::string, uint32_t>& nodeByName)
+    {
+        result.animations.reserve(scene.mNumAnimations);
+        for (unsigned int animationIndex = 0; animationIndex < scene.mNumAnimations; ++animationIndex) {
+            const aiAnimation* aiAnimation = scene.mAnimations[animationIndex];
+            if (!aiAnimation) {
+                result.diagnostics.warnings.push_back("Encountered null animation record.");
+                continue;
+            }
+
+            const double ticksPerSecond = aiAnimation->mTicksPerSecond > 0.0 ? aiAnimation->mTicksPerSecond : 1.0;
+            Assets::Assimp::ImportedSceneAnimationClip clip;
+            clip.name = aiAnimation->mName.length > 0
+                ? aiAnimation->mName.C_Str()
+                : "animation." + std::to_string(animationIndex);
+            if (aiAnimation->mName.length == 0 && result.sourceFormat == Assets::Assimp::ImportedSceneSourceFormat::Fbx) {
+                ++result.diagnostics.fbxUnnamedAnimationStackCount;
+            }
+            clip.ticksPerSecond = ticksPerSecond;
+            clip.durationSeconds = static_cast<float>(aiAnimation->mDuration / ticksPerSecond);
+            clip.channels.reserve(aiAnimation->mNumChannels);
+
+            for (unsigned int channelIndex = 0; channelIndex < aiAnimation->mNumChannels; ++channelIndex) {
+                const aiNodeAnim* aiChannel = aiAnimation->mChannels[channelIndex];
+                if (!aiChannel) {
+                    result.diagnostics.warnings.push_back("Encountered null animation channel.");
+                    continue;
+                }
+
+                Assets::Assimp::ImportedSceneAnimationChannel channel;
+                channel.targetName = aiChannel->mNodeName.C_Str();
+                if (const auto node = nodeByName.find(channel.targetName); node != nodeByName.end()) {
+                    channel.targetNodeIndex = node->second;
+                } else {
+                    ++result.diagnostics.missingAnimationTargetCount;
+                    result.diagnostics.warnings.push_back("Animation channel target did not resolve to a scene node: " + channel.targetName);
+                }
+
+                channel.translationKeys.reserve(aiChannel->mNumPositionKeys);
+                for (unsigned int keyIndex = 0; keyIndex < aiChannel->mNumPositionKeys; ++keyIndex) {
+                    const aiVectorKey& key = aiChannel->mPositionKeys[keyIndex];
+                    channel.translationKeys.push_back({
+                        static_cast<float>(key.mTime / ticksPerSecond),
+                        toGlm(key.mValue),
+                        Assets::Assimp::ImportedSceneAnimationInterpolation::Linear,
+                    });
+                }
+
+                channel.rotationKeys.reserve(aiChannel->mNumRotationKeys);
+                for (unsigned int keyIndex = 0; keyIndex < aiChannel->mNumRotationKeys; ++keyIndex) {
+                    const aiQuatKey& key = aiChannel->mRotationKeys[keyIndex];
+                    channel.rotationKeys.push_back({
+                        static_cast<float>(key.mTime / ticksPerSecond),
+                        glm::normalize(glm::quat{key.mValue.w, key.mValue.x, key.mValue.y, key.mValue.z}),
+                        Assets::Assimp::ImportedSceneAnimationInterpolation::Linear,
+                    });
+                }
+
+                channel.scaleKeys.reserve(aiChannel->mNumScalingKeys);
+                for (unsigned int keyIndex = 0; keyIndex < aiChannel->mNumScalingKeys; ++keyIndex) {
+                    const aiVectorKey& key = aiChannel->mScalingKeys[keyIndex];
+                    channel.scaleKeys.push_back({
+                        static_cast<float>(key.mTime / ticksPerSecond),
+                        toGlm(key.mValue),
+                        Assets::Assimp::ImportedSceneAnimationInterpolation::Linear,
+                    });
+                }
+
+                result.diagnostics.translationKeyCount += static_cast<uint32_t>(channel.translationKeys.size());
+                result.diagnostics.rotationKeyCount += static_cast<uint32_t>(channel.rotationKeys.size());
+                result.diagnostics.scaleKeyCount += static_cast<uint32_t>(channel.scaleKeys.size());
+                clip.channels.push_back(std::move(channel));
+                ++result.diagnostics.animationChannelCount;
+            }
+
+            result.animations.push_back(std::move(clip));
+        }
+
+        result.diagnostics.animationCount = static_cast<uint32_t>(result.animations.size());
+        if (result.sourceFormat == Assets::Assimp::ImportedSceneSourceFormat::Fbx) {
+            result.diagnostics.fbxAnimationStackCount = result.diagnostics.animationCount;
+        }
+    }
+
     bool isIdentity(const glm::mat4& matrix)
     {
         const glm::mat4 identity{1.0f};
@@ -524,6 +875,36 @@ namespace {
 }
 
 namespace Assets::Assimp {
+    ImportedSceneSourceFormat detectSceneSourceFormat(const std::filesystem::path& path)
+    {
+        const std::string extension = lowercaseExtension(path);
+        if (extension == ".gltf") {
+            return ImportedSceneSourceFormat::Gltf;
+        }
+        if (extension == ".glb") {
+            return ImportedSceneSourceFormat::Glb;
+        }
+        if (extension == ".fbx") {
+            return ImportedSceneSourceFormat::Fbx;
+        }
+        return ImportedSceneSourceFormat::Unknown;
+    }
+
+    const char* sourceFormatName(ImportedSceneSourceFormat format)
+    {
+        switch (format) {
+            case ImportedSceneSourceFormat::Gltf:
+                return "gltf";
+            case ImportedSceneSourceFormat::Glb:
+                return "glb";
+            case ImportedSceneSourceFormat::Fbx:
+                return "fbx";
+            case ImportedSceneSourceFormat::Unknown:
+            default:
+                return "unknown";
+        }
+    }
+
     ImportResult importStaticMesh(const std::filesystem::path& path)
     {
         ::Assimp::Importer importer;
@@ -648,6 +1029,7 @@ namespace Assets::Assimp {
 
     ImportedScene importScene(const std::filesystem::path& path)
     {
+        const ImportedSceneSourceFormat sourceFormat = detectSceneSourceFormat(path);
         ::Assimp::Importer importer;
         const aiScene* scene = importer.ReadFile(
             path.string(),
@@ -660,16 +1042,44 @@ namespace Assets::Assimp {
         );
 
         if (!scene) {
-            return {false, importer.GetErrorString()};
+            ImportedScene failed;
+            failed.success = false;
+            failed.error = importer.GetErrorString();
+            failed.sourceFormat = sourceFormat;
+            failed.diagnostics.sourceFormat = sourceFormat;
+            return failed;
         }
 
         ImportedScene result;
         result.success = true;
+        result.sourceFormat = sourceFormat;
+        result.diagnostics.sourceFormat = sourceFormat;
         result.bounds = emptyBounds();
-        result.diagnostics.unsupportedAnimationCount = scene->mNumAnimations;
-        if (scene->mNumAnimations > 0) {
-            result.diagnostics.warnings.push_back("Animated scene data is not supported by the authored static scene importer.");
+        result.diagnostics.embeddedTextureCount = scene->mNumTextures;
+        if (scene->mMetaData) {
+            int upAxis = result.diagnostics.fbxUpAxis;
+            int upAxisSign = result.diagnostics.fbxUpAxisSign;
+            float unitScaleFactor = result.diagnostics.fbxUnitScaleFactor;
+            if (scene->mMetaData->Get("UpAxis", upAxis)) {
+                result.diagnostics.fbxUpAxis = upAxis;
+            }
+            if (scene->mMetaData->Get("UpAxisSign", upAxisSign)) {
+                result.diagnostics.fbxUpAxisSign = upAxisSign;
+            }
+            if (scene->mMetaData->Get("UnitScaleFactor", unitScaleFactor)) {
+                result.diagnostics.fbxUnitScaleFactor = unitScaleFactor;
+            }
         }
+        if (sourceFormat == ImportedSceneSourceFormat::Fbx) {
+            result.diagnostics.warnings.push_back(
+                "FBX authored scene import preserves static and exposed skeletal data, but full FBX animation semantics are best-effort.");
+            ++result.diagnostics.fbxAnimationSemanticWarningCount;
+            if (scene->mNumTextures > 0) {
+                result.diagnostics.warnings.push_back(
+                    "FBX embedded textures are recorded as diagnostics but are not extracted by the runtime texture loader.");
+            }
+        }
+        result.diagnostics.unsupportedAnimationCount = scene->mNumAnimations;
 
         std::unordered_set<uint32_t> usedMaterialIndices;
         std::vector<uint32_t> materialIndexRemap(scene->mNumMaterials, 0);
@@ -695,7 +1105,7 @@ namespace Assets::Assimp {
                 continue;
             }
 
-            result.materials.push_back(importSceneMaterial(*aiMat));
+            result.materials.push_back(importSceneMaterial(*aiMat, sourceFormat, result.diagnostics));
             ImportedSceneMaterial& material = result.materials.back();
             if (material.alphaMode != ImportedSceneAlphaMode::Opaque) {
                 ++result.diagnostics.alphaMaterialCount;
@@ -704,11 +1114,20 @@ namespace Assets::Assimp {
                 ++result.diagnostics.doubleSidedMaterialCount;
             }
             addTextureRecord(result, importedMaterialIndex, aiTextureType_BASE_COLOR, ImportedSceneTextureSemantic::BaseColor);
+            addTextureRecord(result, importedMaterialIndex, aiTextureType_DIFFUSE, ImportedSceneTextureSemantic::BaseColor);
             addTextureRecord(result, importedMaterialIndex, aiTextureType_NORMALS, ImportedSceneTextureSemantic::Normal);
+            addTextureRecord(result, importedMaterialIndex, aiTextureType_NORMAL_CAMERA, ImportedSceneTextureSemantic::Normal);
+            if (sourceFormat == ImportedSceneSourceFormat::Fbx) {
+                addTextureRecord(result, importedMaterialIndex, aiTextureType_HEIGHT, ImportedSceneTextureSemantic::Normal);
+                addTextureRecord(result, importedMaterialIndex, aiTextureType_DISPLACEMENT, ImportedSceneTextureSemantic::Normal);
+            }
             addTextureRecord(result, importedMaterialIndex, aiTextureType_METALNESS, ImportedSceneTextureSemantic::Metallic);
             addTextureRecord(result, importedMaterialIndex, aiTextureType_DIFFUSE_ROUGHNESS, ImportedSceneTextureSemantic::Roughness);
-            addTextureRecord(result, importedMaterialIndex, aiTextureType_UNKNOWN, ImportedSceneTextureSemantic::MetallicRoughness, true);
+            if (isGltfLike(sourceFormat)) {
+                addTextureRecord(result, importedMaterialIndex, aiTextureType_UNKNOWN, ImportedSceneTextureSemantic::MetallicRoughness, true);
+            }
             addTextureRecord(result, importedMaterialIndex, aiTextureType_AMBIENT_OCCLUSION, ImportedSceneTextureSemantic::Occlusion);
+            addTextureRecord(result, importedMaterialIndex, aiTextureType_LIGHTMAP, ImportedSceneTextureSemantic::Occlusion);
             addTextureRecord(result, importedMaterialIndex, aiTextureType_EMISSIVE, ImportedSceneTextureSemantic::Emissive);
         }
 
@@ -727,7 +1146,6 @@ namespace Assets::Assimp {
 
             if (aiMesh->HasBones()) {
                 ++result.diagnostics.unsupportedSkinnedMeshCount;
-                result.diagnostics.warnings.push_back("Skinned mesh data is not supported by the authored static scene importer.");
             }
 
             ImportedSceneMesh mesh;
@@ -764,6 +1182,24 @@ namespace Assets::Assimp {
             result.diagnostics.warnings.push_back("Imported scene has no root node.");
         }
 
+        importSkinsAndVertexInfluences(*scene, result, nodeByName);
+        importAnimations(*scene, result, nodeByName);
+        if (sourceFormat == ImportedSceneSourceFormat::Fbx && !result.animations.empty()) {
+            result.diagnostics.warnings.push_back(
+                "FBX animation stacks were imported from Assimp node channels; constraints, layers, and pre/post rotations are not represented explicitly.");
+            ++result.diagnostics.fbxAnimationSemanticWarningCount;
+            if (result.diagnostics.fbxUnnamedAnimationStackCount > 0) {
+                result.diagnostics.warnings.push_back("One or more FBX animation stacks had no source name and were assigned generated names.");
+            }
+            if (result.diagnostics.missingAnimationTargetCount > 0) {
+                result.diagnostics.warnings.push_back("One or more FBX animation channels target nodes that Assimp did not expose in the scene graph.");
+            }
+        }
+        if (!result.skins.empty() || !result.animations.empty()) {
+            result.diagnostics.warnings.push_back(
+                "Imported skeletal or animation data is CPU-only in this phase and requires the future animated model runtime.");
+        }
+
         result.lights.reserve(scene->mNumLights);
         for (unsigned int lightIndex = 0; lightIndex < scene->mNumLights; ++lightIndex) {
             const aiLight* aiLight = scene->mLights[lightIndex];
@@ -794,13 +1230,16 @@ namespace Assets::Assimp {
         result.diagnostics.textureCount = static_cast<uint32_t>(result.textures.size());
         result.diagnostics.lightCount = static_cast<uint32_t>(result.lights.size());
 
-        if (result.diagnostics.unsupportedSkinnedMeshCount > 0) {
-            result.success = false;
-            result.error = "Skinned meshes are not supported by the authored static scene importer.";
+        if (sourceFormat == ImportedSceneSourceFormat::Fbx && result.diagnostics.missingPbrMaterialCount > 0) {
+            result.diagnostics.warnings.push_back(
+                "One or more FBX materials did not expose PBR metallic/roughness data; default dielectric material values were used.");
         }
-        if (result.meshes.empty()) {
+        if (result.meshes.empty() && result.skins.empty() && result.animations.empty()) {
             result.success = false;
             result.error = "No static triangle meshes were found in the authored scene.";
+        } else if (result.meshes.empty()) {
+            result.diagnostics.warnings.push_back(
+                "Imported animated scene has no renderable triangle meshes; CPU skeleton/clip data was preserved only.");
         }
 
         return result;

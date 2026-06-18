@@ -1,4 +1,6 @@
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <utility>
 #include <vector>
@@ -9,8 +11,10 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "Engine/AssetCache.hpp"
+#include "Engine/AnimatedModel.hpp"
 #include "Engine/AuthoredScene.hpp"
 #include "Renderer/Scene.hpp"
+#include "Renderer/Texture.hpp"
 #include "Renderer/VertexLayouts.hpp"
 #include "Renderer/core.hpp"
 
@@ -23,6 +27,21 @@ namespace {
         }
 
         const std::filesystem::path buildRelative = "../../tests/assets/fixtures/authored_scene_fixture.gltf";
+        if (std::filesystem::exists(buildRelative)) {
+            return buildRelative;
+        }
+
+        return sourceRelative;
+    }
+
+    std::filesystem::path skinnedFixturePath()
+    {
+        const std::filesystem::path sourceRelative = "tests/assets/fixtures/skinned_animation_fixture.gltf";
+        if (std::filesystem::exists(sourceRelative)) {
+            return sourceRelative;
+        }
+
+        const std::filesystem::path buildRelative = "../../tests/assets/fixtures/skinned_animation_fixture.gltf";
         if (std::filesystem::exists(buildRelative)) {
             return buildRelative;
         }
@@ -78,6 +97,23 @@ namespace {
         descriptor.submeshes.push_back(std::move(submesh));
         return Renderer::createStaticMesh(descriptor);
     }
+
+    std::filesystem::path authoredReportPath(std::string_view filename)
+    {
+        const std::filesystem::path directory = "generated/authored_scene_reports";
+        std::filesystem::create_directories(directory);
+        return directory / filename;
+    }
+
+    template <typename Function>
+    auto measureMilliseconds(Function&& function, float& milliseconds)
+    {
+        const auto start = std::chrono::steady_clock::now();
+        auto result = function();
+        const auto end = std::chrono::steady_clock::now();
+        milliseconds = std::chrono::duration<float, std::milli>(end - start).count();
+        return result;
+    }
 }
 
 int main()
@@ -106,7 +142,10 @@ int main()
     settings.partition.sectorSize = 25.0f;
     settings.initialCameraPosition = {10.0f, 2.0f, 0.0f};
     settings.loadRadius = 50.0f;
-    Engine::PartitionedAuthoredSceneLoadResult load = Engine::loadPartitionedAuthoredScene(fixturePath(), assetCache, settings);
+    float loadMs = 0.0f;
+    Engine::PartitionedAuthoredSceneLoadResult load = measureMilliseconds([&]() {
+        return Engine::loadPartitionedAuthoredScene(fixturePath(), assetCache, settings);
+    }, loadMs);
     if (!load.success) {
         std::cerr << "Partitioned authored scene load failed: " << load.message << '\n';
         Renderer::shutdownSceneRenderer();
@@ -114,6 +153,30 @@ int main()
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
+    }
+
+    Engine::AnimatedModelLoadSettings animatedSettings;
+    animatedSettings.loadTextures = false;
+    animatedSettings.createBindPoseInstances = false;
+    animatedSettings.createSkinnedInstances = true;
+    animatedSettings.renderLayer = Renderer::RenderLayer::Props;
+    Engine::AnimatedModelLoadResult animatedLoad = Engine::loadAnimatedModel(
+        skinnedFixturePath(),
+        assetCache,
+        animatedSettings);
+    if (!animatedLoad.success) {
+        std::cerr << "Animated model load failed: " << animatedLoad.message << '\n';
+        load.scene.shutdown();
+        Renderer::shutdownSceneRenderer();
+        bgfx::shutdown();
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+    if (const std::optional<Engine::AnimatedModelSkinnedInstance> skinnedInstance = animatedLoad.model.skinnedInstance(0)) {
+        Renderer::setSkinnedInstanceTransform(
+            skinnedInstance->handle,
+            glm::translate(glm::mat4{1.0f}, glm::vec3{10.0f, 1.5f, 0.0f}));
     }
 
     Renderer::AtmosphereSettings atmosphere = Renderer::atmosphereSettings();
@@ -222,10 +285,87 @@ int main()
         static_cast<uint32_t>(Renderer::RenderLayer::All),
         true,
     };
-    const Renderer::SceneDrawStats stats = Renderer::drawScene(renderView);
+    float drawMs = 0.0f;
+    const Renderer::SceneDrawStats stats = measureMilliseconds([&]() {
+        return Renderer::drawScene(renderView);
+    }, drawMs);
     bgfx::frame();
 
+    Engine::AnimatedSkeletonPose sampledPose = animatedLoad.model.sampleClip(0, 0.5f);
+    const bool updatedSkinnedPose = animatedLoad.model.updateSkinnedPose(0, sampledPose);
+    bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x202020ff, 1.0f, 0);
+    bgfx::setViewRect(0, 0, 0, 640, 480);
+    bgfx::setViewTransform(0, &view[0][0], &projection[0][0]);
+    float sampledDrawMs = 0.0f;
+    const Renderer::SceneDrawStats sampledStats = measureMilliseconds([&]() {
+        return Renderer::drawScene(renderView);
+    }, sampledDrawMs);
+    bgfx::frame();
+
+    Engine::AnimationPlaybackState smokePlayback;
+    smokePlayback.clipIndex = 0;
+    smokePlayback.loop = true;
+    smokePlayback.playing = true;
+    uint32_t playbackSubmittedFrames = 0;
+    float playbackPoseMs = 0.0f;
+    float playbackUploadMs = 0.0f;
+    for (uint32_t frame = 0; frame < 3; ++frame) {
+        animatedLoad.model.advancePlayback(smokePlayback, 0.25f);
+        const auto poseStart = std::chrono::steady_clock::now();
+        Engine::AnimatedSkeletonPose playbackPose =
+            animatedLoad.model.sampleClip(smokePlayback.clipIndex, smokePlayback.timeSeconds);
+        playbackPoseMs += std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - poseStart).count();
+        if (playbackPose.diagnostics.valid) {
+            const auto uploadStart = std::chrono::steady_clock::now();
+            animatedLoad.model.updateSkinnedPose(0, playbackPose);
+            playbackUploadMs += std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - uploadStart).count();
+        }
+        bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x202020ff, 1.0f, 0);
+        bgfx::setViewRect(0, 0, 0, 640, 480);
+        bgfx::setViewTransform(0, &view[0][0], &projection[0][0]);
+        const Renderer::SceneDrawStats playbackStats = Renderer::drawScene(renderView);
+        if (playbackStats.submittedSkinnedMeshDrawItems > 0 &&
+            playbackStats.submittedSkinnedJointPaletteCount >= 2) {
+            ++playbackSubmittedFrames;
+        }
+        bgfx::frame();
+    }
+
+    Engine::AnimationCrossfadeState smokeCrossfade = Engine::beginCrossfade(smokePlayback, 1, 0.5f);
+    uint32_t crossfadeSubmittedFrames = 0;
+    float crossfadePoseMs = 0.0f;
+    float crossfadeUploadMs = 0.0f;
+    for (uint32_t frame = 0; frame < 3; ++frame) {
+        const auto poseStart = std::chrono::steady_clock::now();
+        Engine::AnimatedSkeletonPose crossfadePose =
+            Engine::advanceCrossfade(animatedLoad.model, smokeCrossfade, smokePlayback, 0.25f);
+        crossfadePoseMs += std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - poseStart).count();
+        if (crossfadePose.diagnostics.valid) {
+            const auto uploadStart = std::chrono::steady_clock::now();
+            animatedLoad.model.updateSkinnedPose(0, crossfadePose);
+            crossfadeUploadMs += std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - uploadStart).count();
+        }
+        bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x202020ff, 1.0f, 0);
+        bgfx::setViewRect(0, 0, 0, 640, 480);
+        bgfx::setViewTransform(0, &view[0][0], &projection[0][0]);
+        const Renderer::SceneDrawStats crossfadeStats = Renderer::drawScene(renderView);
+        if (crossfadeStats.submittedSkinnedMeshDrawItems > 0 &&
+            crossfadeStats.submittedSkinnedJointPaletteCount >= 2) {
+            ++crossfadeSubmittedFrames;
+        }
+        bgfx::frame();
+    }
+
+    const Engine::AuthoredSceneDiagnosticsSummary authoredSummary =
+        Engine::summarizeAuthoredSceneDiagnostics(load.scene.diagnostics());
+    const Engine::AnimatedModelDiagnosticsSummary animatedSummary =
+        Engine::summarizeAnimatedModelDiagnostics(animatedLoad.model.diagnostics());
     const Renderer::MaterialDiagnostics blendDiagnostics = Renderer::materialDiagnostics(blendMaterial);
+    const Renderer::TextureInfo baseTextureInfo = Renderer::textureInfo(pbrBaseColorTexture);
     const bool submitted = stats.submittedMeshDrawItems > 0;
     const bool submittedAllPasses = stats.submittedOpaqueMeshDrawItems > 0 &&
         stats.submittedAlphaMaskMeshDrawItems > 0 &&
@@ -246,6 +386,53 @@ int main()
     const bool submittedLights = stats.liveLightCount >= 3 &&
         stats.submittedForwardLightCount >= 3 &&
         stats.overBudgetLightCount == 0;
+    const bool textureDiagnosticsValid = baseTextureInfo.valid &&
+        baseTextureInfo.width > 0 &&
+        baseTextureInfo.height > 0 &&
+        baseTextureInfo.estimatedBytes > 0;
+    const bool submittedSkinned = stats.submittedSkinnedMeshDrawItems > 0 &&
+        stats.submittedSkinnedJointPaletteCount >= 2 &&
+        sampledStats.submittedSkinnedMeshDrawItems > 0 &&
+        sampledStats.submittedSkinnedJointPaletteCount >= 2 &&
+        sampledStats.truncatedSkinnedJointPaletteCount == 0 &&
+        updatedSkinnedPose &&
+        playbackSubmittedFrames == 3 &&
+        crossfadeSubmittedFrames == 3 &&
+        !smokeCrossfade.active &&
+        smokePlayback.clipIndex == 1;
+
+    std::ofstream report(authoredReportPath("authored_scene_smoke_profile.txt"));
+    report << "Authored Scene Smoke Profile\n";
+    report << "load_ms: " << loadMs << '\n';
+    report << "draw_ms: " << drawMs << '\n';
+    report << "sampled_draw_ms: " << sampledDrawMs << '\n';
+    report << "imported_nodes: " << authoredSummary.importedNodeCount << '\n';
+    report << "imported_primitives: " << authoredSummary.importedPrimitiveCount << '\n';
+    report << "loaded_sectors: " << authoredSummary.loadedSectorCount << '\n';
+    report << "total_sectors: " << authoredSummary.totalSectorCount << '\n';
+    report << "texture_bytes: " << authoredSummary.textureEstimatedBytes << '\n';
+    report << "submitted_draw_items: " << stats.submittedMeshDrawItems << '\n';
+    report << "submitted_opaque: " << stats.submittedOpaqueMeshDrawItems << '\n';
+    report << "submitted_alpha_mask: " << stats.submittedAlphaMaskMeshDrawItems << '\n';
+    report << "submitted_alpha_blend: " << stats.submittedAlphaBlendMeshDrawItems << '\n';
+    report << "submitted_lights: " << stats.submittedForwardLightCount << '\n';
+    report << "submitted_skinned_draw_items: " << stats.submittedSkinnedMeshDrawItems << '\n';
+    report << "sampled_submitted_skinned_draw_items: " << sampledStats.submittedSkinnedMeshDrawItems << '\n';
+    report << "submitted_skinned_joint_palette_count: " << stats.submittedSkinnedJointPaletteCount << '\n';
+    report << "playback_submitted_skinned_frames: " << playbackSubmittedFrames << '\n';
+    report << "crossfade_submitted_skinned_frames: " << crossfadeSubmittedFrames << '\n';
+    report << "animated_source_format: " << animatedSummary.sourceFormatName << '\n';
+    report << "animated_joints: " << animatedSummary.importedJointCount << '\n';
+    report << "animated_skins: " << animatedSummary.importedSkinCount << '\n';
+    report << "animated_clips: " << animatedSummary.importedAnimationCount << '\n';
+    report << "animated_created_skinned_meshes: " << animatedSummary.createdSkinnedMeshCount << '\n';
+    report << "animated_created_skinned_instances: " << animatedSummary.createdSkinnedInstanceCount << '\n';
+    report << "animated_warning_count: " << animatedSummary.warningCount << '\n';
+    report << "animated_playback_pose_ms: " << playbackPoseMs << '\n';
+    report << "animated_playback_upload_ms: " << playbackUploadMs << '\n';
+    report << "animated_crossfade_pose_ms: " << crossfadePoseMs << '\n';
+    report << "animated_crossfade_upload_ms: " << crossfadeUploadMs << '\n';
+    report << "animated_summary: " << Engine::animatedModelDiagnosticsSummaryText(animatedLoad.model.diagnostics()) << '\n';
 
     Renderer::destroyInstance(opaqueInstance);
     Renderer::destroyInstance(maskInstance);
@@ -264,6 +451,7 @@ int main()
     Renderer::destroyTexture(pbrMetallicRoughnessTexture);
     Renderer::destroyTexture(pbrOcclusionTexture);
     Renderer::destroyTexture(pbrEmissiveTexture);
+    animatedLoad.model.shutdown();
     load.scene.shutdown();
     assetCache.shutdown();
     Renderer::shutdownSceneRenderer();
@@ -295,11 +483,25 @@ int main()
         std::cerr << "Renderer light diagnostics were not valid\n";
         return 1;
     }
+    if (!textureDiagnosticsValid) {
+        std::cerr << "Renderer texture diagnostics were not valid\n";
+        return 1;
+    }
     if (!submittedLights) {
         std::cerr << "Renderer did not submit expected forward lights: live="
             << stats.liveLightCount
             << " submitted=" << stats.submittedForwardLightCount
             << " overBudget=" << stats.overBudgetLightCount
+            << '\n';
+        return 1;
+    }
+    if (!submittedSkinned) {
+        std::cerr << "Renderer did not submit expected skinned mesh draw items: bindPose="
+            << stats.submittedSkinnedMeshDrawItems
+            << " sampled=" << sampledStats.submittedSkinnedMeshDrawItems
+            << " palette=" << sampledStats.submittedSkinnedJointPaletteCount
+            << " truncated=" << sampledStats.truncatedSkinnedJointPaletteCount
+            << " updated=" << updatedSkinnedPose
             << '\n';
         return 1;
     }

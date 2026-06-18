@@ -224,15 +224,30 @@ namespace {
         const Assets::Assimp::ImportedScene& imported,
         Engine::AuthoredSceneDiagnostics& diagnostics)
     {
+        diagnostics.sourceFormat = imported.sourceFormat;
         diagnostics.importedNodeCount = imported.diagnostics.nodeCount;
         diagnostics.importedMeshCount = imported.diagnostics.meshCount;
         diagnostics.importedPrimitiveCount = imported.diagnostics.primitiveCount;
         diagnostics.importedMaterialCount = imported.diagnostics.materialCount;
         diagnostics.importedTextureCount = imported.diagnostics.textureCount;
         diagnostics.importedLightCount = imported.diagnostics.lightCount;
+        diagnostics.importedSkinCount = imported.diagnostics.skinCount;
+        diagnostics.importedJointCount = imported.diagnostics.jointCount;
+        diagnostics.importedAnimationCount = imported.diagnostics.animationCount;
+        diagnostics.importedAnimationChannelCount = imported.diagnostics.animationChannelCount;
         diagnostics.boundsValid = imported.bounds.valid;
         diagnostics.warnings = imported.diagnostics.warnings;
         appendDeferredDiagnostics(imported, diagnostics);
+    }
+
+    bool requiresAnimatedModelRuntime(const Assets::Assimp::ImportedScene& imported)
+    {
+        return !imported.skins.empty() || !imported.joints.empty() || !imported.animations.empty();
+    }
+
+    std::string animatedModelRuntimeRequiredMessage()
+    {
+        return "Authored scene imported successfully but contains skeletal or animation data and requires the future animated model runtime.";
     }
 
     void expandBounds(Assets::Assimp::ImportedSceneBounds& bounds, const glm::vec3& point)
@@ -1037,6 +1052,7 @@ namespace {
     YAML::Node diagnosticsNode(const Assets::Assimp::ImportedSceneDiagnostics& diagnostics)
     {
         YAML::Node node;
+        node["source_format"] = Assets::Assimp::sourceFormatName(diagnostics.sourceFormat);
         node["node_count"] = diagnostics.nodeCount;
         node["mesh_node_count"] = diagnostics.meshNodeCount;
         node["mesh_count"] = diagnostics.meshCount;
@@ -1053,6 +1069,28 @@ namespace {
         node["missing_texcoord0_primitive_count"] = diagnostics.missingTexcoord0PrimitiveCount;
         node["unsupported_animation_count"] = diagnostics.unsupportedAnimationCount;
         node["unsupported_skinned_mesh_count"] = diagnostics.unsupportedSkinnedMeshCount;
+        node["skin_count"] = diagnostics.skinCount;
+        node["joint_count"] = diagnostics.jointCount;
+        node["skinned_mesh_count"] = diagnostics.skinnedMeshCount;
+        node["influenced_vertex_count"] = diagnostics.influencedVertexCount;
+        node["max_influences_per_vertex"] = diagnostics.maxInfluencesPerVertex;
+        node["zero_weight_vertex_count"] = diagnostics.zeroWeightVertexCount;
+        node["non_normalized_weight_vertex_count"] = diagnostics.nonNormalizedWeightVertexCount;
+        node["over_four_influence_vertex_count"] = diagnostics.overFourInfluenceVertexCount;
+        node["animation_count"] = diagnostics.animationCount;
+        node["animation_channel_count"] = diagnostics.animationChannelCount;
+        node["translation_key_count"] = diagnostics.translationKeyCount;
+        node["rotation_key_count"] = diagnostics.rotationKeyCount;
+        node["scale_key_count"] = diagnostics.scaleKeyCount;
+        node["missing_animation_target_count"] = diagnostics.missingAnimationTargetCount;
+        node["embedded_texture_count"] = diagnostics.embeddedTextureCount;
+        node["missing_pbr_material_count"] = diagnostics.missingPbrMaterialCount;
+        node["fbx_unit_scale_factor"] = diagnostics.fbxUnitScaleFactor;
+        node["fbx_up_axis"] = diagnostics.fbxUpAxis;
+        node["fbx_up_axis_sign"] = diagnostics.fbxUpAxisSign;
+        node["fbx_animation_stack_count"] = diagnostics.fbxAnimationStackCount;
+        node["fbx_unnamed_animation_stack_count"] = diagnostics.fbxUnnamedAnimationStackCount;
+        node["fbx_animation_semantic_warning_count"] = diagnostics.fbxAnimationSemanticWarningCount;
         YAML::Node warnings;
         for (const std::string& warning : diagnostics.warnings) {
             warnings.push_back(warning);
@@ -1061,9 +1099,25 @@ namespace {
         return node;
     }
 
+    Assets::Assimp::ImportedSceneSourceFormat readSourceFormat(const YAML::Node& node)
+    {
+        const std::string value = node.as<std::string>(std::string{});
+        if (value == "gltf") {
+            return Assets::Assimp::ImportedSceneSourceFormat::Gltf;
+        }
+        if (value == "glb") {
+            return Assets::Assimp::ImportedSceneSourceFormat::Glb;
+        }
+        if (value == "fbx") {
+            return Assets::Assimp::ImportedSceneSourceFormat::Fbx;
+        }
+        return Assets::Assimp::ImportedSceneSourceFormat::Unknown;
+    }
+
     Assets::Assimp::ImportedSceneDiagnostics readDiagnostics(const YAML::Node& node)
     {
         Assets::Assimp::ImportedSceneDiagnostics diagnostics;
+        diagnostics.sourceFormat = readSourceFormat(node["source_format"]);
         diagnostics.nodeCount = node["node_count"].as<uint32_t>(0);
         diagnostics.meshNodeCount = node["mesh_node_count"].as<uint32_t>(0);
         diagnostics.meshCount = node["mesh_count"].as<uint32_t>(0);
@@ -1080,6 +1134,28 @@ namespace {
         diagnostics.missingTexcoord0PrimitiveCount = node["missing_texcoord0_primitive_count"].as<uint32_t>(0);
         diagnostics.unsupportedAnimationCount = node["unsupported_animation_count"].as<uint32_t>(0);
         diagnostics.unsupportedSkinnedMeshCount = node["unsupported_skinned_mesh_count"].as<uint32_t>(0);
+        diagnostics.skinCount = node["skin_count"].as<uint32_t>(0);
+        diagnostics.jointCount = node["joint_count"].as<uint32_t>(0);
+        diagnostics.skinnedMeshCount = node["skinned_mesh_count"].as<uint32_t>(0);
+        diagnostics.influencedVertexCount = node["influenced_vertex_count"].as<uint32_t>(0);
+        diagnostics.maxInfluencesPerVertex = node["max_influences_per_vertex"].as<uint32_t>(0);
+        diagnostics.zeroWeightVertexCount = node["zero_weight_vertex_count"].as<uint32_t>(0);
+        diagnostics.nonNormalizedWeightVertexCount = node["non_normalized_weight_vertex_count"].as<uint32_t>(0);
+        diagnostics.overFourInfluenceVertexCount = node["over_four_influence_vertex_count"].as<uint32_t>(0);
+        diagnostics.animationCount = node["animation_count"].as<uint32_t>(0);
+        diagnostics.animationChannelCount = node["animation_channel_count"].as<uint32_t>(0);
+        diagnostics.translationKeyCount = node["translation_key_count"].as<uint32_t>(0);
+        diagnostics.rotationKeyCount = node["rotation_key_count"].as<uint32_t>(0);
+        diagnostics.scaleKeyCount = node["scale_key_count"].as<uint32_t>(0);
+        diagnostics.missingAnimationTargetCount = node["missing_animation_target_count"].as<uint32_t>(0);
+        diagnostics.embeddedTextureCount = node["embedded_texture_count"].as<uint32_t>(0);
+        diagnostics.missingPbrMaterialCount = node["missing_pbr_material_count"].as<uint32_t>(0);
+        diagnostics.fbxUnitScaleFactor = node["fbx_unit_scale_factor"].as<float>(1.0f);
+        diagnostics.fbxUpAxis = node["fbx_up_axis"].as<int32_t>(1);
+        diagnostics.fbxUpAxisSign = node["fbx_up_axis_sign"].as<int32_t>(1);
+        diagnostics.fbxAnimationStackCount = node["fbx_animation_stack_count"].as<uint32_t>(0);
+        diagnostics.fbxUnnamedAnimationStackCount = node["fbx_unnamed_animation_stack_count"].as<uint32_t>(0);
+        diagnostics.fbxAnimationSemanticWarningCount = node["fbx_animation_semantic_warning_count"].as<uint32_t>(0);
         if (const YAML::Node warnings = node["warnings"]; warnings && warnings.IsSequence()) {
             for (const YAML::Node& warning : warnings) {
                 diagnostics.warnings.push_back(warning.as<std::string>(std::string{}));
@@ -1093,6 +1169,210 @@ namespace Engine {
     struct PartitionedAuthoredScene::ImportedStorage {
         Assets::Assimp::ImportedScene scene;
     };
+
+    const char* cacheStatusName(AuthoredSceneCacheStatus status)
+    {
+        switch (status) {
+            case AuthoredSceneCacheStatus::Hit:
+                return "hit";
+            case AuthoredSceneCacheStatus::Stale:
+                return "stale";
+            case AuthoredSceneCacheStatus::Corrupt:
+                return "corrupt";
+            case AuthoredSceneCacheStatus::WriteSuccess:
+                return "write-success";
+            case AuthoredSceneCacheStatus::WriteFailed:
+                return "write-failed";
+            case AuthoredSceneCacheStatus::Cancelled:
+                return "cancelled";
+            case AuthoredSceneCacheStatus::Miss:
+            default:
+                return "miss";
+        }
+    }
+
+    std::string quotedYamlString(const std::string& value)
+    {
+        std::string output = "\"";
+        for (char character : value) {
+            if (character == '\\' || character == '"') {
+                output.push_back('\\');
+            }
+            output.push_back(character);
+        }
+        output.push_back('"');
+        return output;
+    }
+
+    AuthoredSceneDiagnosticsSummary summarizeAuthoredSceneDiagnostics(const AuthoredSceneDiagnostics& diagnostics)
+    {
+        AuthoredSceneDiagnosticsSummary summary;
+        summary.sourceFormat = diagnostics.sourceFormat;
+        summary.sourceFormatName = Assets::Assimp::sourceFormatName(diagnostics.sourceFormat);
+        summary.importedNodeCount = diagnostics.importedNodeCount;
+        summary.importedMeshCount = diagnostics.importedMeshCount;
+        summary.importedPrimitiveCount = diagnostics.importedPrimitiveCount;
+        summary.importedMaterialCount = diagnostics.importedMaterialCount;
+        summary.importedTextureCount = diagnostics.importedTextureCount;
+        summary.importedLightCount = diagnostics.importedLightCount;
+        summary.importedSkinCount = diagnostics.importedSkinCount;
+        summary.importedJointCount = diagnostics.importedJointCount;
+        summary.importedAnimationCount = diagnostics.importedAnimationCount;
+        summary.importedAnimationChannelCount = diagnostics.importedAnimationChannelCount;
+        summary.createdMeshCount = diagnostics.createdMeshCount;
+        summary.createdMaterialCount = diagnostics.createdMaterialCount;
+        summary.createdInstanceCount = diagnostics.createdInstanceCount;
+        summary.createdLightCount = diagnostics.createdLightCount;
+        summary.textureLoadSuccessCount = diagnostics.textureLoadSuccessCount;
+        summary.textureLoadFailureCount = diagnostics.textureLoadFailureCount;
+        summary.fallbackTextureCount = diagnostics.fallbackTextureCount;
+        summary.textureEstimatedBytes = diagnostics.textureEstimatedBytes;
+        summary.disabledZeroIntensityLightCount = diagnostics.disabledZeroIntensityLightCount;
+        summary.skippedOverBudgetLightCount = diagnostics.skippedOverBudgetLightCount;
+        summary.activeAuthoredLightCount = diagnostics.activeAuthoredLightCount;
+        summary.totalSectorCount = diagnostics.totalSectorCount;
+        summary.loadedSectorCount = diagnostics.loadedSectorCount;
+        summary.pendingLoadSectorCount = diagnostics.pendingLoadSectorCount;
+        summary.pendingUnloadSectorCount = diagnostics.pendingUnloadSectorCount;
+        summary.failedSectorCount = diagnostics.failedSectorCount;
+        summary.sectorEstimatedBytes = diagnostics.sectorEstimatedBytes;
+        summary.cacheStatus = diagnostics.cacheStatus;
+        summary.loadedFromCache = diagnostics.loadedFromCache;
+        summary.cacheReadCount = diagnostics.cacheReadCount;
+        summary.cacheWriteCount = diagnostics.cacheWriteCount;
+        summary.cacheMissCount = diagnostics.cacheMissCount;
+        summary.cacheStaleCount = diagnostics.cacheStaleCount;
+        summary.cacheCorruptCount = diagnostics.cacheCorruptCount;
+        summary.cacheIdentityHash = diagnostics.cacheIdentityHash;
+        summary.cachePath = diagnostics.cachePath;
+        summary.cacheMessage = diagnostics.cacheMessage;
+        summary.asyncPhase = diagnostics.asyncPhase;
+        summary.asyncJobsQueued = diagnostics.asyncJobsQueued;
+        summary.asyncJobsCompleted = diagnostics.asyncJobsCompleted;
+        summary.asyncJobsFailed = diagnostics.asyncJobsFailed;
+        summary.asyncPendingJobs = diagnostics.asyncPendingJobs;
+        summary.asyncCacheReadMs = diagnostics.asyncCacheReadMs;
+        summary.asyncImportMs = diagnostics.asyncImportMs;
+        summary.asyncCacheWriteMs = diagnostics.asyncCacheWriteMs;
+        summary.asyncMessage = diagnostics.asyncMessage;
+        summary.boundsValid = diagnostics.boundsValid;
+        summary.warningCount = static_cast<uint32_t>(diagnostics.warnings.size());
+        if (!diagnostics.warnings.empty()) {
+            summary.lastWarning = diagnostics.warnings.back();
+        }
+        return summary;
+    }
+
+    std::string authoredSceneDiagnosticsSummaryText(const AuthoredSceneDiagnostics& diagnostics)
+    {
+        const AuthoredSceneDiagnosticsSummary summary = summarizeAuthoredSceneDiagnostics(diagnostics);
+        std::ostringstream output;
+        output
+            << "sourceFormat=" << summary.sourceFormatName
+            << "; imported nodes=" << summary.importedNodeCount
+            << " meshes=" << summary.importedMeshCount
+            << " primitives=" << summary.importedPrimitiveCount
+            << " materials=" << summary.importedMaterialCount
+            << " textures=" << summary.importedTextureCount
+            << " lights=" << summary.importedLightCount
+            << " skins=" << summary.importedSkinCount
+            << " joints=" << summary.importedJointCount
+            << " animations=" << summary.importedAnimationCount
+            << "; created meshes=" << summary.createdMeshCount
+            << " materials=" << summary.createdMaterialCount
+            << " instances=" << summary.createdInstanceCount
+            << " lights=" << summary.createdLightCount
+            << "; textures ok=" << summary.textureLoadSuccessCount
+            << " failed=" << summary.textureLoadFailureCount
+            << " fallback=" << summary.fallbackTextureCount
+            << " bytes=" << summary.textureEstimatedBytes
+            << "; sectors " << summary.loadedSectorCount << "/" << summary.totalSectorCount
+            << " pending=" << (summary.pendingLoadSectorCount + summary.pendingUnloadSectorCount)
+            << " failed=" << summary.failedSectorCount
+            << "; cache=" << cacheStatusName(summary.cacheStatus)
+            << " loadedFromCache=" << (summary.loadedFromCache ? "true" : "false")
+            << " reads=" << summary.cacheReadCount
+            << " writes=" << summary.cacheWriteCount
+            << "; async=" << (summary.asyncPhase.empty() ? "n/a" : summary.asyncPhase)
+            << " queued=" << summary.asyncJobsQueued
+            << " completed=" << summary.asyncJobsCompleted
+            << " failed=" << summary.asyncJobsFailed
+            << " pending=" << summary.asyncPendingJobs
+            << " importMs=" << std::fixed << std::setprecision(3) << summary.asyncImportMs
+            << " cacheReadMs=" << summary.asyncCacheReadMs
+            << " cacheWriteMs=" << summary.asyncCacheWriteMs
+            << "; boundsValid=" << (summary.boundsValid ? "true" : "false")
+            << "; warnings=" << summary.warningCount;
+        if (!summary.lastWarning.empty()) {
+            output << "; lastWarning=" << summary.lastWarning;
+        }
+        return output.str();
+    }
+
+    std::string authoredSceneDiagnosticsSummaryYaml(const AuthoredSceneDiagnostics& diagnostics)
+    {
+        const AuthoredSceneDiagnosticsSummary summary = summarizeAuthoredSceneDiagnostics(diagnostics);
+        std::ostringstream output;
+        output << "authored_scene:\n";
+        output << "  source_format: " << quotedYamlString(summary.sourceFormatName) << '\n';
+        output << "  imported:\n";
+        output << "    nodes: " << summary.importedNodeCount << '\n';
+        output << "    meshes: " << summary.importedMeshCount << '\n';
+        output << "    primitives: " << summary.importedPrimitiveCount << '\n';
+        output << "    materials: " << summary.importedMaterialCount << '\n';
+        output << "    textures: " << summary.importedTextureCount << '\n';
+        output << "    lights: " << summary.importedLightCount << '\n';
+        output << "    skins: " << summary.importedSkinCount << '\n';
+        output << "    joints: " << summary.importedJointCount << '\n';
+        output << "    animations: " << summary.importedAnimationCount << '\n';
+        output << "    animation_channels: " << summary.importedAnimationChannelCount << '\n';
+        output << "  created:\n";
+        output << "    meshes: " << summary.createdMeshCount << '\n';
+        output << "    materials: " << summary.createdMaterialCount << '\n';
+        output << "    instances: " << summary.createdInstanceCount << '\n';
+        output << "    lights: " << summary.createdLightCount << '\n';
+        output << "  textures:\n";
+        output << "    loaded: " << summary.textureLoadSuccessCount << '\n';
+        output << "    failed: " << summary.textureLoadFailureCount << '\n';
+        output << "    fallback: " << summary.fallbackTextureCount << '\n';
+        output << "    estimated_bytes: " << summary.textureEstimatedBytes << '\n';
+        output << "  lights:\n";
+        output << "    active: " << summary.activeAuthoredLightCount << '\n';
+        output << "    disabled_zero_intensity: " << summary.disabledZeroIntensityLightCount << '\n';
+        output << "    skipped_over_budget: " << summary.skippedOverBudgetLightCount << '\n';
+        output << "  sectors:\n";
+        output << "    total: " << summary.totalSectorCount << '\n';
+        output << "    loaded: " << summary.loadedSectorCount << '\n';
+        output << "    pending_load: " << summary.pendingLoadSectorCount << '\n';
+        output << "    pending_unload: " << summary.pendingUnloadSectorCount << '\n';
+        output << "    failed: " << summary.failedSectorCount << '\n';
+        output << "    estimated_bytes: " << summary.sectorEstimatedBytes << '\n';
+        output << "  cache:\n";
+        output << "    status: " << cacheStatusName(summary.cacheStatus) << '\n';
+        output << "    loaded_from_cache: " << (summary.loadedFromCache ? "true" : "false") << '\n';
+        output << "    reads: " << summary.cacheReadCount << '\n';
+        output << "    writes: " << summary.cacheWriteCount << '\n';
+        output << "    misses: " << summary.cacheMissCount << '\n';
+        output << "    stale: " << summary.cacheStaleCount << '\n';
+        output << "    corrupt: " << summary.cacheCorruptCount << '\n';
+        output << "    identity: " << quotedYamlString(summary.cacheIdentityHash) << '\n';
+        output << "    path: " << quotedYamlString(summary.cachePath.generic_string()) << '\n';
+        output << "    message: " << quotedYamlString(summary.cacheMessage) << '\n';
+        output << "  async:\n";
+        output << "    phase: " << quotedYamlString(summary.asyncPhase) << '\n';
+        output << "    queued: " << summary.asyncJobsQueued << '\n';
+        output << "    completed: " << summary.asyncJobsCompleted << '\n';
+        output << "    failed: " << summary.asyncJobsFailed << '\n';
+        output << "    pending: " << summary.asyncPendingJobs << '\n';
+        output << "    cache_read_ms: " << summary.asyncCacheReadMs << '\n';
+        output << "    import_ms: " << summary.asyncImportMs << '\n';
+        output << "    cache_write_ms: " << summary.asyncCacheWriteMs << '\n';
+        output << "    message: " << quotedYamlString(summary.asyncMessage) << '\n';
+        output << "  bounds_valid: " << (summary.boundsValid ? "true" : "false") << '\n';
+        output << "  warnings: " << summary.warningCount << '\n';
+        output << "  last_warning: " << quotedYamlString(summary.lastWarning) << '\n';
+        return output.str();
+    }
 
     AuthoredSceneCache::AuthoredSceneCache(AuthoredSceneCacheManifest manifest)
         : manifest_(std::move(manifest))
@@ -1227,9 +1507,16 @@ namespace Engine {
             const YAML::Node root = YAML::LoadFile(scenePath.string());
             AuthoredSceneCachePayload payload;
             payload.scene.success = true;
+            payload.scene.sourceFormat = readSourceFormat(root["source_format"]);
             payload.scene.rootNodeIndex = root["root_node_index"].as<uint32_t>(UINT32_MAX);
             payload.scene.bounds = readImportedBounds(root["bounds"]);
             payload.scene.diagnostics = readDiagnostics(root["diagnostics"]);
+            if (payload.scene.sourceFormat == Assets::Assimp::ImportedSceneSourceFormat::Unknown) {
+                payload.scene.sourceFormat = payload.scene.diagnostics.sourceFormat;
+            }
+            if (payload.scene.diagnostics.sourceFormat == Assets::Assimp::ImportedSceneSourceFormat::Unknown) {
+                payload.scene.diagnostics.sourceFormat = payload.scene.sourceFormat;
+            }
 
             if (const YAML::Node nodes = root["nodes"]; nodes && nodes.IsSequence()) {
                 payload.scene.nodes.reserve(nodes.size());
@@ -1318,6 +1605,12 @@ namespace Engine {
         const std::filesystem::path rootPath = cacheRoot(manifest);
         result.path = rootPath / "manifest.yaml";
 
+        if (requiresAnimatedModelRuntime(payload.scene)) {
+            result.status = AuthoredSceneCacheStatus::WriteFailed;
+            result.message = animatedModelRuntimeRequiredMessage();
+            return result;
+        }
+
         try {
             std::filesystem::create_directories(rootPath);
 
@@ -1342,6 +1635,7 @@ namespace Engine {
             manifestRoot["scene_payload"] = "scene.yaml";
 
             YAML::Node root;
+            root["source_format"] = Assets::Assimp::sourceFormatName(payload.scene.sourceFormat);
             root["root_node_index"] = payload.scene.rootNodeIndex;
             root["bounds"] = boundsNode(payload.scene.bounds);
             root["diagnostics"] = diagnosticsNode(payload.scene.diagnostics);
@@ -1581,6 +1875,28 @@ namespace Engine {
     const AuthoredScenePartition& PartitionedAuthoredScene::partition() const
     {
         return partition_;
+    }
+
+    void PartitionedAuthoredScene::setAsyncDiagnostics(
+        std::string phase,
+        uint32_t queued,
+        uint32_t completed,
+        uint32_t failed,
+        uint32_t pending,
+        float cacheReadMs,
+        float importMs,
+        float cacheWriteMs,
+        std::string message)
+    {
+        diagnostics_.asyncPhase = std::move(phase);
+        diagnostics_.asyncJobsQueued = queued;
+        diagnostics_.asyncJobsCompleted = completed;
+        diagnostics_.asyncJobsFailed = failed;
+        diagnostics_.asyncPendingJobs = pending;
+        diagnostics_.asyncCacheReadMs = cacheReadMs;
+        diagnostics_.asyncImportMs = importMs;
+        diagnostics_.asyncCacheWriteMs = cacheWriteMs;
+        diagnostics_.asyncMessage = std::move(message);
     }
 
     void PartitionedAuthoredScene::setStreamingWarning(std::string warning)
@@ -2065,11 +2381,21 @@ namespace Engine {
         diagnostics.importedMaterialCount = imported.diagnostics.materialCount;
         diagnostics.importedTextureCount = imported.diagnostics.textureCount;
         diagnostics.importedLightCount = imported.diagnostics.lightCount;
+        diagnostics.importedSkinCount = imported.diagnostics.skinCount;
+        diagnostics.importedJointCount = imported.diagnostics.jointCount;
+        diagnostics.importedAnimationCount = imported.diagnostics.animationCount;
+        diagnostics.importedAnimationChannelCount = imported.diagnostics.animationChannelCount;
         diagnostics.boundsValid = imported.bounds.valid;
         diagnostics.warnings = imported.diagnostics.warnings;
         appendDeferredDiagnostics(imported, diagnostics);
 
         result.scene.bounds_ = convertBounds(imported.bounds);
+
+        if (requiresAnimatedModelRuntime(imported)) {
+            result.message = animatedModelRuntimeRequiredMessage();
+            diagnostics.warnings.push_back(result.message);
+            return result;
+        }
 
         std::vector<Renderer::TextureHandle> baseColorTextures(imported.materials.size());
         std::vector<Renderer::TextureHandle> normalTextures(imported.materials.size());
@@ -2310,11 +2636,37 @@ namespace Engine {
             partition.warnings.push_back(imported.error);
             return partition;
         }
+        if (requiresAnimatedModelRuntime(imported)) {
+            AuthoredScenePartition partition;
+            partition.usedFallbackRootSector = true;
+            partition.warnings.push_back(animatedModelRuntimeRequiredMessage());
+            return partition;
+        }
         return buildPartition(imported, settings);
     }
 
-    PartitionedAuthoredSceneLoadResult loadPartitionedAuthoredScene(
+    AuthoredScenePartition partitionImportedAuthoredScene(
+        const Assets::Assimp::ImportedScene& imported,
+        const AuthoredScenePartitionSettings& settings)
+    {
+        if (!imported.success) {
+            AuthoredScenePartition partition;
+            partition.usedFallbackRootSector = true;
+            partition.warnings.push_back(imported.error);
+            return partition;
+        }
+        if (requiresAnimatedModelRuntime(imported)) {
+            AuthoredScenePartition partition;
+            partition.usedFallbackRootSector = true;
+            partition.warnings.push_back(animatedModelRuntimeRequiredMessage());
+            return partition;
+        }
+        return buildPartition(imported, settings);
+    }
+
+    PartitionedAuthoredSceneLoadResult createPartitionedAuthoredSceneFromPayload(
         const std::filesystem::path& path,
+        AuthoredSceneCachePayload payload,
         AssetCache& assetCache,
         const AuthoredSceneStreamingSettings& settings)
     {
@@ -2323,50 +2675,12 @@ namespace Engine {
         result.scene.settings_ = settings;
         result.scene.sourcePath_ = path;
         result.scene.imported_ = std::make_shared<PartitionedAuthoredScene::ImportedStorage>();
-
-        const AuthoredSceneCacheManifest cacheManifest =
-            AuthoredSceneCache::buildManifest(settings.cache, path, settings.partition);
-        result.scene.diagnostics_.cachePath = AuthoredSceneCache::cacheRoot(cacheManifest);
-        result.scene.diagnostics_.cacheIdentityHash = cacheManifest.identityHash;
-
-        bool loadedFromCache = false;
-        AuthoredScenePartition cachedPartition;
-        if (settings.cache.policy != AuthoredSceneCachePolicy::Disabled &&
-            settings.cache.policy != AuthoredSceneCachePolicy::Refresh) {
-            AuthoredSceneCacheReadResult cacheRead = AuthoredSceneCache::read(cacheManifest);
-            result.scene.diagnostics_.cacheStatus = cacheRead.status;
-            result.scene.diagnostics_.cacheMessage = cacheRead.message;
-            ++result.scene.diagnostics_.cacheReadCount;
-            if (cacheRead.status == AuthoredSceneCacheStatus::Hit && cacheRead.payload) {
-                result.scene.imported_->scene = std::move(cacheRead.payload->scene);
-                cachedPartition = std::move(cacheRead.payload->partition);
-                loadedFromCache = true;
-                result.scene.diagnostics_.loadedFromCache = true;
-            } else {
-                switch (cacheRead.status) {
-                    case AuthoredSceneCacheStatus::Stale:
-                        ++result.scene.diagnostics_.cacheStaleCount;
-                        break;
-                    case AuthoredSceneCacheStatus::Corrupt:
-                        ++result.scene.diagnostics_.cacheCorruptCount;
-                        break;
-                    case AuthoredSceneCacheStatus::Miss:
-                    default:
-                        ++result.scene.diagnostics_.cacheMissCount;
-                        break;
-                }
-            }
-        } else if (settings.cache.policy == AuthoredSceneCachePolicy::Refresh) {
-            result.scene.diagnostics_.cacheStatus = AuthoredSceneCacheStatus::Stale;
-            result.scene.diagnostics_.cacheMessage = "Authored scene cache refresh requested.";
-        }
-
-        if (!loadedFromCache) {
-            result.scene.imported_->scene = Assets::Assimp::importScene(path);
-        }
+        result.scene.imported_->scene = std::move(payload.scene);
 
         if (!result.scene.imported_->scene.success) {
-            result.message = result.scene.imported_->scene.error;
+            result.message = result.scene.imported_->scene.error.empty()
+                ? "Authored scene payload was not successful."
+                : result.scene.imported_->scene.error;
             result.scene.imported_.reset();
             return result;
         }
@@ -2374,7 +2688,13 @@ namespace Engine {
         const Assets::Assimp::ImportedScene& imported = result.scene.imported_->scene;
         appendImportDiagnostics(imported, result.scene.diagnostics_);
         result.scene.bounds_ = convertBounds(imported.bounds);
-        result.scene.partition_ = loadedFromCache ? std::move(cachedPartition) : buildPartition(imported, settings.partition);
+        if (requiresAnimatedModelRuntime(imported)) {
+            result.message = animatedModelRuntimeRequiredMessage();
+            result.scene.diagnostics_.warnings.push_back(result.message);
+            result.scene.imported_.reset();
+            return result;
+        }
+        result.scene.partition_ = std::move(payload.partition);
         result.scene.diagnostics_.totalSectorCount = static_cast<uint32_t>(result.scene.partition_.sectors.size());
         result.scene.diagnostics_.sectorEstimatedBytes = 0;
         for (const AuthoredSceneSectorManifest& sector : result.scene.partition_.sectors) {
@@ -2385,26 +2705,6 @@ namespace Engine {
         for (const std::string& warning : result.scene.partition_.warnings) {
             result.scene.diagnostics_.warnings.push_back(warning);
             result.scene.diagnostics_.lastStreamingWarning = warning;
-        }
-
-        const bool shouldWriteCache =
-            settings.cache.policy == AuthoredSceneCachePolicy::Refresh ||
-            (settings.cache.policy == AuthoredSceneCachePolicy::GenerateOnMiss && !loadedFromCache);
-        if (shouldWriteCache) {
-            AuthoredSceneCachePayload payload;
-            payload.scene = imported;
-            payload.partition = result.scene.partition_;
-            AuthoredSceneCacheWriteResult cacheWrite = AuthoredSceneCache::write(cacheManifest, payload);
-            result.scene.diagnostics_.cacheStatus = cacheWrite.status;
-            result.scene.diagnostics_.cacheMessage = cacheWrite.message;
-            result.scene.diagnostics_.cachePath = cacheWrite.path.empty() ? result.scene.diagnostics_.cachePath : cacheWrite.path;
-            if (cacheWrite.status == AuthoredSceneCacheStatus::WriteSuccess) {
-                ++result.scene.diagnostics_.cacheWriteCount;
-            } else {
-                result.scene.diagnostics_.warnings.push_back(cacheWrite.message);
-            }
-        } else if (loadedFromCache) {
-            result.scene.diagnostics_.cacheStatus = AuthoredSceneCacheStatus::Hit;
         }
 
         result.scene.sectorRuntime_.resize(result.scene.partition_.sectors.size());
@@ -2438,6 +2738,100 @@ namespace Engine {
         result.scene.refreshDiagnostics();
         result.success = true;
         result.message = "Partitioned authored scene loaded.";
+        return result;
+    }
+
+    PartitionedAuthoredSceneLoadResult loadPartitionedAuthoredScene(
+        const std::filesystem::path& path,
+        AssetCache& assetCache,
+        const AuthoredSceneStreamingSettings& settings)
+    {
+        const AuthoredSceneCacheManifest cacheManifest =
+            AuthoredSceneCache::buildManifest(settings.cache, path, settings.partition);
+
+        bool loadedFromCache = false;
+        AuthoredSceneCachePayload payload;
+        AuthoredSceneDiagnostics cacheDiagnostics;
+        cacheDiagnostics.cachePath = AuthoredSceneCache::cacheRoot(cacheManifest);
+        cacheDiagnostics.cacheIdentityHash = cacheManifest.identityHash;
+        if (settings.cache.policy != AuthoredSceneCachePolicy::Disabled &&
+            settings.cache.policy != AuthoredSceneCachePolicy::Refresh) {
+            AuthoredSceneCacheReadResult cacheRead = AuthoredSceneCache::read(cacheManifest);
+            cacheDiagnostics.cacheStatus = cacheRead.status;
+            cacheDiagnostics.cacheMessage = cacheRead.message;
+            ++cacheDiagnostics.cacheReadCount;
+            if (cacheRead.status == AuthoredSceneCacheStatus::Hit && cacheRead.payload) {
+                payload = std::move(*cacheRead.payload);
+                loadedFromCache = true;
+                cacheDiagnostics.loadedFromCache = true;
+            } else {
+                switch (cacheRead.status) {
+                    case AuthoredSceneCacheStatus::Stale:
+                        ++cacheDiagnostics.cacheStaleCount;
+                        break;
+                    case AuthoredSceneCacheStatus::Corrupt:
+                        ++cacheDiagnostics.cacheCorruptCount;
+                        break;
+                    case AuthoredSceneCacheStatus::Miss:
+                    default:
+                        ++cacheDiagnostics.cacheMissCount;
+                        break;
+                }
+            }
+        } else if (settings.cache.policy == AuthoredSceneCachePolicy::Refresh) {
+            cacheDiagnostics.cacheStatus = AuthoredSceneCacheStatus::Stale;
+            cacheDiagnostics.cacheMessage = "Authored scene cache refresh requested.";
+        }
+
+        if (!loadedFromCache) {
+            payload.scene = Assets::Assimp::importScene(path);
+            if (!payload.scene.success) {
+                PartitionedAuthoredSceneLoadResult failed;
+                failed.message = payload.scene.error;
+                return failed;
+            }
+            if (requiresAnimatedModelRuntime(payload.scene)) {
+                PartitionedAuthoredSceneLoadResult failed;
+                failed.message = animatedModelRuntimeRequiredMessage();
+                appendImportDiagnostics(payload.scene, failed.scene.diagnostics_);
+                failed.scene.diagnostics_.warnings.push_back(failed.message);
+                return failed;
+            }
+            payload.partition = buildPartition(payload.scene, settings.partition);
+        }
+
+        const bool shouldWriteCache =
+            settings.cache.policy == AuthoredSceneCachePolicy::Refresh ||
+            (settings.cache.policy == AuthoredSceneCachePolicy::GenerateOnMiss && !loadedFromCache);
+        if (shouldWriteCache) {
+            AuthoredSceneCacheWriteResult cacheWrite = AuthoredSceneCache::write(cacheManifest, payload);
+            cacheDiagnostics.cacheStatus = cacheWrite.status;
+            cacheDiagnostics.cacheMessage = cacheWrite.message;
+            cacheDiagnostics.cachePath = cacheWrite.path.empty() ? cacheDiagnostics.cachePath : cacheWrite.path;
+            if (cacheWrite.status == AuthoredSceneCacheStatus::WriteSuccess) {
+                ++cacheDiagnostics.cacheWriteCount;
+            } else {
+                cacheDiagnostics.warnings.push_back(cacheWrite.message);
+            }
+        } else if (loadedFromCache) {
+            cacheDiagnostics.cacheStatus = AuthoredSceneCacheStatus::Hit;
+        }
+
+        PartitionedAuthoredSceneLoadResult result =
+            createPartitionedAuthoredSceneFromPayload(path, std::move(payload), assetCache, settings);
+        result.scene.diagnostics_.cacheStatus = cacheDiagnostics.cacheStatus;
+        result.scene.diagnostics_.cachePath = cacheDiagnostics.cachePath;
+        result.scene.diagnostics_.cacheIdentityHash = cacheDiagnostics.cacheIdentityHash;
+        result.scene.diagnostics_.cacheReadCount = cacheDiagnostics.cacheReadCount;
+        result.scene.diagnostics_.cacheWriteCount = cacheDiagnostics.cacheWriteCount;
+        result.scene.diagnostics_.cacheMissCount = cacheDiagnostics.cacheMissCount;
+        result.scene.diagnostics_.cacheStaleCount = cacheDiagnostics.cacheStaleCount;
+        result.scene.diagnostics_.cacheCorruptCount = cacheDiagnostics.cacheCorruptCount;
+        result.scene.diagnostics_.loadedFromCache = cacheDiagnostics.loadedFromCache;
+        result.scene.diagnostics_.cacheMessage = cacheDiagnostics.cacheMessage;
+        for (const std::string& warning : cacheDiagnostics.warnings) {
+            result.scene.diagnostics_.warnings.push_back(warning);
+        }
         return result;
     }
 }

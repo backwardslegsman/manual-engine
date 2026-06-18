@@ -1,5 +1,6 @@
 #include "core.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -12,7 +13,7 @@ namespace Renderer {
         }
 
         window = SDL_CreateWindow(
-            "Hello Triangle - SDL3 + bgfx",
+            "ManualEngine",
             1280,
             720,
             SDL_WINDOW_RESIZABLE
@@ -23,6 +24,7 @@ namespace Renderer {
             SDL_Quit();
             return 1;
         }
+        SDL_MaximizeWindow(window);
         return 0;
     }
 
@@ -48,8 +50,11 @@ namespace Renderer {
         bgfx::Init init{};
         init.type = bgfx::RendererType::Count;
         init.platformData = pd;
-        init.resolution.width = 1280;
-        init.resolution.height = 720;
+        int width = 1280;
+        int height = 720;
+        SDL_GetWindowSize(window, &width, &height);
+        init.resolution.width = static_cast<uint32_t>(std::max(width, 1));
+        init.resolution.height = static_cast<uint32_t>(std::max(height, 1));
         init.resolution.reset = BGFX_RESET_VSYNC;
 
         if (!bgfx::init(init)) {

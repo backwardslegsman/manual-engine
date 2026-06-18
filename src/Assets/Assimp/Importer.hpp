@@ -51,6 +51,18 @@ namespace Assets::Assimp {
         bool valid = false;
     };
 
+    enum class ImportedSceneSourceFormat {
+        Unknown,
+        Gltf,
+        Glb,
+        Fbx,
+    };
+
+    struct ImportedSceneVertexInfluence {
+        uint32_t jointIndex = UINT32_MAX;
+        float weight = 0.0f;
+    };
+
     struct ImportedSceneVertex {
         glm::vec3 position{};
         glm::vec3 normal{0.0f, 1.0f, 0.0f};
@@ -58,6 +70,7 @@ namespace Assets::Assimp {
         glm::vec2 texcoord0{};
         glm::vec2 texcoord1{};
         glm::vec4 color0{1.0f};
+        std::vector<ImportedSceneVertexInfluence> influences;
         bool hasNormal = false;
         bool hasTangent = false;
         bool hasTexcoord0 = false;
@@ -194,7 +207,61 @@ namespace Assets::Assimp {
         std::optional<uint32_t> nodeIndex;
     };
 
+    struct ImportedSceneJoint {
+        std::string name;
+        std::optional<uint32_t> nodeIndex;
+        uint32_t parentJointIndex = UINT32_MAX;
+        glm::mat4 inverseBindMatrix{1.0f};
+        bool hasInverseBindMatrix = false;
+        glm::mat4 localBindTransform{1.0f};
+        glm::mat4 worldBindTransform{1.0f};
+    };
+
+    struct ImportedSceneSkin {
+        std::string name;
+        std::optional<uint32_t> skeletonRootNodeIndex;
+        std::vector<uint32_t> jointIndices;
+        std::vector<uint32_t> meshIndices;
+        std::vector<uint32_t> nodeIndices;
+        uint32_t inverseBindMatrixCount = 0;
+    };
+
+    enum class ImportedSceneAnimationInterpolation {
+        Unknown,
+        Step,
+        Linear,
+        CubicSpline,
+    };
+
+    struct ImportedSceneVec3Key {
+        float timeSeconds = 0.0f;
+        glm::vec3 value{0.0f};
+        ImportedSceneAnimationInterpolation interpolation = ImportedSceneAnimationInterpolation::Linear;
+    };
+
+    struct ImportedSceneQuatKey {
+        float timeSeconds = 0.0f;
+        glm::quat value{1.0f, 0.0f, 0.0f, 0.0f};
+        ImportedSceneAnimationInterpolation interpolation = ImportedSceneAnimationInterpolation::Linear;
+    };
+
+    struct ImportedSceneAnimationChannel {
+        std::string targetName;
+        std::optional<uint32_t> targetNodeIndex;
+        std::vector<ImportedSceneVec3Key> translationKeys;
+        std::vector<ImportedSceneQuatKey> rotationKeys;
+        std::vector<ImportedSceneVec3Key> scaleKeys;
+    };
+
+    struct ImportedSceneAnimationClip {
+        std::string name;
+        float durationSeconds = 0.0f;
+        double ticksPerSecond = 1.0;
+        std::vector<ImportedSceneAnimationChannel> channels;
+    };
+
     struct ImportedSceneDiagnostics {
+        ImportedSceneSourceFormat sourceFormat = ImportedSceneSourceFormat::Unknown;
         uint32_t nodeCount = 0;
         uint32_t meshNodeCount = 0;
         uint32_t meshCount = 0;
@@ -211,22 +278,50 @@ namespace Assets::Assimp {
         uint32_t missingTexcoord0PrimitiveCount = 0;
         uint32_t unsupportedAnimationCount = 0;
         uint32_t unsupportedSkinnedMeshCount = 0;
+        uint32_t skinCount = 0;
+        uint32_t jointCount = 0;
+        uint32_t skinnedMeshCount = 0;
+        uint32_t influencedVertexCount = 0;
+        uint32_t maxInfluencesPerVertex = 0;
+        uint32_t zeroWeightVertexCount = 0;
+        uint32_t nonNormalizedWeightVertexCount = 0;
+        uint32_t overFourInfluenceVertexCount = 0;
+        uint32_t animationCount = 0;
+        uint32_t animationChannelCount = 0;
+        uint32_t translationKeyCount = 0;
+        uint32_t rotationKeyCount = 0;
+        uint32_t scaleKeyCount = 0;
+        uint32_t missingAnimationTargetCount = 0;
+        uint32_t embeddedTextureCount = 0;
+        uint32_t missingPbrMaterialCount = 0;
+        float fbxUnitScaleFactor = 1.0f;
+        int32_t fbxUpAxis = 1;
+        int32_t fbxUpAxisSign = 1;
+        uint32_t fbxAnimationStackCount = 0;
+        uint32_t fbxUnnamedAnimationStackCount = 0;
+        uint32_t fbxAnimationSemanticWarningCount = 0;
         std::vector<std::string> warnings;
     };
 
     struct ImportedScene {
         bool success = false;
         std::string error;
+        ImportedSceneSourceFormat sourceFormat = ImportedSceneSourceFormat::Unknown;
         uint32_t rootNodeIndex = UINT32_MAX;
         std::vector<ImportedSceneNode> nodes;
         std::vector<ImportedSceneMesh> meshes;
         std::vector<ImportedSceneMaterial> materials;
         std::vector<ImportedSceneTexture> textures;
         std::vector<ImportedSceneLight> lights;
+        std::vector<ImportedSceneJoint> joints;
+        std::vector<ImportedSceneSkin> skins;
+        std::vector<ImportedSceneAnimationClip> animations;
         ImportedSceneBounds bounds;
         ImportedSceneDiagnostics diagnostics;
     };
 
+    ImportedSceneSourceFormat detectSceneSourceFormat(const std::filesystem::path& path);
+    const char* sourceFormatName(ImportedSceneSourceFormat format);
     ImportResult importStaticMesh(const std::filesystem::path& path);
     ImportedScene importScene(const std::filesystem::path& path);
 }

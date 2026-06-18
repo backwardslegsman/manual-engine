@@ -75,7 +75,7 @@ namespace Engine {
     struct AuthoredSceneCacheSettings {
         std::filesystem::path rootPath = "generated/authored_scene_cache";
         uint32_t formatVersion = 1;
-        std::string importerVersion = "assimp_authored_scene_a11";
+        std::string importerVersion = "assimp_authored_scene_format_aware_a13";
         std::string materialPipelineVersion = "gltf_materials_a7";
         std::string texturePolicyVersion = "texture_descriptors_a5";
         std::string vertexFormatVersion = "mesh_vertex_a4";
@@ -171,12 +171,17 @@ namespace Engine {
     };
 
     struct AuthoredSceneDiagnostics {
+        Assets::Assimp::ImportedSceneSourceFormat sourceFormat = Assets::Assimp::ImportedSceneSourceFormat::Unknown;
         uint32_t importedNodeCount = 0;
         uint32_t importedMeshCount = 0;
         uint32_t importedPrimitiveCount = 0;
         uint32_t importedMaterialCount = 0;
         uint32_t importedTextureCount = 0;
         uint32_t importedLightCount = 0;
+        uint32_t importedSkinCount = 0;
+        uint32_t importedJointCount = 0;
+        uint32_t importedAnimationCount = 0;
+        uint32_t importedAnimationChannelCount = 0;
         uint32_t createdMeshCount = 0;
         uint32_t createdMaterialCount = 0;
         uint32_t createdInstanceCount = 0;
@@ -220,9 +225,77 @@ namespace Engine {
         uint32_t cacheCorruptCount = 0;
         bool loadedFromCache = false;
         std::string cacheMessage;
+        std::string asyncPhase;
+        uint32_t asyncJobsQueued = 0;
+        uint32_t asyncJobsCompleted = 0;
+        uint32_t asyncJobsFailed = 0;
+        uint32_t asyncPendingJobs = 0;
+        float asyncCacheReadMs = 0.0f;
+        float asyncImportMs = 0.0f;
+        float asyncCacheWriteMs = 0.0f;
+        std::string asyncMessage;
         bool boundsValid = false;
         std::vector<std::string> warnings;
     };
+
+    struct AuthoredSceneDiagnosticsSummary {
+        Assets::Assimp::ImportedSceneSourceFormat sourceFormat = Assets::Assimp::ImportedSceneSourceFormat::Unknown;
+        std::string sourceFormatName;
+        uint32_t importedNodeCount = 0;
+        uint32_t importedMeshCount = 0;
+        uint32_t importedPrimitiveCount = 0;
+        uint32_t importedMaterialCount = 0;
+        uint32_t importedTextureCount = 0;
+        uint32_t importedLightCount = 0;
+        uint32_t importedSkinCount = 0;
+        uint32_t importedJointCount = 0;
+        uint32_t importedAnimationCount = 0;
+        uint32_t importedAnimationChannelCount = 0;
+        uint32_t createdMeshCount = 0;
+        uint32_t createdMaterialCount = 0;
+        uint32_t createdInstanceCount = 0;
+        uint32_t createdLightCount = 0;
+        uint32_t textureLoadSuccessCount = 0;
+        uint32_t textureLoadFailureCount = 0;
+        uint32_t fallbackTextureCount = 0;
+        uint64_t textureEstimatedBytes = 0;
+        uint32_t disabledZeroIntensityLightCount = 0;
+        uint32_t skippedOverBudgetLightCount = 0;
+        uint32_t activeAuthoredLightCount = 0;
+        uint32_t totalSectorCount = 0;
+        uint32_t loadedSectorCount = 0;
+        uint32_t pendingLoadSectorCount = 0;
+        uint32_t pendingUnloadSectorCount = 0;
+        uint32_t failedSectorCount = 0;
+        uint64_t sectorEstimatedBytes = 0;
+        AuthoredSceneCacheStatus cacheStatus = AuthoredSceneCacheStatus::Miss;
+        bool loadedFromCache = false;
+        uint32_t cacheReadCount = 0;
+        uint32_t cacheWriteCount = 0;
+        uint32_t cacheMissCount = 0;
+        uint32_t cacheStaleCount = 0;
+        uint32_t cacheCorruptCount = 0;
+        std::string cacheIdentityHash;
+        std::filesystem::path cachePath;
+        std::string cacheMessage;
+        std::string asyncPhase;
+        uint32_t asyncJobsQueued = 0;
+        uint32_t asyncJobsCompleted = 0;
+        uint32_t asyncJobsFailed = 0;
+        uint32_t asyncPendingJobs = 0;
+        float asyncCacheReadMs = 0.0f;
+        float asyncImportMs = 0.0f;
+        float asyncCacheWriteMs = 0.0f;
+        std::string asyncMessage;
+        bool boundsValid = false;
+        uint32_t warningCount = 0;
+        std::string lastWarning;
+    };
+
+    const char* cacheStatusName(AuthoredSceneCacheStatus status);
+    AuthoredSceneDiagnosticsSummary summarizeAuthoredSceneDiagnostics(const AuthoredSceneDiagnostics& diagnostics);
+    std::string authoredSceneDiagnosticsSummaryText(const AuthoredSceneDiagnostics& diagnostics);
+    std::string authoredSceneDiagnosticsSummaryYaml(const AuthoredSceneDiagnostics& diagnostics);
 
     struct AuthoredSceneInstance {
         uint32_t nodeIndex = UINT32_MAX;
@@ -289,11 +362,26 @@ namespace Engine {
         const AuthoredSceneBounds& bounds() const;
         const AuthoredSceneDiagnostics& diagnostics() const;
         const AuthoredScenePartition& partition() const;
+        void setAsyncDiagnostics(
+            std::string phase,
+            uint32_t queued,
+            uint32_t completed,
+            uint32_t failed,
+            uint32_t pending,
+            float cacheReadMs,
+            float importMs,
+            float cacheWriteMs,
+            std::string message);
 
     private:
         friend struct PartitionedAuthoredSceneLoadResult;
         friend PartitionedAuthoredSceneLoadResult loadPartitionedAuthoredScene(
             const std::filesystem::path& path,
+            AssetCache& assetCache,
+            const AuthoredSceneStreamingSettings& settings);
+        friend PartitionedAuthoredSceneLoadResult createPartitionedAuthoredSceneFromPayload(
+            const std::filesystem::path& path,
+            AuthoredSceneCachePayload payload,
             AssetCache& assetCache,
             const AuthoredSceneStreamingSettings& settings);
 
@@ -359,8 +447,18 @@ namespace Engine {
         const std::filesystem::path& path,
         const AuthoredScenePartitionSettings& settings = {});
 
+    AuthoredScenePartition partitionImportedAuthoredScene(
+        const Assets::Assimp::ImportedScene& imported,
+        const AuthoredScenePartitionSettings& settings = {});
+
     PartitionedAuthoredSceneLoadResult loadPartitionedAuthoredScene(
         const std::filesystem::path& path,
+        AssetCache& assetCache,
+        const AuthoredSceneStreamingSettings& settings = {});
+
+    PartitionedAuthoredSceneLoadResult createPartitionedAuthoredSceneFromPayload(
+        const std::filesystem::path& path,
+        AuthoredSceneCachePayload payload,
         AssetCache& assetCache,
         const AuthoredSceneStreamingSettings& settings = {});
 }

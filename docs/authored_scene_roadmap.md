@@ -20,6 +20,7 @@ This roadmap prepares ManualEngine to load, render, and eventually stream comple
 - Keep scene loading failure explicit. Missing textures/material features should report diagnostics and use intentional fallbacks.
 - Support large scenes through budgets, worker-safe decode stages, and explicit resource ownership before adding automatic streaming.
 - Keep Sponza-specific compatibility useful as validation, but avoid hardcoding Sponza paths or material names into renderer systems.
+- Do not run heavy optional asset tests by default. Use `MANUAL_ENGINE_RUN_HEAVY_ASSET_TESTS=1` only for changes where Sponza-scale validation meaningfully exercises the code under review.
 
 ## Current Gap Snapshot
 

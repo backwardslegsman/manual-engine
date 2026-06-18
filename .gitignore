@@ -42,6 +42,11 @@ Desktop.ini
 # Generated derived data
 generated/navigation_cache/
 generated/authored_scene_cache/
+generated/authored_scene_reports/
 
 # Local large authored scene assets
 assets/main_sponza/
+assets/KayKit_Adventurers_2.0_FREE/
+
+# Runtime UI layout state
+imgui.ini

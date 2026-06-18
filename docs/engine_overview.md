@@ -2,7 +2,7 @@
 
 ManualEngine is currently a deliberately small SDL + bgfx open-world prototype. The guiding shape is: `src/App` composes services and owns platform/frame flow, `src/Engine` owns deterministic simulation and world-state rules, `src/Renderer` owns bgfx resources/submission, and `src/Assets` decodes source files into CPU-side data.
 
-Keep this document current whenever subsystem ownership, data flow, or save-facing contracts change. Use `docs/system_contracts.md` as the detailed checklist for currently available systems, renderer features, initialization order, and cross-system contracts. Use `docs/system_inboxes.md` when adding message-driven cross-system input. Use `docs/performance_roadmap.md` when planning worker offload, frame budgeting, streaming, and hitch-reduction work. Use `docs/authored_scene_roadmap.md` when planning glTF/PBR authored scene loading and streaming work.
+Keep this document current whenever subsystem ownership, data flow, or save-facing contracts change. Use `docs/system_contracts.md` as the detailed checklist for currently available systems, renderer features, initialization order, and cross-system contracts. Use `docs/system_inboxes.md` when adding message-driven cross-system input. Use `docs/performance_roadmap.md` when planning worker offload, frame budgeting, streaming, and hitch-reduction work. Use `docs/authored_scene_roadmap.md` when planning glTF/PBR authored scene loading and streaming work. Use `docs/scene_component_roadmap.md` when planning scene, actor/entity, component, asset registry, physics, scripting, serialization, or cross-runtime integration work.
 
 ## Runtime Ownership
 

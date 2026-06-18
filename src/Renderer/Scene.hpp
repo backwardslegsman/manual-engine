@@ -13,6 +13,8 @@
 
 namespace Renderer {
     constexpr uint32_t MaxForwardLights = 16;
+    constexpr uint32_t MaxSkinnedInfluencesPerVertex = 4;
+    constexpr uint32_t MaxSkinnedJointsPerMesh = 256;
 
     enum class RenderLayer : uint32_t {
         None = 0,
@@ -250,6 +252,12 @@ namespace Renderer {
         uint32_t layerOrFlagCulledMeshInstances = 0;
         uint32_t frustumCulledMeshInstances = 0;
         uint32_t distanceCulledMeshInstances = 0;
+        uint32_t liveSkinnedMeshInstances = 0;
+        uint32_t visibleSkinnedMeshInstances = 0;
+        uint32_t submittedSkinnedMeshInstances = 0;
+        uint32_t layerOrFlagCulledSkinnedMeshInstances = 0;
+        uint32_t frustumCulledSkinnedMeshInstances = 0;
+        uint32_t distanceCulledSkinnedMeshInstances = 0;
         uint32_t liveTerrainTiles = 0;
         uint32_t visibleTerrainTiles = 0;
         uint32_t submittedTerrainTiles = 0;
@@ -278,6 +286,16 @@ namespace Renderer {
         uint32_t alphaMaskMeshBatchCount = 0;
         uint32_t alphaBlendMeshBatchCount = 0;
         uint32_t largestMeshBatchSize = 0;
+        uint32_t liveSkinnedMeshInstances = 0;
+        uint32_t visibleSkinnedMeshInstances = 0;
+        uint32_t submittedSkinnedMeshInstances = 0;
+        uint32_t layerOrFlagCulledSkinnedMeshInstances = 0;
+        uint32_t frustumCulledSkinnedMeshInstances = 0;
+        uint32_t distanceCulledSkinnedMeshInstances = 0;
+        uint32_t visibleSkinnedMeshDrawItems = 0;
+        uint32_t submittedSkinnedMeshDrawItems = 0;
+        uint32_t submittedSkinnedJointPaletteCount = 0;
+        uint32_t truncatedSkinnedJointPaletteCount = 0;
         uint32_t liveTerrainTiles = 0;
         uint32_t visibleTerrainTiles = 0;
         uint32_t submittedTerrainTiles = 0;
@@ -310,11 +328,19 @@ namespace Renderer {
         uint32_t id = UINT32_MAX;
     };
 
+    struct SkinnedMeshHandle {
+        uint32_t id = UINT32_MAX;
+    };
+
     struct MaterialHandle {
         uint32_t id = UINT32_MAX;
     };
 
     struct MeshInstanceHandle {
+        uint32_t id = UINT32_MAX;
+    };
+
+    struct SkinnedMeshInstanceHandle {
         uint32_t id = UINT32_MAX;
     };
 
@@ -331,6 +357,48 @@ namespace Renderer {
     struct StaticMeshDescriptor {
         std::string name;
         std::vector<StaticSubmeshDescriptor> submeshes;
+    };
+
+    struct SkinnedSubmeshDescriptor {
+        std::vector<SkinnedMeshVertex> vertices;
+        std::vector<uint32_t> indices;
+        MaterialHandle material;
+        uint32_t skinIndex = UINT32_MAX;
+    };
+
+    struct SkinnedMeshDescriptor {
+        std::string name;
+        std::vector<SkinnedSubmeshDescriptor> submeshes;
+        uint32_t maxInfluencesPerVertex = 0;
+        uint32_t jointCount = 0;
+        uint32_t truncatedInfluenceVertexCount = 0;
+        uint32_t zeroWeightVertexCount = 0;
+        uint32_t normalizedWeightVertexCount = 0;
+    };
+
+    struct SkinnedMeshDiagnostics {
+        bool valid = false;
+        std::string name;
+        uint32_t submeshCount = 0;
+        uint32_t vertexCount = 0;
+        uint32_t indexCount = 0;
+        uint32_t jointCount = 0;
+        uint32_t maxInfluenceCount = 0;
+        uint32_t truncatedInfluenceVertexCount = 0;
+        uint32_t zeroWeightVertexCount = 0;
+        uint32_t normalizedWeightVertexCount = 0;
+        uint32_t validMaterialReferenceCount = 0;
+        uint32_t invalidMaterialReferenceCount = 0;
+    };
+
+    struct SkinnedInstanceDiagnostics {
+        bool valid = false;
+        SkinnedMeshHandle mesh;
+        RenderVisibility visibility;
+        RenderGroupHandle renderGroup;
+        uint32_t submittedJointCount = 0;
+        uint32_t truncatedJointCount = 0;
+        bool boundsValid = false;
     };
 
     bool initSceneRenderer();
@@ -354,8 +422,20 @@ namespace Renderer {
     StaticMeshHandle createStaticMesh(const StaticMeshDescriptor& descriptor);
     StaticMeshHandle createTexturedCubeMesh();
     void destroyStaticMesh(StaticMeshHandle mesh);
+    SkinnedMeshHandle createSkinnedMesh(const SkinnedMeshDescriptor& descriptor);
+    void destroySkinnedMesh(SkinnedMeshHandle mesh);
+    SkinnedMeshDiagnostics skinnedMeshDiagnostics(SkinnedMeshHandle mesh);
     MeshInstanceHandle createInstance(StaticMeshHandle mesh);
     void destroyInstance(MeshInstanceHandle instance);
+    SkinnedMeshInstanceHandle createSkinnedInstance(SkinnedMeshHandle mesh);
+    void destroySkinnedInstance(SkinnedMeshInstanceHandle instance);
+    void setSkinnedInstanceTransform(SkinnedMeshInstanceHandle instance, const glm::mat4& transform);
+    void setSkinnedInstanceRenderLayer(SkinnedMeshInstanceHandle instance, RenderLayer layer);
+    void setSkinnedInstanceMaxDrawDistance(SkinnedMeshInstanceHandle instance, float maxDrawDistance);
+    void setSkinnedInstanceRenderGroup(SkinnedMeshInstanceHandle instance, RenderGroupHandle group);
+    void clearSkinnedInstanceRenderGroup(SkinnedMeshInstanceHandle instance);
+    void setSkinnedInstanceJointMatrices(SkinnedMeshInstanceHandle instance, std::span<const glm::mat4> matrices);
+    SkinnedInstanceDiagnostics skinnedInstanceDiagnostics(SkinnedMeshInstanceHandle instance);
     TerrainHandle createTerrainTile(
         const std::vector<MeshVertex>& vertices,
         const std::vector<uint32_t>& indices,

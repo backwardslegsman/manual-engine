@@ -737,3 +737,14 @@ Changed:
 Rationale:
 - Release authored scene startup should be able to skip source glTF parsing when a matching derived cache exists.
 - Keeping cache files derived and optional preserves robust source fallback while preparing for later texture/cache processing phases.
+## 2026-06-18 - Scene Component Runtime Roadmap
+
+Changed:
+- Added `docs/scene_component_roadmap.md` with a high-level scene/component runtime roadmap and granular per-phase plans.
+- Added `docs/scene_runtime/README.md` as the index for future implementable scene-runtime phase plans.
+- Added documentation-only skeleton guidance for future scene, component, physics, scripting, debug visualization, and asset registry source areas.
+- Updated asset guidance to reflect that general authored import can preserve skeletal/animated CPU data while static runtime loaders reject unsupported animated payloads.
+
+Rationale:
+- The next architecture pass should consolidate existing procedural, authored scene, animated model, renderer, navigation, cache, and async systems instead of rebuilding them independently.
+- Adding guidance files now makes future implementation work easier to scope without introducing build-affecting code.
