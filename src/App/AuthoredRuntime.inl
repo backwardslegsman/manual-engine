@@ -6,11 +6,16 @@
     constexpr const char* DefaultSponzaScenePath = "assets/main_sponza/NewSponza_Main_glTF_003.gltf";
     constexpr const char* DemoAuthoredSceneFixturePath = "tests/assets/fixtures/authored_scene_fixture.gltf";
     constexpr const char* DemoAnimatedModelFixturePath = "tests/assets/fixtures/skinned_animation_fixture.gltf";
+    constexpr const char* ReleaseKayKitAnimatedModelPath =
+        "assets/KayKit_Adventurers_2.0_FREE/Animations/gltf/Rig_Medium/Rig_Medium_MovementBasic.glb";
+    constexpr const char* ReleaseKayKitKnightTexturePath =
+        "assets/KayKit_Adventurers_2.0_FREE/Characters/gltf/knight_texture.png";
 
     struct AppSceneSelection {
         AppSceneMode mode = BuildDebugToolsEnabled ? AppSceneMode::Procedural : AppSceneMode::Authored;
         std::filesystem::path authoredPath = DefaultSponzaScenePath;
-        std::filesystem::path animatedModelPath = DemoAnimatedModelFixturePath;
+        std::filesystem::path animatedModelPath =
+            BuildDebugToolsEnabled ? DemoAnimatedModelFixturePath : ReleaseKayKitAnimatedModelPath;
         bool authoredPathExplicit = false;
         bool animatedModelPathExplicit = false;
     };
@@ -173,12 +178,18 @@
         Engine::PartitionedAuthoredScene streamingScene;
         Engine::Scene sceneRuntime;
         std::unique_ptr<Engine::SceneRenderBridge> sceneRenderBridge;
+        std::unique_ptr<Engine::SceneAnimatedModelAdapter> sceneAnimatedAdapter;
         Engine::RendererSceneRenderBackend sceneRenderBackend;
         Engine::SceneAuthoredAdapterResult sceneAdapter;
+        Engine::SceneAnimatedAdapterResult sceneAnimatedResult;
         AuthoredFallbackScene fallback;
         bool usingFallback = false;
         bool usingStreaming = false;
         bool usingSceneAdapter = false;
+        bool usingSceneAnimatedAdapter = false;
+        bool sceneAnimatedPlaced = false;
+        glm::vec3 sceneAnimatedFocus{0.0f};
+        float sceneAnimatedCameraDistance = 20.0f;
         bool showingPlaceholder = false;
         bool frameSceneAfterCommit = false;
         enum class AsyncPhase {
@@ -210,8 +221,13 @@
                 sceneRenderBridge->releaseRendererResources(sceneRenderBackend);
             }
             Engine::releaseSceneAuthoredAdapterResources(sceneAdapter.resources, assetCache);
+            if (sceneAnimatedAdapter) {
+                sceneAnimatedAdapter->releaseResources(sceneAnimatedResult.resources, assetCache);
+                sceneAnimatedAdapter.reset();
+            }
             sceneRenderBridge.reset();
             usingSceneAdapter = false;
+            usingSceneAnimatedAdapter = false;
             streamingScene.shutdown();
             scene.shutdown();
             fallback.shutdown();
@@ -284,6 +300,213 @@
                 Renderer::setSkinnedInstanceTransform(instance->handle, transform);
             }
         }
+    }
+
+    void placeSceneAnimatedSampleNearBounds(AuthoredRuntime& runtime)
+    {
+        if (!runtime.usingSceneAnimatedAdapter || runtime.sceneAnimatedPlaced) {
+            return;
+        }
+
+        const glm::vec3 center = (runtime.bounds.min + runtime.bounds.max) * 0.5f;
+        const glm::vec3 extents = glm::max(runtime.bounds.max - runtime.bounds.min, glm::vec3{2.0f});
+        const float sceneRadius = std::max(glm::length(extents) * 0.5f, 2.0f);
+        const float heightOffset = std::clamp(sceneRadius * 0.08f, 4.0f, 18.0f);
+        const float sampleScale = std::clamp(sceneRadius * 0.12f, 8.0f, 60.0f);
+        const glm::vec3 position{center.x, runtime.bounds.max.y + heightOffset, center.z};
+        for (const Engine::SceneAnimatedNodeBinding& binding : runtime.sceneAnimatedResult.nodes) {
+            if (!runtime.sceneRuntime.contains(binding.actor) || runtime.sceneRuntime.parent(binding.actor).has_value()) {
+                continue;
+            }
+
+            std::optional<Engine::SceneTransform> transform = runtime.sceneRuntime.localTransform(binding.actor);
+            if (!transform) {
+                continue;
+            }
+            transform->translation += position;
+            transform->scale *= sampleScale;
+            runtime.sceneRuntime.setLocalTransform(binding.actor, *transform);
+        }
+        runtime.sceneAnimatedFocus = position + glm::vec3{0.0f, sampleScale * 1.25f, 0.0f};
+        runtime.sceneAnimatedCameraDistance = std::max(sampleScale * 8.0f, 35.0f);
+        runtime.bounds.max.y = std::max(runtime.bounds.max.y, position.y + sampleScale * 3.0f);
+        runtime.sceneAnimatedPlaced = true;
+    }
+
+    void frameCameraForSceneAnimatedSample(Engine::OrbitCameraController& camera, const AuthoredRuntime& runtime)
+    {
+        if (!runtime.usingSceneAnimatedAdapter || !runtime.sceneAnimatedPlaced) {
+            return;
+        }
+
+        Engine::CameraSettings settings = camera.settings();
+        settings.nearPlane = 0.05f;
+        settings.farPlane = std::max(runtime.sceneAnimatedCameraDistance * 8.0f, 1000.0f);
+        settings.maxDistance = std::max(runtime.sceneAnimatedCameraDistance * 2.0f, 120.0f);
+        const float padding = std::max(runtime.sceneAnimatedCameraDistance, 50.0f);
+        settings.minPivotXZ = {runtime.sceneAnimatedFocus.x - padding, runtime.sceneAnimatedFocus.z - padding};
+        settings.maxPivotXZ = {runtime.sceneAnimatedFocus.x + padding, runtime.sceneAnimatedFocus.z + padding};
+        settings.edgePanSpeed = std::max(runtime.sceneAnimatedCameraDistance * 0.35f, 20.0f);
+        settings.mousePanSensitivity = 0.12f;
+        settings.zoomSensitivity = std::max(runtime.sceneAnimatedCameraDistance * 0.08f, 8.0f);
+        camera.settings() = settings;
+
+        Engine::CameraState state;
+        state.mode = Engine::CameraMode::Free;
+        state.pivot = runtime.sceneAnimatedFocus;
+        state.yawRadians = glm::radians(35.0f);
+        state.pitchRadians = glm::radians(-28.0f);
+        state.distance = std::clamp(runtime.sceneAnimatedCameraDistance, settings.minDistance, settings.maxDistance);
+        camera.setState(state);
+    }
+
+    void applyReleaseSceneAnimatedKayKitTextureMaterial(
+        AuthoredRuntime& runtime,
+        Engine::AssetCache& assetCache)
+    {
+        const std::filesystem::path texturePath = resolveAuthoredScenePath(ReleaseKayKitKnightTexturePath);
+        if (!std::filesystem::exists(texturePath)) {
+            SDL_Log("Release KayKit texture unavailable: %s", texturePath.generic_string().c_str());
+            return;
+        }
+
+        Renderer::TextureDescriptor textureDescriptor;
+        textureDescriptor.slot = Renderer::TextureSlot::BaseColor;
+        textureDescriptor.colorSpace = Renderer::TextureColorSpace::Srgb;
+        textureDescriptor.wrapU = Renderer::TextureWrap::Repeat;
+        textureDescriptor.wrapV = Renderer::TextureWrap::Repeat;
+        textureDescriptor.minFilter = Renderer::TextureFilter::Linear;
+        textureDescriptor.magFilter = Renderer::TextureFilter::Linear;
+        textureDescriptor.mipFilter = Renderer::TextureFilter::Linear;
+        textureDescriptor.generateMips = true;
+        textureDescriptor.debugName = "ReleaseKayKitKnightBaseColor";
+
+        Engine::CachedTexture texture = assetCache.acquireTexture(texturePath, textureDescriptor);
+        if (!Renderer::isValid(texture.handle)) {
+            SDL_Log("Failed to acquire release KayKit texture: %s", texturePath.generic_string().c_str());
+            return;
+        }
+        runtime.sceneAnimatedResult.resources.textures.push_back(texture);
+
+        uint32_t materialIndex = 0;
+        for (Renderer::MaterialHandle material : runtime.sceneAnimatedResult.resources.materials) {
+            if (material.id == UINT32_MAX) {
+                continue;
+            }
+
+            Renderer::MaterialDescriptor descriptor;
+            descriptor.name = "ReleaseKayKitKnightMaterial." + std::to_string(materialIndex);
+            descriptor.baseColorFactor = glm::vec4{1.0f};
+            descriptor.baseColorTexture = texture.handle;
+            descriptor.metallicFactor = 0.0f;
+            descriptor.roughnessFactor = 0.65f;
+            descriptor.alphaMode = Renderer::MaterialDescriptor::AlphaMode::Opaque;
+            descriptor.doubleSided = true;
+            Renderer::setMaterialDescriptor(material, descriptor);
+            ++materialIndex;
+        }
+
+        SDL_Log(
+            "Applied release KayKit knight texture to %u animated materials: %s",
+            materialIndex,
+            texturePath.generic_string().c_str());
+    }
+
+    void startReleaseSceneAnimatedSampleRuntime(
+        AuthoredRuntime& runtime,
+        Engine::AssetCache& assetCache,
+        const std::filesystem::path& path)
+    {
+        if (!runtime.sceneRenderBridge) {
+            return;
+        }
+
+        const std::filesystem::path resolvedPath = resolveAuthoredScenePath(path);
+        if (!std::filesystem::exists(resolvedPath)) {
+            SDL_Log("Release scene animated adapter sample unavailable: %s", resolvedPath.generic_string().c_str());
+            return;
+        }
+
+        const Assets::Assimp::ImportedScene importedScene = Assets::Assimp::importScene(resolvedPath);
+        if (!importedScene.success) {
+            SDL_Log("Failed to import release animated adapter sample: %s", importedScene.error.c_str());
+            return;
+        }
+
+        runtime.sceneAnimatedAdapter =
+            std::make_unique<Engine::SceneAnimatedModelAdapter>(runtime.sceneRuntime, *runtime.sceneRenderBridge);
+        Engine::SceneAnimatedAdapterSettings settings;
+        settings.loadTextures = true;
+        settings.createSkinnedMeshes = true;
+        settings.renderLayer = Renderer::RenderLayer::Props;
+        settings.maxDrawDistance = 0.0f;
+        settings.defaultClipIndex = 0;
+        settings.playOnStart = true;
+        settings.loop = true;
+        settings.playbackSpeed = 1.0f;
+        settings.materialNamePrefix = "ReleaseKayKitAnimatedMaterial";
+        settings.textureDebugNamePrefix = "ReleaseKayKitAnimated";
+        runtime.sceneAnimatedResult = runtime.sceneAnimatedAdapter->adaptImportedScene(
+            importedScene,
+            resolvedPath,
+            assetCache,
+            settings);
+        if (!runtime.sceneAnimatedResult.success) {
+            SDL_Log("Failed to adapt release animated sample through scene adapter: %s",
+                runtime.sceneAnimatedResult.message.c_str());
+            runtime.sceneAnimatedAdapter->releaseResources(runtime.sceneAnimatedResult.resources, assetCache);
+            runtime.sceneAnimatedAdapter.reset();
+            return;
+        }
+
+        runtime.usingSceneAnimatedAdapter = true;
+        applyReleaseSceneAnimatedKayKitTextureMaterial(runtime, assetCache);
+        placeSceneAnimatedSampleNearBounds(runtime);
+        runtime.sceneRuntime.updateWorldTransforms();
+        runtime.sceneAnimatedAdapter->updateAnimator(runtime.sceneAnimatedResult.animator, 0.0f);
+        runtime.sceneRenderBridge->sync(runtime.sceneRenderBackend);
+        const Engine::SceneRenderBridgeDiagnostics bridgeDiagnostics = runtime.sceneRenderBridge->diagnostics();
+        uint32_t validSkinnedResourceCount = 0;
+        std::string skinnedResourceIds;
+        for (Renderer::SkinnedMeshHandle mesh : runtime.sceneAnimatedResult.resources.skinnedMeshes) {
+            if (!skinnedResourceIds.empty()) {
+                skinnedResourceIds += ",";
+            }
+            skinnedResourceIds += std::to_string(mesh.id);
+            if (mesh.id != UINT32_MAX) {
+                ++validSkinnedResourceCount;
+            }
+        }
+        SDL_Log(
+            "Loaded release KayKit animated sample through scene adapter: %s (nodes %u skins %u skinnedMeshes %u validSkinnedResources %u resourceSlots %zu resourceIds [%s] components %u clips %u liveSkinnedInstances %u invalidNodes %u invalidMeshes %u invalidSkins %u invalidJoints %u invalidMaterials %u warnings %zu)",
+            resolvedPath.generic_string().c_str(),
+            runtime.sceneAnimatedResult.diagnostics.createdActorCount,
+            runtime.sceneAnimatedResult.diagnostics.createdSkeletonCount,
+            runtime.sceneAnimatedResult.diagnostics.createdSkinnedMeshCount,
+            validSkinnedResourceCount,
+            runtime.sceneAnimatedResult.resources.skinnedMeshes.size(),
+            skinnedResourceIds.c_str(),
+            runtime.sceneAnimatedResult.diagnostics.createdSkinnedComponentCount,
+            runtime.sceneAnimatedResult.diagnostics.importedAnimationCount,
+            bridgeDiagnostics.liveSkinnedInstanceCount,
+            runtime.sceneAnimatedResult.diagnostics.invalidNodeReferenceCount,
+            runtime.sceneAnimatedResult.diagnostics.invalidMeshReferenceCount,
+            runtime.sceneAnimatedResult.diagnostics.invalidSkinReferenceCount,
+            runtime.sceneAnimatedResult.diagnostics.invalidJointReferenceCount,
+            runtime.sceneAnimatedResult.diagnostics.invalidMaterialReferenceCount,
+            runtime.sceneAnimatedResult.diagnostics.warnings.size());
+        for (const std::string& warning : runtime.sceneAnimatedResult.diagnostics.warnings) {
+            SDL_Log("Release scene animated adapter warning: %s", warning.c_str());
+        }
+    }
+
+    void updateReleaseSceneAnimatedSampleRuntime(AuthoredRuntime& runtime, float dt)
+    {
+        if (!runtime.usingSceneAnimatedAdapter || !runtime.sceneAnimatedAdapter) {
+            return;
+        }
+
+        runtime.sceneAnimatedAdapter->updateAnimator(runtime.sceneAnimatedResult.animator, dt);
     }
 
     AnimatedSampleRuntime startAnimatedSampleRuntime(

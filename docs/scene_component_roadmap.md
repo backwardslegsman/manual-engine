@@ -162,13 +162,17 @@ Exit criteria:
 
 Goal: Integrate the existing animation pipeline as scene components.
 
-- Add `SkeletonComponent` or skeleton asset reference ownership.
-- Add `AnimatorComponent` with clip index, time, speed, loop, playing, and crossfade state.
-- Add skinned mesh component binding to skeleton/skin assets.
-- Upload sampled poses to renderer skinned instances through the render bridge.
-- Preserve existing `AnimatedModel` synchronous, cache, async, and diagnostics APIs during migration.
-- Add debug controls for animator state through scene-facing diagnostics.
-- Add tests for sampling, crossfade, component removal, cache-hit loading, async loading, and leak-free shutdown.
+Detailed implementation plan: `docs/scene_runtime/phase_07_animated_model_adapter.md`.
+
+- Add a scene animated adapter that consumes already-imported or cached animated `Assets::Assimp::ImportedScene` CPU data and creates scene actors for imported nodes.
+- Preserve imported node transforms and skeleton hierarchy through `Engine::Scene`; joint actors remain normal scene actors and runtime handles remain transient.
+- Add scene-facing skeleton, animator, and skinned mesh binding records without introducing a generic ECS, animation graph, state machine, reflection, serialization, scripting, physics, or navigation coupling.
+- Reuse existing `AnimatedModel` pose math, playback state, crossfade helpers, diagnostics conventions, material/texture mapping, renderer skinned mesh descriptors, cache payloads, and async import/cache outputs.
+- Attach skinned mesh components through `SceneRenderBridge` and update their joint matrices from sampled poses during explicit adapter updates or a `VariableAnimation` scene scheduler system.
+- Keep renderer resource ownership explicit: the adapter owns created skinned meshes, optional bind-pose meshes, materials, and cached textures; the render bridge owns live skinned instances.
+- Preserve existing `AnimatedModel`, `AnimatedModelCache`, `AnimatedModelAsync`, debug App animated sample flow, and authored static scene behavior during migration.
+- Defer asset registry resource resolution, root motion, locomotion, IK, retargeting, animation graphs, additive layers, morph targets, editor UI, Lua/native hooks, and serialization.
+- Add fixture tests comparing adapter bind poses, sampled clip palettes, playback advancement, and crossfade output against the existing `AnimatedModel` runtime, plus bridge sync, scheduler ordering, invalid-reference diagnostics, cache-payload commit, and leak-free release.
 
 Exit criteria:
 

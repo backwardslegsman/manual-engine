@@ -48,7 +48,7 @@ namespace Renderer {
         float u1;
         float v1;
         uint32_t abgr = 0xffffffff;
-        uint8_t joints[4]{};
+        float joints[4]{};
         float weights[4]{};
 
         static bgfx::VertexLayout layout;

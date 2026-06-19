@@ -3,28 +3,35 @@ $output v_texcoord0, v_texcoord1, v_normal, v_tangent, v_worldPos, v_color0
 
 #include <bgfx_shader.sh>
 
-uniform mat4 u_jointPalette[256];
+uniform mat4 u_jointPalette[64];
+
+mat4 identityMatrix()
+{
+    return mat4(
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    );
+}
 
 mat4 skinMatrix(vec4 indices, vec4 weights)
 {
-    int joint0 = int(indices.x + 0.5);
-    int joint1 = int(indices.y + 0.5);
-    int joint2 = int(indices.z + 0.5);
-    int joint3 = int(indices.w + 0.5);
-    float weightSum = weights.x + weights.y + weights.z + weights.w;
+    vec4 safeIndices = clamp(indices, 0.0, 63.0);
+    vec4 safeWeights = clamp(weights, 0.0, 1.0);
+    int joint0 = int(safeIndices.x + 0.5);
+    int joint1 = int(safeIndices.y + 0.5);
+    int joint2 = int(safeIndices.z + 0.5);
+    int joint3 = int(safeIndices.w + 0.5);
+    float weightSum = safeWeights.x + safeWeights.y + safeWeights.z + safeWeights.w;
     if (weightSum <= 0.00001) {
-        return mat4(
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0
-        );
+        return identityMatrix();
     }
     return
-        u_jointPalette[joint0] * (weights.x / weightSum) +
-        u_jointPalette[joint1] * (weights.y / weightSum) +
-        u_jointPalette[joint2] * (weights.z / weightSum) +
-        u_jointPalette[joint3] * (weights.w / weightSum);
+        u_jointPalette[joint0] * (safeWeights.x / weightSum) +
+        u_jointPalette[joint1] * (safeWeights.y / weightSum) +
+        u_jointPalette[joint2] * (safeWeights.z / weightSum) +
+        u_jointPalette[joint3] * (safeWeights.w / weightSum);
 }
 
 void main()

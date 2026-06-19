@@ -26,6 +26,7 @@ add_executable(manual_engine
     src/Engine/AnimatedModel.cpp
     src/Engine/AnimatedModelAsync.cpp
     src/Engine/AnimatedModelCache.cpp
+    src/Engine/AnimatedModelPose.cpp
     src/Engine/AuthoredScene.cpp
     src/Engine/AuthoredSceneAsync.cpp
     src/Engine/AsyncWorkQueue.cpp
@@ -54,6 +55,7 @@ add_executable(manual_engine
     src/Engine/Picking.cpp
     src/Engine/ProceduralChunkContent.cpp
     src/Engine/Scene/RendererSceneRenderBackend.cpp
+    src/Engine/Scene/AnimatedSceneAdapter.cpp
     src/Engine/Scene/AuthoredSceneAdapter.cpp
     src/Engine/Scene/Scene.cpp
     src/Engine/Scene/SceneRenderBridge.cpp
@@ -233,6 +235,35 @@ target_link_libraries(manual_engine_authored_scene_adapter_tests
 
 add_test(NAME manual_engine_authored_scene_adapter_tests COMMAND manual_engine_authored_scene_adapter_tests)
 
+add_executable(manual_engine_animated_scene_adapter_tests
+    tests/scene/AnimatedSceneAdapterTestRunner.cpp
+    tests/authored_scene/RendererOwnershipStubs.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Engine/AnimatedModel.cpp
+    src/Engine/AnimatedModelCache.cpp
+    src/Engine/AnimatedModelPose.cpp
+    src/Engine/AssetCache.cpp
+    src/Engine/ImportedSceneResources.cpp
+    src/Engine/Scene/AnimatedSceneAdapter.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/Scene/SceneRenderBridge.cpp
+)
+
+target_include_directories(manual_engine_animated_scene_adapter_tests
+    PRIVATE
+        src
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+)
+
+target_link_libraries(manual_engine_animated_scene_adapter_tests
+    PRIVATE
+        assimp::assimp
+        glm::glm
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_animated_scene_adapter_tests COMMAND manual_engine_animated_scene_adapter_tests)
+
 add_executable(manual_engine_authored_scene_tests
     tests/authored_scene/AuthoredSceneTestRunner.cpp
     tests/authored_scene/RendererOwnershipStubs.cpp
@@ -240,6 +271,7 @@ add_executable(manual_engine_authored_scene_tests
     src/Engine/AnimatedModel.cpp
     src/Engine/AnimatedModelAsync.cpp
     src/Engine/AnimatedModelCache.cpp
+    src/Engine/AnimatedModelPose.cpp
     src/Engine/AssetCache.cpp
     src/Engine/AuthoredScene.cpp
     src/Engine/AuthoredSceneAsync.cpp
@@ -289,6 +321,7 @@ add_executable(manual_engine_authored_scene_smoke_tests
     src/Engine/AnimatedModel.cpp
     src/Engine/AnimatedModelAsync.cpp
     src/Engine/AnimatedModelCache.cpp
+    src/Engine/AnimatedModelPose.cpp
     src/Engine/AuthoredScene.cpp
     src/Engine/AuthoredSceneAsync.cpp
     src/Engine/AsyncWorkQueue.cpp

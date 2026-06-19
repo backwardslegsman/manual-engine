@@ -12,6 +12,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include "Engine/AnimatedModelPose.hpp"
 #include "Engine/ImportedSceneResources.hpp"
 
 namespace {
@@ -102,7 +103,7 @@ namespace {
         }
 
         for (uint32_t index = 0; index < packedCount; ++index) {
-            skinned.joints[index] = static_cast<uint8_t>(packed[index].jointIndex);
+            skinned.joints[index] = static_cast<float>(packed[index].jointIndex);
             skinned.weights[index] = std::max(packed[index].weight, 0.0f) / weightSum;
         }
 
@@ -763,31 +764,7 @@ namespace Engine {
 
     AnimatedSkeletonPose AnimatedModel::bindPose() const
     {
-        AnimatedSkeletonPose pose;
-        pose.diagnostics.valid = loaded_;
-        pose.diagnostics.jointCount = static_cast<uint32_t>(imported_.joints.size());
-        if (!loaded_) {
-            pose.diagnostics.warnings.push_back("Animated model is not loaded.");
-            return pose;
-        }
-
-        pose.joints.reserve(imported_.joints.size());
-        for (const Assets::Assimp::ImportedSceneJoint& joint : imported_.joints) {
-            AnimatedJointPose jointPose;
-            jointPose.localTransform = joint.localBindTransform;
-            jointPose.modelTransform = joint.worldBindTransform;
-            jointPose.inverseBindMatrix = joint.inverseBindMatrix;
-            jointPose.finalSkinningMatrix = jointPose.modelTransform * jointPose.inverseBindMatrix;
-            if (!joint.nodeIndex) {
-                ++pose.diagnostics.missingJointNodeCount;
-            }
-            pose.joints.push_back(jointPose);
-        }
-        if (pose.diagnostics.missingJointNodeCount > 0) {
-            pose.diagnostics.valid = false;
-            pose.diagnostics.warnings.push_back("One or more joints are missing node associations.");
-        }
-        return pose;
+        return sampleImportedSceneBindPose(imported_, loaded_);
     }
 
     AnimatedSkeletonPose AnimatedModel::sampleClip(
@@ -795,87 +772,12 @@ namespace Engine {
         float timeSeconds,
         const AnimationSampleSettings& settings) const
     {
-        AnimatedSkeletonPose pose;
-        pose.diagnostics.sampledClipIndex = clipIndex;
-        pose.diagnostics.jointCount = static_cast<uint32_t>(imported_.joints.size());
-        if (!loaded_) {
-            pose.diagnostics.warnings.push_back("Animated model is not loaded.");
-            return pose;
-        }
-        if (clipIndex >= imported_.animations.size()) {
-            pose.diagnostics.warnings.push_back("Animation clip index is invalid.");
-            return pose;
-        }
-
-        const Assets::Assimp::ImportedSceneAnimationClip& clip = imported_.animations[clipIndex];
-        if (clip.channels.empty() || clip.durationSeconds <= 0.0f) {
-            pose.diagnostics.warnings.push_back("Animation clip is empty.");
-            return pose;
-        }
-
-        const float sampleTime = normalizeSampleTime(timeSeconds, clip.durationSeconds, settings.loop);
-        pose.diagnostics.sampledTimeSeconds = sampleTime;
-
-        std::vector<NodeTransformComponents> components;
-        components.reserve(imported_.nodes.size());
-        std::vector<glm::mat4> localTransforms;
-        localTransforms.reserve(imported_.nodes.size());
-        for (const Assets::Assimp::ImportedSceneNode& node : imported_.nodes) {
-            components.push_back(decomposeNodeTransform(node.localTransform));
-            localTransforms.push_back(node.localTransform);
-        }
-
-        for (const Assets::Assimp::ImportedSceneAnimationChannel& channel : clip.channels) {
-            if (!channel.targetNodeIndex || *channel.targetNodeIndex >= components.size()) {
-                ++pose.diagnostics.missingChannelTargetCount;
-                continue;
-            }
-            NodeTransformComponents& target = components[*channel.targetNodeIndex];
-            target.translation = sampleVec3Keys(channel.translationKeys, sampleTime, target.translation, pose.diagnostics);
-            target.rotation = sampleQuatKeys(channel.rotationKeys, sampleTime, target.rotation, pose.diagnostics);
-            target.scale = sampleVec3Keys(channel.scaleKeys, sampleTime, target.scale, pose.diagnostics);
-            localTransforms[*channel.targetNodeIndex] = composeNodeTransform(target);
-        }
-
-        std::vector<glm::mat4> modelTransforms;
-        computeNodeModelTransforms(imported_, localTransforms, modelTransforms, settings.rootTransform);
-
-        pose.joints.reserve(imported_.joints.size());
-        for (const Assets::Assimp::ImportedSceneJoint& joint : imported_.joints) {
-            AnimatedJointPose jointPose;
-            jointPose.localTransform = joint.localBindTransform;
-            jointPose.modelTransform = joint.worldBindTransform;
-            jointPose.inverseBindMatrix = joint.inverseBindMatrix;
-            if (joint.nodeIndex && *joint.nodeIndex < modelTransforms.size()) {
-                jointPose.localTransform = localTransforms[*joint.nodeIndex];
-                jointPose.modelTransform = modelTransforms[*joint.nodeIndex];
-            } else {
-                ++pose.diagnostics.missingJointNodeCount;
-            }
-            jointPose.finalSkinningMatrix = jointPose.modelTransform * jointPose.inverseBindMatrix;
-            pose.joints.push_back(jointPose);
-        }
-
-        pose.diagnostics.valid = pose.diagnostics.missingJointNodeCount == 0 &&
-            pose.diagnostics.missingChannelTargetCount == 0;
-        if (pose.diagnostics.missingJointNodeCount > 0) {
-            pose.diagnostics.warnings.push_back("One or more joints are missing node associations.");
-        }
-        if (pose.diagnostics.missingChannelTargetCount > 0) {
-            pose.diagnostics.warnings.push_back("One or more animation channels target missing nodes.");
-        }
-        return pose;
+        return sampleImportedSceneClip(imported_, loaded_, clipIndex, timeSeconds, settings);
     }
 
     void AnimatedModel::advancePlayback(AnimationPlaybackState& state, float deltaSeconds) const
     {
-        if (!state.playing || state.clipIndex >= imported_.animations.size()) {
-            return;
-        }
-
-        const float duration = imported_.animations[state.clipIndex].durationSeconds;
-        state.timeSeconds += deltaSeconds * state.speed;
-        state.timeSeconds = normalizeSampleTime(state.timeSeconds, duration, state.loop);
+        advanceImportedScenePlayback(imported_, state, deltaSeconds);
     }
 
     bool AnimatedModel::updateSkinnedPose(uint32_t instanceIndex, const AnimatedSkeletonPose& pose)
@@ -884,7 +786,7 @@ namespace Engine {
             return false;
         }
 
-        const std::vector<glm::mat4> palette = makePosePalette(pose);
+        const std::vector<glm::mat4> palette = animatedPosePalette(pose);
         Renderer::setSkinnedInstanceJointMatrices(skinnedInstances_[instanceIndex].handle, palette);
         return true;
     }
@@ -1045,9 +947,9 @@ namespace Engine {
                 descriptor.name = importedMesh.name;
                 descriptor.jointCount = static_cast<uint32_t>(imported.joints.size());
                 descriptor.submeshes.reserve(importedMesh.primitives.size());
-                const uint32_t skinIndex = findSkinIndexForMesh(imported, meshIndex);
+                const uint32_t skinIndex = animatedSkinIndexForMesh(imported, meshIndex);
 
-                SkinnedVertexPackingStats packingStats;
+                AnimatedSkinnedVertexPackingStats packingStats;
                 for (const Assets::Assimp::ImportedScenePrimitive& primitive : importedMesh.primitives) {
                     Renderer::SkinnedSubmeshDescriptor submesh;
                     submesh.vertices.reserve(primitive.vertices.size());
@@ -1059,7 +961,7 @@ namespace Engine {
                         ++result.model.diagnostics_.invalidMaterialReferenceCount;
                     }
                     for (const Assets::Assimp::ImportedSceneVertex& vertex : primitive.vertices) {
-                        submesh.vertices.push_back(convertSkinnedVertex(vertex, packingStats));
+                        submesh.vertices.push_back(animatedImportedSceneVertexToSkinnedMeshVertex(vertex, packingStats));
                     }
                     descriptor.submeshes.push_back(std::move(submesh));
                 }
@@ -1108,7 +1010,7 @@ namespace Engine {
         }
 
         if (settings.createSkinnedInstances && settings.createSkinnedMeshes) {
-            const std::vector<glm::mat4> bindPosePalette = makeBindPosePalette(imported);
+            const std::vector<glm::mat4> bindPosePalette = animatedBindPosePalette(imported);
             for (uint32_t nodeIndex = 0; nodeIndex < imported.nodes.size(); ++nodeIndex) {
                 const Assets::Assimp::ImportedSceneNode& node = imported.nodes[nodeIndex];
                 for (uint32_t meshIndex : node.meshIndices) {

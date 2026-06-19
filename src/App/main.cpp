@@ -34,6 +34,7 @@
 #include "Engine/AuthoredSceneAsync.hpp"
 #include "Engine/AsyncWorkQueue.hpp"
 #include "Engine/AssetCache.hpp"
+#include "Engine/Scene/AnimatedSceneAdapter.hpp"
 #include "Engine/Scene/AuthoredSceneAdapter.hpp"
 #include "Engine/Scene/RendererSceneRenderBackend.hpp"
 #include "Engine/Scene/Scene.hpp"
@@ -627,8 +628,12 @@ namespace {
         const std::filesystem::path startupAuthoredPath = chooseStartupAuthoredScenePath(sceneSelection);
         SDL_Log("Authored startup scene: %s", startupAuthoredPath.generic_string().c_str());
         AuthoredRuntime runtime = startAuthoredRuntime(startupAuthoredPath, assetCache, authoredAsyncWork);
-        AnimatedSampleRuntime animatedRuntime =
-            startAnimatedSampleRuntime(sceneSelection.animatedModelPath, authoredAsyncWork);
+        AnimatedSampleRuntime animatedRuntime;
+        if constexpr (BuildDebugToolsEnabled) {
+            animatedRuntime = startAnimatedSampleRuntime(sceneSelection.animatedModelPath, authoredAsyncWork);
+        } else {
+            startReleaseSceneAnimatedSampleRuntime(runtime, assetCache, sceneSelection.animatedModelPath);
+        }
 
         Engine::CameraSettings cameraSettings;
         cameraSettings.farPlane = 1000.0f;
@@ -638,6 +643,9 @@ namespace {
         cameraSettings.zoomSensitivity = 24.0f;
         Engine::OrbitCameraController camera(cameraSettings);
         frameCameraForBounds(camera, runtime.bounds);
+        if constexpr (!BuildDebugToolsEnabled) {
+            frameCameraForSceneAnimatedSample(camera, runtime);
+        }
 
         Engine::InputMappingLoadResult inputMappingLoad = Engine::InputMapping::loadFromYaml("assets/config/input.yaml");
         if (!inputMappingLoad.success) {
@@ -650,6 +658,9 @@ namespace {
         debugSettings.sceneMode = runtime.usingFallback ? "Authored fallback" : "Authored";
         debugSettings.sceneStatus = runtime.status;
         debugSettings.propMaxDrawDistance = 0.0f;
+        if constexpr (!BuildDebugToolsEnabled) {
+            debugSettings.enableDistanceCulling = false;
+        }
         Renderer::DebugDrawSettings debugDrawSettings;
         Renderer::DebugUi::WorldSaveDebugControls worldSaveControls;
         worldSaveControls.status = runtime.status;
@@ -707,6 +718,7 @@ namespace {
             resizeBackbufferIfNeeded(window, currentWidth, currentHeight);
             const int width = currentWidth;
             const int height = currentHeight;
+            input.setViewportSize(width, height);
             if (debugUiEnabled) {
                 Renderer::DebugUi::beginFrame(viewportExtent(width), viewportExtent(height));
                 debugUiWantsMouse = Renderer::DebugUi::wantsMouseCapture();
@@ -731,29 +743,47 @@ namespace {
 
             for (Engine::AsyncCompletedJob& completed : authoredAsyncWork.pollCompleted()) {
                 processAuthoredAsyncCompletion(runtime, assetCache, authoredAsyncWork, completed);
-                processAnimatedAsyncCompletion(animatedRuntime, assetCache, authoredAsyncWork, completed);
+                if constexpr (BuildDebugToolsEnabled) {
+                    processAnimatedAsyncCompletion(animatedRuntime, assetCache, authoredAsyncWork, completed);
+                }
             }
             if (runtime.frameSceneAfterCommit) {
                 runtime.frameSceneAfterCommit = false;
                 frameCameraForBounds(camera, runtime.bounds);
-                placeAnimatedSampleNearBounds(animatedRuntime, runtime.bounds);
-                animatedRuntime.placed = animatedRuntime.loaded;
+                if constexpr (BuildDebugToolsEnabled) {
+                    placeAnimatedSampleNearBounds(animatedRuntime, runtime.bounds);
+                    animatedRuntime.placed = animatedRuntime.loaded;
+                } else {
+                    placeSceneAnimatedSampleNearBounds(runtime);
+                    frameCameraForSceneAnimatedSample(camera, runtime);
+                }
             }
-            if (animatedRuntime.loaded && !animatedRuntime.placed) {
-                placeAnimatedSampleNearBounds(animatedRuntime, runtime.bounds);
-                animatedRuntime.placed = true;
+            if constexpr (BuildDebugToolsEnabled) {
+                if (animatedRuntime.loaded && !animatedRuntime.placed) {
+                    placeAnimatedSampleNearBounds(animatedRuntime, runtime.bounds);
+                    animatedRuntime.placed = true;
+                }
+                applyAnimatedDebugSettings(animatedRuntime, debugSettings);
+                updateAnimatedSampleRuntime(animatedRuntime, dt);
+            } else {
+                updateReleaseSceneAnimatedSampleRuntime(runtime, dt);
             }
-            applyAnimatedDebugSettings(animatedRuntime, debugSettings);
-            updateAnimatedSampleRuntime(animatedRuntime, dt);
-            if (runtime.usingSceneAdapter && runtime.sceneRenderBridge) {
+            if ((runtime.usingSceneAdapter || runtime.usingSceneAnimatedAdapter) && runtime.sceneRenderBridge) {
                 runtime.sceneRuntime.updateWorldTransforms();
                 runtime.sceneRenderBridge->sync(runtime.sceneRenderBackend);
                 const Engine::SceneRenderBridgeDiagnostics bridgeDiagnostics = runtime.sceneRenderBridge->diagnostics();
                 debugSettings.sceneStatus = runtime.status +
                     " | scene actors " + std::to_string(runtime.sceneAdapter.diagnostics.createdActorCount) +
                     " mesh components " + std::to_string(bridgeDiagnostics.meshComponentCount) +
-                    " live instances " + std::to_string(bridgeDiagnostics.liveMeshInstanceCount) +
+                    " skinned components " + std::to_string(bridgeDiagnostics.skinnedMeshComponentCount) +
+                    " live instances " + std::to_string(
+                        bridgeDiagnostics.liveMeshInstanceCount + bridgeDiagnostics.liveSkinnedInstanceCount) +
                     " lights " + std::to_string(bridgeDiagnostics.liveLightCount);
+                if (runtime.usingSceneAnimatedAdapter) {
+                    debugSettings.sceneStatus +=
+                        " | KayKit animated components " +
+                        std::to_string(runtime.sceneAnimatedResult.diagnostics.createdSkinnedComponentCount);
+                }
                 debugSettings.hasAuthoredSceneDiagnostics = false;
             } else if (runtime.usingStreaming) {
                 runtime.streamingScene.updateStreaming(camera.position(), authoredStreamingWork);
@@ -775,12 +805,18 @@ namespace {
                 debugSettings.sceneStatus = runtime.status;
                 debugSettings.hasAuthoredSceneDiagnostics = false;
             }
-            populateAnimatedDebugSettings(debugSettings, animatedRuntime);
+            if constexpr (BuildDebugToolsEnabled) {
+                populateAnimatedDebugSettings(debugSettings, animatedRuntime);
+            }
             debugSettings.sceneMode = runtime.usingFallback
                 ? "Authored fallback"
-                : (runtime.usingSceneAdapter
+                : (runtime.usingSceneAdapter && runtime.usingSceneAnimatedAdapter
+                    ? "Authored scene adapter + animated sample"
+                    : (runtime.usingSceneAnimatedAdapter && !runtime.usingSceneAdapter
+                    ? "Animated scene adapter"
+                    : (runtime.usingSceneAdapter
                     ? "Authored scene adapter"
-                    : (runtime.usingStreaming ? "Authored streaming" : "Authored loading"));
+                    : (runtime.usingStreaming ? "Authored streaming" : "Authored loading"))));
 
             Renderer::setAtmosphereSettings(atmosphere);
             if (BuildDebugToolsEnabled) {
@@ -806,10 +842,21 @@ namespace {
                 viewportExtent(width),
                 viewportExtent(height),
                 debugSettings.layerMask,
-                debugSettings.enableDistanceCulling,
+                BuildDebugToolsEnabled ? debugSettings.enableDistanceCulling : false,
             };
 
             const Renderer::SceneDrawStats drawStats = Renderer::drawScene(renderView);
+            if constexpr (!BuildDebugToolsEnabled) {
+                if (runtime.usingSceneAnimatedAdapter) {
+                    const std::string title =
+                        "ManualEngine Release Sponza + KayKit | skinned live " +
+                        std::to_string(drawStats.liveSkinnedMeshInstances) +
+                        " visible " + std::to_string(drawStats.visibleSkinnedMeshInstances) +
+                        " submitted " + std::to_string(drawStats.submittedSkinnedMeshInstances) +
+                        " drawItems " + std::to_string(drawStats.submittedSkinnedMeshDrawItems);
+                    SDL_SetWindowTitle(window, title.c_str());
+                }
+            }
             if (BuildDebugToolsEnabled) {
                 Renderer::drawDebugPrimitives(renderView);
             }
@@ -831,7 +878,9 @@ namespace {
                     &worldSaveControls,
                     {});
                 Renderer::DebugUi::render(1, viewportExtent(width), viewportExtent(height));
-                applyAnimatedDebugSettings(animatedRuntime, debugSettings);
+                if constexpr (BuildDebugToolsEnabled) {
+                    applyAnimatedDebugSettings(animatedRuntime, debugSettings);
+                }
             }
 
             bgfx::touch(0);

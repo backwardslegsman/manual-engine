@@ -14,7 +14,7 @@
 namespace Renderer {
     constexpr uint32_t MaxForwardLights = 16;
     constexpr uint32_t MaxSkinnedInfluencesPerVertex = 4;
-    constexpr uint32_t MaxSkinnedJointsPerMesh = 256;
+    constexpr uint32_t MaxSkinnedJointsPerMesh = 64;
 
     enum class RenderLayer : uint32_t {
         None = 0,

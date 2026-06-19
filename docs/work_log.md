@@ -901,3 +901,241 @@ Changed:
 
 Rationale:
 - The release sample should exercise the new scene actor/component adapter path while preserving the mature debug authored runtime for inspection and regression coverage.
+
+## 2026-06-19 - Animated Model Adapter Phase 7 Plan
+
+Changed:
+- Added a dedicated Phase 7 animated model adapter plan covering scene actor conversion, skeleton/joint bindings, animator state, skinned mesh bridge components, scheduler integration, diagnostics, resource ownership, and fixture tests.
+- Expanded the scene/component roadmap milestone to link the detailed plan and preserve existing `AnimatedModel`, cache, async, renderer skinned mesh, and App animated sample ownership during migration.
+
+Rationale:
+- Animated assets need a scene-component adapter path that reuses proven animation runtime behavior before root motion, gameplay movement, serialization, scripting, or editor-facing animation systems are introduced.
+
+## 2026-06-19 - Animated Model Adapter Phase 7 Implementation
+
+Changed:
+- Added shared animated pose helpers used by the existing `AnimatedModel` runtime and the new scene animated adapter for bind poses, clip sampling, playback advancement, joint palettes, and skinned vertex packing.
+- Added `Engine::SceneAnimatedModelAdapter` for converting already-imported animated scene CPU data into scene actors, skeleton bindings, animator state, adapter-owned renderer resources, and scene render bridge skinned mesh components.
+- Added isolated animated scene adapter tests covering actor/hierarchy/skeleton/component/resource creation, pose parity with shared animation helpers, playback/crossfade updates, bridge sync, scheduler ordering, invalid references, cache payload adaptation, and deterministic release.
+
+Rationale:
+- Animated content now has a parallel scene-runtime adapter path without changing the existing `AnimatedModel`, cache, async, renderer skinned mesh, or App animated sample owners.
+
+## 2026-06-19 - Release KayKit Animated Scene Adapter Sample
+
+Changed:
+- Updated the release authored sample path to load the KayKit Adventurers `Knight.glb` character through `SceneAnimatedModelAdapter`, attach it to the release scene runtime, and sync skinned instances through `SceneRenderBridge`.
+- Kept the debug animated sample on the existing async `AnimatedModel` runtime so cache and diagnostic coverage remains unchanged.
+
+Rationale:
+- Release builds should exercise both the static authored scene adapter and the animated model scene adapter in the visible sample without migrating the debug animation tool path yet.
+
+## 2026-06-19 - Release KayKit Sample Visibility
+
+Changed:
+- Moved the release KayKit scene-adapter animated sample above the authored scene bounds and applied a bounded scale factor based on the authored scene radius.
+- Switched the default release KayKit sample from the character-only `Knight.glb` to `Rig_Medium_MovementBasic.glb`, which contains renderable skinned meshes and animation clips.
+
+Rationale:
+- The release animated sample should be plainly visible when Sponza is the authored scene instead of appearing at floor height beside a much larger environment.
+
+## 2026-06-19 - Skinned Vertex Joint Index Layout Fix
+
+Changed:
+- Updated the renderer skinned vertex layout so joint indices are supplied as float-converted `Uint8` attributes that match the current skinned mesh shader input.
+
+Rationale:
+- The scene bridge could create, cull, and submit skinned draw calls while the shader still interpreted joint indices incorrectly, leaving the animated sample effectively invisible.
+
+## 2026-06-19 - Release KayKit Visibility Material Override
+
+Changed:
+- Made the release KayKit animated sample material override opaque, double-sided, and strongly emissive.
+- Removed that forced material override after real skinned rendering became visible so imported material and texture data can drive the diagnostic sample again.
+- Bound the KayKit knight texture atlas to the release animated rig materials because the movement animation GLB imports as a gray rig material without the character texture.
+
+Rationale:
+- The sample should remain visible while diagnosing skinned rendering even if the imported asset winding or scene lighting differs from the static authored scene.
+
+## 2026-06-19 - Skinned Joint Indices Use Float Vertex Attributes
+
+Changed:
+- Switched `Renderer::SkinnedMeshVertex` joint indices from packed `Uint8` attributes to four float attributes and updated animated vertex packing to write float joint indices.
+
+Rationale:
+- The skinned shader consumes joint indices as `vec4`; matching the CPU vertex format to that shader contract removes driver/backend ambiguity that could produce submitted but invisible skinned meshes.
+
+## 2026-06-19 - Release Animated-Only Diagnostic Runtime
+
+Changed:
+- Temporarily changed the release authored-mode sample to skip Sponza/static authored scene startup and initialize only the scene render bridge plus KayKit animated adapter sample.
+- Kept debug authored scene behavior unchanged.
+
+Rationale:
+- Isolating the animated mesh removes static scene occlusion, scale, and draw-order noise while diagnosing why submitted KayKit skinned draws are not visible.
+
+## 2026-06-19 - Animated Skin Mesh Binding Fallback
+
+Changed:
+- Added an animated adapter fallback that creates skinned scene components from `ImportedSceneSkin` mesh/node references when imported nodes do not expose mesh references directly.
+
+Rationale:
+- Some KayKit animated GLB layouts import valid skinned mesh resources and skins while leaving node mesh reference lists empty, which previously produced zero scene skinned components.
+
+## 2026-06-19 - Animated Root Mesh Binding Diagnostic Fallback
+
+Changed:
+- Added a final animated adapter diagnostic fallback that attaches every valid skinned mesh resource to a root scene actor when no node or skin binding path creates skinned components.
+- Expanded release KayKit adapter logging with invalid node, mesh, skin, joint, and material reference counters.
+
+Rationale:
+- The release KayKit diagnostic sample imported renderer skinned meshes but still produced zero scene skinned components, so the runtime needs a forced binding path to exercise the bridge and renderer while import binding data is investigated.
+
+## 2026-06-19 - Release Animated-Only Bridge Scene Reference Fix
+
+Changed:
+- Changed release animated-only startup to initialize `SceneRenderBridge` after `AuthoredRuntime` is in its final storage instead of returning a runtime that already contains a bridge referencing its internal scene.
+
+Rationale:
+- Moving a runtime after creating the bridge left the bridge referencing the moved-from scene, so the animated adapter saw valid actors while the bridge rejected those same actor handles.
+
+## 2026-06-19 - Release KayKit Root Skinned Attachment Diagnostic
+
+Changed:
+- Added an animated adapter setting to attach skinned mesh components to the imported root actor instead of each mesh node.
+- Enabled that setting only for the release KayKit diagnostic sample.
+
+Rationale:
+- The KayKit skinned draw path was live and submitted but invisible, consistent with a transform-space mismatch between glTF skinning palettes and per-mesh-node instance transforms.
+
+## 2026-06-19 - Skinned Shader Raw Position Diagnostic
+
+Changed:
+- Temporarily changed the skinned mesh vertex shader to render raw vertex positions and normals without applying the joint palette.
+- Regenerated the DX11 skinned vertex shader binary through the release build.
+
+Rationale:
+- The release KayKit sample now has live, visible, submitted skinned draw calls, so bypassing palette skinning isolates whether the invisibility is caused by skinning matrices or by lower-level vertex/material/draw state.
+
+## 2026-06-19 - Release KayKit Bind-Relative Skin Palette
+
+Changed:
+- Restored the skinned vertex shader to apply joint palettes.
+- Added a bind-relative animated pose palette helper and used it for the root-attached release KayKit diagnostic path.
+- Corrected the bind-relative palette to use joint model-space deltas, so bind pose evaluates to identity in raw mesh space.
+
+Rationale:
+- The raw skinned mesh was visible when palette skinning was bypassed, proving the full joint-world palette was moving vertices out of the visible mesh space; the bind-relative palette keeps bind pose in raw mesh space while still allowing animation deltas.
+
+## 2026-06-19 - Release KayKit Identity Skin Palette Diagnostic
+
+Changed:
+- Added an animated adapter setting that forces all skinned joint matrices to identity.
+- Enabled the identity palette only for the release KayKit diagnostic sample.
+
+Rationale:
+- The raw-position shader test showed the model is visible, but sampled skinning palettes still move it out of view; forcing identity matrices through the real skinned shader isolates shader application from animation palette generation.
+
+## 2026-06-19 - Skinned Shader Attribute Sanitization
+
+Changed:
+- Clamped skinned shader joint indices to the palette range and clamped weights before normalizing the skinning matrix blend.
+- Kept identity fallback behavior when sanitized weights produce an empty influence set.
+
+Rationale:
+- The model was visible when the shader ignored joint attributes, but disappeared when the skinned shader read them, indicating unsafe or unexpected index/weight attributes could drive invalid palette access or NaN skinning results.
+
+## 2026-06-19 - Skinned Shader Forced Identity Diagnostic
+
+Changed:
+- Temporarily changed `skinMatrix` to return identity before reading joint indices, weights, or palette uniforms.
+- Regenerated the DX11 skinned vertex shader binary.
+
+Rationale:
+- The model still disappeared with identity palette data, so this isolates whether the shader vanishes because it reads joint attributes/palette state or because of another part of the skinned draw path.
+
+## 2026-06-19 - Skinned Shader No-Index Diagnostic
+
+Changed:
+- Temporarily removed the skinned joint-index vertex attribute from the shader input and vertex layout.
+- Changed the skinned shader to read weights only and use palette slot zero for all influenced vertices.
+- Corrected the diagnostic to keep the index attribute in the vertex declaration so the GPU vertex stride still matches `Renderer::SkinnedMeshVertex`, while the shader ignores index values.
+
+Rationale:
+- The forced-identity shader made the model visible, so this isolates whether the `a_indices` stream binding is destabilizing the skinned shader path.
+
+## 2026-06-19 - Reduced Skinned Palette Uniform Budget
+
+Changed:
+- Reduced the renderer skinned joint palette budget from 256 to 64 matrices and updated the skinned vertex shader uniform array to match.
+- Restored real skinned shader joint-index blending against the reduced palette and disabled the release identity-palette diagnostic override.
+
+Rationale:
+- Literal identity skinning rendered, but reading `u_jointPalette[0]` did not; shrinking the matrix uniform payload avoids an oversized vertex uniform array while keeping enough joints for the KayKit diagnostic asset.
+
+## 2026-06-19 - Per-Skin Skinned Palette Binding
+
+Changed:
+- Remapped imported vertex joint indices into each mesh skin's local joint palette slots during skinned vertex packing.
+- Updated scene animated adapter skinned mesh descriptors and runtime pose updates to send per-skin palette subsets instead of the full imported joint palette.
+- Updated animated adapter tests to assert renderer skinned mesh joint counts match the skin palette.
+
+Rationale:
+- The KayKit diagnostic rig contains multiple skinned mesh pieces; using one global palette for every component can make only part of the mesh deform correctly.
+
+## 2026-06-19 - Restored Global Skinned Palette Binding
+
+Changed:
+- Reverted the per-skin joint remap diagnostic after it produced a T-pose and head deformation on the KayKit release sample.
+- Restored imported vertex joint indices and full imported joint palette binding for scene animated adapter skinned components.
+- Kept the confirmed 64-matrix skinned palette uniform budget and release texture/material path.
+
+Rationale:
+- The deformation showed the per-skin remap did not match the imported vertex joint-index space for this asset; the remaining animation issue needs to be debugged from the global palette path.
+
+## 2026-06-19 - Restored Release Animated Node Attachment
+
+Changed:
+- Switched the release KayKit animated adapter sample back from root-attached skinned components to normal imported-node attachment.
+- Kept the reduced skinned palette uniform budget, real joint palette updates, and release texture override.
+
+Rationale:
+- Root attachment was a visibility diagnostic from before the uniform-budget fix; using the imported node transforms again avoids mixing bind-relative palettes with the release scene hierarchy.
+
+## 2026-06-19 - Removed Animated Visibility Diagnostics From Adapter Path
+
+Changed:
+- Removed the root-attachment and forced-identity palette diagnostic settings from `SceneAnimatedModelAdapter`.
+- Removed the bind-relative palette helper that only existed for the root-attachment diagnostic path.
+- Stopped binding unreferenced skinned meshes to `skin.nodeIndices`; unbound skinned resources now fall back to the imported scene root instead of a joint node.
+
+Rationale:
+- The KayKit release sample still showed T-pose/local deformation after visibility was restored, so the remaining debug-only binding paths needed to be removed from live adapter behavior before further pose debugging.
+
+## 2026-06-19 - Scene Animated Palette Space Fix
+
+Changed:
+- Updated `SceneAnimatedModelAdapter` to send each skinned component a joint palette relative to that component actor's world transform.
+- Added adapter coverage that moves the skinned component owner and verifies the backend receives `inverse(ownerWorld) * finalSkinningMatrix`.
+
+Rationale:
+- Scene render bridge applies an actor/world transform to skinned components, so the palette must be relative to that actor instead of using global joint matrices directly.
+
+## 2026-06-19 - Skinned Attribute Semantic Alignment
+
+Changed:
+- Changed skinned shader varying semantics for joint indices and weights from spare texcoords to `BLENDINDICES` and `BLENDWEIGHT`.
+- Rebuilt the DX11 shader binaries through the release `manual_engine` target.
+
+Rationale:
+- The renderer vertex declaration feeds bgfx `Indices` and `Weight` attributes, so the shader inputs should use matching semantics to avoid malformed joint data on the GPU.
+
+## 2026-06-19 - Restored Release Sponza Plus KayKit Sample
+
+Changed:
+- Restored release authored mode to load the normal Sponza authored scene path.
+- Kept the KayKit animated scene adapter sample running in the same scene runtime/render bridge after Sponza startup.
+- Removed the temporary animated-only release runtime bypass and updated the release window title text.
+
+Rationale:
+- The animated-only mode was only needed to isolate skinned visibility; with animation rendering fixed, release should again show the authored Sponza sample plus the animated mesh.
