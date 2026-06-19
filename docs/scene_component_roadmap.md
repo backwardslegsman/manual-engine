@@ -717,17 +717,126 @@ Exit criteria:
 
 Goal: Persist scene data without serializing transient runtime handles.
 
-- Serialize scene metadata, actors, stable IDs, component records, transform hierarchy, asset references, and exposed variables.
-- For terrain references, use `TerrainSerializationPrep` durable chunk identity and payload-boundary metadata; do not serialize `TerrainSourceHandle`, `TerrainChunkHandle`, renderer terrain handles, nav tile handles, terrain collider handles, or scene physics body/collider handles.
-- Add versioned scene file format and migration hooks.
-- Serialize references by stable ID or asset ID, not runtime handles.
-- Add load validation for missing assets, unknown component types, invalid parents, and property mismatches.
-- Add deterministic save ordering for clean diffs.
-- Add tests for round-trip scenes, hierarchy preservation, missing assets, version migration, and component defaults.
+Status: initial implementation added. Phase 13 now provides a CPU-only custom binary scene container with a fixed header, chunk directory, 64-bit checksums, header-only inspection, whole-file write/read, in-memory snapshots, validation, and restore for core `Engine::Scene` actors, local transforms, hierarchy, and metadata-only scene components. Render bridge resources, physics bodies/colliders, character movement records, navigation tiles, terrain runtime chunks, authored/animated adapter resources, App save state, async streaming, compression, and migration hooks remain deferred.
+
+Scope:
+
+- Add scene serialization under `src/Engine` as CPU-only runtime infrastructure. The initial implementation is `Engine::SceneSerialization` and does not add editor UI, Lua/native hook integration, network replication, compressed archives, encryption, hot reload, async streaming jobs, App save migration, or automatic procedural `World` conversion.
+- Use Phase 12 reflection metadata as the approved property surface for serialized component variables. Serialization may read reflected properties and stable IDs; it must not serialize `OpaqueHandle`, runtime subsystem handles, renderer handles, Jolt IDs, Detour handles, bgfx resources, ImGui state, or App-local debug state.
+- Serialize durable scene identity through `SceneObjectId`, asset references through `AssetId`, and terrain references through `TerrainSerializationPrep` durable source/chunk metadata.
+- Keep existing `WorldState`, `WorldObjectOverrides`, `AuthoredScene`, `PartitionedAuthoredScene`, `AnimatedModel`, terrain derived cache, navigation cache, and App save/load behavior unchanged.
+
+Binary container design:
+
+- Define a fixed little-endian file header with magic, header size, format version, endian marker, flags, file length, chunk directory offset/count, schema table offset/count, root scene metadata offset, and header checksum.
+- Define a chunk directory with typed records: scene metadata, actor table, transform hierarchy, reflected component/property table, asset reference table, terrain reference table, optional authored/animated adapter binding metadata, user extension chunks, and future streaming payload chunks.
+- Each chunk directory entry should include type, version, offset, byte size, uncompressed byte size, record count, checksum, dependency range, and flags. Compression is out of scope for the first pass, but the flags/header should leave room for it.
+- Use stable numeric type IDs and property IDs from reflection descriptors. Store strings in a string table or length-prefixed UTF-8 records; avoid pointer-sized values and platform-dependent structure dumps.
+- Store all numeric fields with explicit fixed-width integer/float encodings. Matrices, vectors, quaternions, and transforms should be written as field values, not raw struct blobs.
+- Store deterministic section ordering: metadata, schema, assets, actors by `SceneObjectId` then creation order fallback, hierarchy links, components by owner actor and component type, terrain references by durable chunk ID, and extension chunks last.
+- The first implementation may use only uncompressed binary chunks and whole-file read/write while preserving the chunk directory contract needed for later streaming.
+
+Serialized content:
+
+- Scene metadata:
+  - format version, engine serialization schema version, source tool/version string, scene stable ID if introduced, authoring timestamp only if explicitly requested by caller, and deterministic scene flags.
+  - Avoid wall-clock timestamps by default in test fixtures so binary output is stable.
+- Actor records:
+  - `SceneObjectId`, actor flags, local transform, parent `SceneObjectId`, and stable ordering key.
+  - Runtime actor state such as pending-destroy, scheduler frame index, dirty flags, and runtime handles must not be serialized.
+- Component/property records:
+  - component type ID or reflected object descriptor ID, owning `SceneObjectId`, optional stable component ID if introduced, and reflected serializable property values.
+  - Values whose reflection flags are runtime-only, transient, read-only derived, or unsupported must be skipped unless a subsystem provides an explicit durable equivalent.
+- Asset references:
+  - `AssetId`, asset type, import settings key, optional canonical/source path snapshot for diagnostics, and missing/stale policy.
+  - Do not serialize `AssetHandle`, `AssetCache` acquisitions, renderer mesh/material/texture handles, or live bridge resources.
+- Terrain references:
+  - `TerrainChunkStableIdentity`, `TerrainSerializedChunkFileMetadata`, and payload boundary metadata.
+  - Do not serialize `TerrainSourceHandle`, `TerrainChunkHandle`, renderer terrain handles, nav tile handles, terrain collider handles, derived cache live paths, or loaded chunk membership.
+- Physics, navigation, render bridge, character, authored, and animated records:
+  - Serialize only durable descriptors and reflected serializable fields when present.
+  - Runtime bodies/colliders, nav tiles, bridge live instances, animator sampled pose caches, scheduler handles, and generated renderer resources are recreated by explicit load-time composition or later phases.
+
+Reader/writer API shape:
+
+- Added `SceneSerialization.hpp/.cpp` with plain result/status types:
+  - `SceneSerializationStatus::{Success, InvalidInput, UnsupportedVersion, CorruptHeader, CorruptDirectory, MissingRequiredChunk, UnknownRequiredChunk, ChecksumMismatch, UnknownType, MissingAsset, InvalidReference, IoError}`.
+  - `SceneSerializationSettings` with checksum enable flag, deterministic output flag, generated ID policy, unknown optional chunk policy, and maximum file/chunk/string limits.
+  - `SceneBinaryHeader`, `SceneBinaryChunkEntry`, `SceneSerializedScene`, `SceneSerializationDiagnostics`, `SceneSerializationWriteResult`, `SceneSerializationReadResult`, and `SceneSerializationHeaderReadResult`.
+- Provide staged APIs:
+  - `buildSerializedScene(Scene&, const ReflectionRegistry&, settings)` creates an in-memory durable snapshot for core scene actor/component data.
+  - `validateSerializedScene(snapshot, settings)` checks references, schema/property compatibility, and payload boundaries.
+  - `writeSceneBinary(path, snapshot, settings)` writes header, directory, schema, and payload chunks.
+  - `readSceneBinaryHeader(path)` reads only the fixed header and directory for streaming decisions.
+  - `readSceneBinary(path, settings)` reads and validates the whole file in the first pass.
+  - `applySerializedScene(Scene&, const SceneSerializedScene&, SceneSerializationLoadContext, settings)` restores validated core scene records through public scene APIs.
+- Full load/apply for core scene records is implemented in Phase 13: it creates actors by stable ID, restores local transforms and hierarchy, validates parent references, and calls public scene/component APIs. Renderer, physics, navigation, terrain, authored, and animated live resource recreation remains explicit follow-up composition.
+
+Versioning and compatibility:
+
+- Start with `scene_binary_v13_1` as the file format version and a separate schema version for reflected property descriptors.
+- Unknown optional chunks are skipped and reported. Unknown required chunks fail validation.
+- Older supported versions should load through explicit migration functions; unsupported versions fail before mutation.
+- Property mismatch handling:
+  - missing property with default value uses reflection default;
+  - missing required property fails validation;
+  - unknown optional property is skipped;
+  - type mismatch fails unless an explicit migration exists.
+- The format must be forward-compatible with streaming by keeping chunk offsets independent and avoiding cross-chunk pointers.
+
+Streaming preparation:
+
+- The header and directory reader must be able to inspect a file without reading full payloads.
+- Chunk records should be independently checksummed so future streaming can validate a section after partial read.
+- Actor/component ranges should be designed so later code can load a subset by sector, stable actor ID, or terrain chunk reference.
+- Do not add async streaming in Phase 13, but keep all read/write helpers free of live Renderer, App, physics, navigation, and scripting dependencies so they can later run in worker jobs.
+
+Validation and diagnostics:
+
+- Reject files with bad magic, unsupported endian marker, incompatible version, invalid offsets/sizes, overlapping chunks, out-of-bounds string offsets, checksum mismatch, duplicate stable actor IDs, invalid parent references, missing required chunks, unknown required chunks, and runtime handle payloads.
+- Report missing assets, stale asset metadata, unknown component types, unknown reflected property IDs, skipped transient properties, terrain payload boundary violations, and migration decisions as diagnostics.
+- Never partially mutate a live `Scene` on failed validation. Full validation should run before load/apply mutates runtime state.
+
+Implementation phases inside Phase 13:
+
+1. Format foundation: implemented.
+   - Add binary header/directory structs, endian/checksum helpers, schema constants, settings, statuses, diagnostics, and header-only read validation.
+   - Add tests for header layout, bad magic/version/endian, directory bounds, unknown optional/required chunks, and checksum failure.
+2. In-memory snapshot: implemented for core scene actors, hierarchy, metadata-only components, reflection schema metadata, asset references, and terrain references.
+   - Add `SceneSerializedScene` snapshot records for metadata, actors, hierarchy, reflected properties, assets, and terrain durable references.
+   - Build snapshots from `Scene` plus `ReflectionRegistry` using `SceneObjectId`, `AssetId`, and `TerrainSerializationPrep` metadata only.
+   - Add tests that transient handles and `OpaqueHandle` values are skipped or rejected.
+3. Binary write/read: implemented as deterministic uncompressed whole-file read/write with header-only inspection.
+   - Write deterministic uncompressed binary files with header, directory, schema table, and payload chunks.
+   - Read whole files back into snapshots and validate them before runtime mutation.
+   - Add byte-stability tests with deterministic fixtures.
+4. Scene restore: implemented for core scene actors, local transforms, hierarchy, and metadata-only scene components.
+   - Restore scene actors, local transforms, hierarchy, and metadata-only components from a validated snapshot through public `Scene` APIs.
+   - Defer renderer/physics/navigation/terrain live resource recreation unless durable descriptors are already represented and can be restored without hidden loading.
+5. Migration hooks: deferred.
+   - Add version dispatch stubs and one test migration fixture that maps an older property ID or missing default to current schema.
+   - Keep migration explicit and tested; no ad hoc fallback parsing.
+
+Test plan:
+
+- Added `manual_engine_scene_serialization_tests` as a CPU-only target independent from App, Renderer/bgfx, ImGui, Lua, Jolt implementation details, Detour, asset cache, authored/animated loaders, and optional sample assets.
+- Required tests:
+  - fixed header and directory round trip;
+  - header-only read returns version, flags, chunk count, and directory without loading payloads;
+  - bad magic, unsupported version, invalid endian marker, overlapping chunks, truncated payload, and checksum mismatch fail cleanly;
+  - scene actor stable IDs, local transforms, and hierarchy round trip deterministically;
+  - reflected serializable properties round trip while runtime-only/transient/read-only derived properties are skipped;
+  - asset references serialize by `AssetId` and import settings, never by `AssetHandle` or renderer handles;
+  - terrain references serialize `TerrainChunkStableIdentity`/`TerrainSerializedChunkFileMetadata`, never runtime terrain/nav/physics/render handles;
+  - duplicate actor IDs, invalid parent IDs, missing required properties, unknown required chunks, and type mismatches are diagnosed before mutation;
+  - deterministic write produces identical bytes for identical input;
+  - applying a valid snapshot to a new `Scene` restores actors, hierarchy, and metadata-only components without creating renderer, physics, navigation, terrain, or App resources.
 
 Exit criteria:
 
-- A scene can be saved, loaded, and restored with stable actor/component identity.
+- The engine has a documented and tested binary scene serialization contract with a fixed header, chunk directory, schema/version metadata, and durable identity rules.
+- Phase 13 can inspect and validate scene binary headers/directories, write/read full uncompressed binary payloads, and restore a scene with stable actor/component identity for core scene records.
+- The format is ready for later streaming because payload chunks are independently addressable, validated, and free of live runtime handles.
 
 ## 14. Native Behavior Hooks Roadmap
 

@@ -1403,3 +1403,25 @@ Changed:
 
 Rationale:
 - Future serialization, native hooks, and scripting need a typed inspection/mutation layer that preserves subsystem invariants and keeps transient handles separate from durable scene, asset, and terrain IDs.
+
+## 2026-06-19 - Phase 13 Serialization Roadmap Expansion
+
+Changed:
+- Expanded Phase 13 into a full binary scene serialization plan with a fixed header, chunk directory, schema/version metadata, durable identity rules, validation, streaming preparation, staged implementation phases, and tests.
+- Documented the fallback path where Phase 13 can first land header/directory validation and in-memory snapshot round trips before full disk payload streaming.
+- Clarified that serialization must use `SceneObjectId`, `AssetId`, and terrain durable chunk metadata while rejecting runtime handles and `OpaqueHandle` values.
+
+Rationale:
+- Scene persistence needs a binary format shaped for future streaming, but the first implementation can remain incremental if full custom binary save/load is too large for one pass.
+
+## 2026-06-19 - Phase 13 Scene Serialization
+
+Changed:
+- Added `Engine::SceneSerialization` with a little-endian binary scene header, chunk directory, FNV-1a checksums, header-only inspection, whole-file write/read, snapshot validation, and core scene restore.
+- Serialized core `Scene` actors by `SceneObjectId`, local transform, hierarchy parent ID, and metadata-only component type/owner records while keeping runtime handles out of payloads.
+- Recorded reflection schema metadata, `AssetId` references, and `TerrainSerializationPrep` durable terrain references without creating renderer, physics, navigation, terrain, authored/animated, App, or asset-cache resources on load.
+- Added `manual_engine_scene_serialization_tests` for header/directory handling, corruption checks, deterministic bytes, core scene roundtrip, asset/terrain durable identity, and validation-before-mutation behavior.
+- Updated system contracts, engine overview, and the scene roadmap to document the Phase 13 binary serialization boundary.
+
+Rationale:
+- Scene persistence now has a tested binary foundation and core actor/component roundtrip that is streaming-ready by layout while leaving live subsystem reconstruction for later explicit phases.

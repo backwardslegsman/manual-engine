@@ -67,6 +67,7 @@ add_executable(manual_engine
     src/Engine/Scene/AuthoredSceneAdapter.cpp
     src/Engine/Scene/Scene.cpp
     src/Engine/Scene/SceneRenderBridge.cpp
+    src/Engine/SceneSerialization.cpp
     src/Engine/SpatialRegistry.cpp
     src/Engine/Terrain.cpp
     src/Engine/TerrainDataset.cpp
@@ -556,6 +557,27 @@ target_link_libraries(manual_engine_scene_reflection_tests
 )
 
 add_test(NAME manual_engine_scene_reflection_tests COMMAND manual_engine_scene_reflection_tests)
+
+add_executable(manual_engine_scene_serialization_tests
+    tests/scene/SceneSerializationTestRunner.cpp
+    src/Engine/Reflection.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/SceneSerialization.cpp
+    src/Engine/TerrainSerializationPrep.cpp
+)
+
+target_include_directories(manual_engine_scene_serialization_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_scene_serialization_tests
+    PRIVATE
+        glm::glm
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_scene_serialization_tests COMMAND manual_engine_scene_serialization_tests)
 
 add_executable(manual_engine_scene_terrain_alignment_tests
     tests/scene/SceneTerrainAlignmentTestRunner.cpp
