@@ -38,6 +38,7 @@ add_executable(manual_engine
     src/Engine/FixedStepLoop.cpp
     src/Engine/FrameBudget.cpp
     src/Engine/InputMapping.cpp
+    src/Engine/ImportedSceneResources.cpp
     src/Engine/InteractionHandlerSystem.cpp
     src/Engine/InteractionSystem.cpp
     src/Engine/NavigationConnectivity.cpp
@@ -159,6 +160,7 @@ add_executable(manual_engine_authored_scene_tests
     src/Engine/AuthoredSceneAsync.cpp
     src/Engine/AsyncWorkQueue.cpp
     src/Engine/FrameBudget.cpp
+    src/Engine/ImportedSceneResources.cpp
 )
 
 target_include_directories(manual_engine_authored_scene_tests
@@ -206,6 +208,7 @@ add_executable(manual_engine_authored_scene_smoke_tests
     src/Engine/AuthoredSceneAsync.cpp
     src/Engine/AsyncWorkQueue.cpp
     src/Engine/FrameBudget.cpp
+    src/Engine/ImportedSceneResources.cpp
     src/Renderer/Scene.cpp
     src/Renderer/Texture.cpp
     src/Renderer/core.cpp

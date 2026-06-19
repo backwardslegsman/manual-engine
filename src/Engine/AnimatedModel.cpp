@@ -12,25 +12,12 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include "Engine/ImportedSceneResources.hpp"
+
 namespace {
     Engine::AnimatedModelBounds convertBounds(const Assets::Assimp::ImportedSceneBounds& bounds)
     {
         return {bounds.min, bounds.max, bounds.valid};
-    }
-
-    std::filesystem::path resolveSceneTexturePath(
-        const std::filesystem::path& scenePath,
-        const std::filesystem::path& texturePath)
-    {
-        if (texturePath.empty() || texturePath.is_absolute()) {
-            return texturePath;
-        }
-        return scenePath.parent_path() / texturePath;
-    }
-
-    bool textureFileExists(const std::filesystem::path& path)
-    {
-        return !path.empty() && std::filesystem::exists(path);
     }
 
     uint32_t packColorAbgr(const glm::vec4& color)
@@ -44,28 +31,6 @@ namespace {
         const uint32_t b = channel(color.b);
         const uint32_t a = channel(color.a);
         return (a << 24u) | (b << 16u) | (g << 8u) | r;
-    }
-
-    Renderer::MeshVertex convertVertex(const Assets::Assimp::ImportedSceneVertex& vertex)
-    {
-        const glm::vec2 texcoord1 = vertex.hasTexcoord1 ? vertex.texcoord1 : vertex.texcoord0;
-        return {
-            vertex.position.x,
-            vertex.position.y,
-            vertex.position.z,
-            vertex.normal.x,
-            vertex.normal.y,
-            vertex.normal.z,
-            vertex.tangent.x,
-            vertex.tangent.y,
-            vertex.tangent.z,
-            vertex.tangent.w,
-            vertex.texcoord0.x,
-            vertex.texcoord0.y,
-            texcoord1.x,
-            texcoord1.y,
-            packColorAbgr(vertex.hasColor0 ? vertex.color0 : glm::vec4{1.0f}),
-        };
     }
 
     struct SkinnedVertexPackingStats {
@@ -173,105 +138,6 @@ namespace {
             palette.push_back(joint.finalSkinningMatrix);
         }
         return palette;
-    }
-
-    Renderer::MaterialDescriptor::AlphaMode convertAlphaMode(Assets::Assimp::ImportedSceneAlphaMode mode)
-    {
-        switch (mode) {
-            case Assets::Assimp::ImportedSceneAlphaMode::Mask:
-                return Renderer::MaterialDescriptor::AlphaMode::Mask;
-            case Assets::Assimp::ImportedSceneAlphaMode::Blend:
-                return Renderer::MaterialDescriptor::AlphaMode::Blend;
-            case Assets::Assimp::ImportedSceneAlphaMode::Opaque:
-            default:
-                break;
-        }
-        return Renderer::MaterialDescriptor::AlphaMode::Opaque;
-    }
-
-    Renderer::MaterialDescriptor::TextureSlotHints convertTextureHints(
-        const Assets::Assimp::ImportedSceneTextureHints& imported)
-    {
-        Renderer::MaterialDescriptor::TextureSlotHints hints;
-        hints.colorSpace = imported.colorSpace == Assets::Assimp::ImportedSceneTextureColorSpace::Srgb
-            ? Renderer::MaterialDescriptor::TextureColorSpace::Srgb
-            : Renderer::MaterialDescriptor::TextureColorSpace::Linear;
-        return hints;
-    }
-
-    Renderer::TextureWrap convertTextureWrap(Assets::Assimp::ImportedSceneTextureWrap wrap)
-    {
-        switch (wrap) {
-            case Assets::Assimp::ImportedSceneTextureWrap::ClampToEdge:
-                return Renderer::TextureWrap::ClampToEdge;
-            case Assets::Assimp::ImportedSceneTextureWrap::MirroredRepeat:
-                return Renderer::TextureWrap::MirroredRepeat;
-            case Assets::Assimp::ImportedSceneTextureWrap::Repeat:
-            case Assets::Assimp::ImportedSceneTextureWrap::Unknown:
-            default:
-                break;
-        }
-        return Renderer::TextureWrap::Repeat;
-    }
-
-    Renderer::TextureDescriptor makeTextureDescriptor(
-        Renderer::TextureSlot slot,
-        Renderer::TextureColorSpace colorSpace,
-        const Assets::Assimp::ImportedSceneTextureHints& hints,
-        std::string debugName)
-    {
-        Renderer::TextureDescriptor descriptor;
-        descriptor.slot = slot;
-        descriptor.colorSpace = colorSpace;
-        descriptor.wrapU = convertTextureWrap(hints.wrapU);
-        descriptor.wrapV = convertTextureWrap(hints.wrapV);
-        descriptor.minFilter = Renderer::TextureFilter::Linear;
-        descriptor.magFilter = Renderer::TextureFilter::Linear;
-        descriptor.mipFilter = Renderer::TextureFilter::Linear;
-        descriptor.generateMips = true;
-        descriptor.debugName = std::move(debugName);
-        return descriptor;
-    }
-
-    Renderer::MaterialDescriptor makeMaterialDescriptor(
-        const Assets::Assimp::ImportedSceneMaterial& material,
-        const std::vector<Renderer::TextureHandle>& baseColorTextures,
-        const std::vector<Renderer::TextureHandle>& normalTextures,
-        const std::vector<Renderer::TextureHandle>& metallicTextures,
-        const std::vector<Renderer::TextureHandle>& roughnessTextures,
-        const std::vector<Renderer::TextureHandle>& metallicRoughnessTextures,
-        const std::vector<Renderer::TextureHandle>& occlusionTextures,
-        const std::vector<Renderer::TextureHandle>& emissiveTextures,
-        uint32_t materialIndex)
-    {
-        Renderer::MaterialDescriptor descriptor;
-        descriptor.name = material.name.empty()
-            ? "animated.material." + std::to_string(materialIndex)
-            : material.name;
-        descriptor.baseColorFactor = material.baseColorFactor;
-        descriptor.baseColorTexture = baseColorTextures[materialIndex];
-        descriptor.normalTexture = normalTextures[materialIndex];
-        descriptor.normalScale = material.normalScale;
-        descriptor.metallicFactor = material.metallicFactor;
-        descriptor.roughnessFactor = material.roughnessFactor;
-        descriptor.metallicTexture = metallicTextures[materialIndex];
-        descriptor.roughnessTexture = roughnessTextures[materialIndex];
-        descriptor.metallicRoughnessTexture = metallicRoughnessTextures[materialIndex];
-        descriptor.occlusionTexture = occlusionTextures[materialIndex];
-        descriptor.occlusionStrength = material.occlusionStrength;
-        descriptor.emissiveTexture = emissiveTextures[materialIndex];
-        descriptor.emissiveFactor = material.emissiveFactor;
-        descriptor.alphaMode = convertAlphaMode(material.alphaMode);
-        descriptor.alphaCutoff = material.alphaCutoff;
-        descriptor.doubleSided = material.doubleSided;
-        descriptor.baseColorTextureHints = convertTextureHints(material.baseColorTextureHints);
-        descriptor.normalTextureHints = convertTextureHints(material.normalTextureHints);
-        descriptor.metallicTextureHints = convertTextureHints(material.metallicTextureHints);
-        descriptor.roughnessTextureHints = convertTextureHints(material.roughnessTextureHints);
-        descriptor.metallicRoughnessTextureHints = convertTextureHints(material.metallicRoughnessTextureHints);
-        descriptor.occlusionTextureHints = convertTextureHints(material.occlusionTextureHints);
-        descriptor.emissiveTextureHints = convertTextureHints(material.emissiveTextureHints);
-        return descriptor;
     }
 
     void appendImportDiagnostics(
@@ -1084,108 +950,35 @@ namespace Engine {
             return result;
         }
 
-        std::vector<Renderer::TextureHandle> baseColorTextures(imported.materials.size());
-        std::vector<Renderer::TextureHandle> normalTextures(imported.materials.size());
-        std::vector<Renderer::TextureHandle> metallicTextures(imported.materials.size());
-        std::vector<Renderer::TextureHandle> roughnessTextures(imported.materials.size());
-        std::vector<Renderer::TextureHandle> metallicRoughnessTextures(imported.materials.size());
-        std::vector<Renderer::TextureHandle> occlusionTextures(imported.materials.size());
-        std::vector<Renderer::TextureHandle> emissiveTextures(imported.materials.size());
-
-        if (settings.loadTextures) {
-            for (uint32_t materialIndex = 0; materialIndex < imported.materials.size(); ++materialIndex) {
-                const Assets::Assimp::ImportedSceneMaterial& material = imported.materials[materialIndex];
-                const auto acquireTexture = [&](
-                    const std::filesystem::path& texturePath,
-                    const char* slotName,
-                    const Renderer::TextureDescriptor& descriptor) -> Renderer::TextureHandle {
-                    const std::filesystem::path resolvedPath = resolveSceneTexturePath(path, texturePath);
-                    if (!textureFileExists(resolvedPath)) {
-                        if (!texturePath.empty()) {
-                            ++result.model.diagnostics_.textureLoadFailureCount;
-                            ++result.model.diagnostics_.fallbackTextureCount;
-                            result.model.diagnostics_.warnings.push_back(
-                                std::string{"Missing animated model texture for "} + slotName + ": " + texturePath.generic_string());
-                        }
-                        return {};
-                    }
-
-                    CachedTexture texture = assetCache.acquireTexture(resolvedPath, descriptor);
-                    if (!Renderer::isValid(texture.handle)) {
-                        ++result.model.diagnostics_.textureLoadFailureCount;
-                        ++result.model.diagnostics_.fallbackTextureCount;
-                        result.model.diagnostics_.warnings.push_back(
-                            std::string{"Failed to load animated model texture for "} + slotName + ": " + texturePath.generic_string());
-                        return {};
-                    }
-
-                    ++result.model.diagnostics_.textureLoadSuccessCount;
-                    const Renderer::TextureInfo info = Renderer::textureInfo(texture.handle);
-                    result.model.diagnostics_.textureEstimatedBytes += info.estimatedBytes;
-                    if (info.srgbFallback) {
-                        ++result.model.diagnostics_.textureSrgbFallbackCount;
-                    }
-                    result.model.textures_.push_back(texture);
-                    return texture.handle;
-                };
-
-                baseColorTextures[materialIndex] = acquireTexture(
-                    material.baseColorTexture,
-                    "baseColor",
-                    makeTextureDescriptor(Renderer::TextureSlot::BaseColor, Renderer::TextureColorSpace::Srgb, material.baseColorTextureHints, "animatedBaseColor"));
-                normalTextures[materialIndex] = acquireTexture(
-                    material.normalTexture,
-                    "normal",
-                    makeTextureDescriptor(Renderer::TextureSlot::Normal, Renderer::TextureColorSpace::Linear, material.normalTextureHints, "animatedNormal"));
-                if (!material.hasPackedMetallicRoughnessTexture) {
-                    metallicTextures[materialIndex] = acquireTexture(
-                        material.metallicTexture,
-                        "metallic",
-                        makeTextureDescriptor(Renderer::TextureSlot::Metallic, Renderer::TextureColorSpace::Linear, material.metallicTextureHints, "animatedMetallic"));
-                    roughnessTextures[materialIndex] = acquireTexture(
-                        material.roughnessTexture,
-                        "roughness",
-                        makeTextureDescriptor(Renderer::TextureSlot::Roughness, Renderer::TextureColorSpace::Linear, material.roughnessTextureHints, "animatedRoughness"));
-                }
-                metallicRoughnessTextures[materialIndex] = acquireTexture(
-                    material.metallicRoughnessTexture,
-                    "metallicRoughness",
-                    makeTextureDescriptor(Renderer::TextureSlot::MetallicRoughness, Renderer::TextureColorSpace::Linear, material.metallicRoughnessTextureHints, "animatedMetallicRoughness"));
-                occlusionTextures[materialIndex] = acquireTexture(
-                    material.occlusionTexture,
-                    "occlusion",
-                    makeTextureDescriptor(Renderer::TextureSlot::Occlusion, Renderer::TextureColorSpace::Linear, material.occlusionTextureHints, "animatedOcclusion"));
-                emissiveTextures[materialIndex] = acquireTexture(
-                    material.emissiveTexture,
-                    "emissive",
-                    makeTextureDescriptor(Renderer::TextureSlot::Emissive, Renderer::TextureColorSpace::Srgb, material.emissiveTextureHints, "animatedEmissive"));
-            }
-        } else {
-            for (const Assets::Assimp::ImportedSceneMaterial& material : imported.materials) {
-                if (!material.baseColorTexture.empty() ||
-                    !material.normalTexture.empty() ||
-                    !material.metallicTexture.empty() ||
-                    !material.roughnessTexture.empty() ||
-                    !material.metallicRoughnessTexture.empty() ||
-                    !material.occlusionTexture.empty() ||
-                    !material.emissiveTexture.empty()) {
-                    ++result.model.diagnostics_.fallbackTextureCount;
-                }
-            }
-        }
+        ImportedSceneTextureSet textures;
+        ImportedSceneMaterialMappingSettings materialMapping;
+        materialMapping.materialNamePrefix = "animated.material";
+        materialMapping.textureDebugNamePrefix = "animated";
+        materialMapping.loadTextures = settings.loadTextures;
+        ImportedSceneTextureLoadStats textureStats = acquireImportedSceneMaterialTextures(
+            path,
+            imported.materials,
+            assetCache,
+            materialMapping,
+            textures);
+        result.model.diagnostics_.textureLoadSuccessCount += textureStats.successCount;
+        result.model.diagnostics_.textureLoadFailureCount += textureStats.failureCount;
+        result.model.diagnostics_.fallbackTextureCount += textureStats.fallbackCount;
+        result.model.diagnostics_.textureEstimatedBytes += textureStats.estimatedBytes;
+        result.model.diagnostics_.textureSrgbFallbackCount += textureStats.srgbFallbackCount;
+        result.model.diagnostics_.warnings.insert(
+            result.model.diagnostics_.warnings.end(),
+            textureStats.warnings.begin(),
+            textureStats.warnings.end());
+        result.model.textures_ = std::move(textureStats.acquiredTextures);
 
         result.model.materials_.reserve(imported.materials.size());
         for (uint32_t materialIndex = 0; materialIndex < imported.materials.size(); ++materialIndex) {
-            Renderer::MaterialHandle handle = Renderer::createMaterial(makeMaterialDescriptor(
+            Renderer::MaterialHandle handle = Renderer::createMaterial(importedSceneMaterialDescriptor(
                 imported.materials[materialIndex],
-                baseColorTextures,
-                normalTextures,
-                metallicTextures,
-                roughnessTextures,
-                metallicRoughnessTextures,
-                occlusionTextures,
-                emissiveTextures,
-                materialIndex));
+                textures,
+                materialIndex,
+                "animated.material"));
             if (handle.id == UINT32_MAX) {
                 result.message = "Failed to create renderer material for animated model.";
                 result.model.shutdown();
@@ -1218,7 +1011,7 @@ namespace Engine {
                     ++result.model.diagnostics_.invalidMaterialReferenceCount;
                 }
                 for (const Assets::Assimp::ImportedSceneVertex& vertex : primitive.vertices) {
-                    submesh.vertices.push_back(convertVertex(vertex));
+                    submesh.vertices.push_back(importedSceneVertexToMeshVertex(vertex));
                 }
                 descriptor.submeshes.push_back(std::move(submesh));
             }
