@@ -25,6 +25,7 @@ Use this document for long-range architectural work that crosses `src/Engine`, `
 8. Navigation runtime API: expose pathfinding, projection, agent config, and debug draw through scene-friendly services.
 9. Navigation scene geometry: build/update navmesh input from static scene geometry, terrain, and transforms.
 10. Physics integration: add Jolt-backed static colliders, capsule colliders, queries, transform sync, and debug draw.
+10.5. Terrain runtime alignment: reconcile the new terrain dataset, navigation, physics, material, and serialization prep adapters with scene ownership before character movement depends on them.
 11. Character movement: capsule movement, grounding, slope/step logic, path following, and movement variables.
 12. Reflection and opaque APIs: property metadata, getter/setter access, system boundaries, script visibility.
 13. Serialization: scenes, actors, components, hierarchy, asset references, exposed variables, and scene config.
@@ -299,7 +300,7 @@ Exit criteria:
 
 Goal: Feed navigation generation from scene-owned static geometry and terrain without making navigation depend on renderer internals, authored-scene runtime caches, physics, or App composition code.
 
-Status: core source registry implemented. `Engine::SceneNavigationGeometryRegistry` can register CPU scene navigation sources, snapshot enabled static geometry plus optional terrain input into `NavigationTerrainBuildData`, track dirty chunks, and receive opt-in authored scene adapter registrations. Automatic App streaming/rebuild integration, dynamic obstacles, physics collider extraction, off-mesh links, serialized source identity, and editor/debug UI remain deferred.
+Status: core source registry implemented. `Engine::SceneNavigationGeometryRegistry` can register CPU scene navigation sources, snapshot enabled static geometry plus optional terrain input into `NavigationTerrainBuildData`, track dirty chunks, and receive opt-in authored scene adapter registrations. Terrain now has a separate `Engine::TerrainNavigationAdapter`; scene navigation composition should consume terrain snapshots through that adapter instead of calling legacy terrain extraction directly. Automatic App streaming/rebuild integration, dynamic obstacles, physics collider extraction, off-mesh links, serialized source identity, and editor/debug UI remain deferred.
 
 Scope:
 
@@ -315,7 +316,7 @@ Source ownership and API shape:
 - Store source records as CPU metadata: source ID, optional owning `SceneActorHandle`, source type, enabled flag, bounds, triangle vertices/indices, area/material hints, blocker/walkable role, and a transform snapshot.
 - Treat scene actor handles as transient ownership links only. Durable serialized navigation source identity is deferred to the serialization milestone.
 - Let authored/static scene adapters register CPU mesh geometry while they still have imported vertex/index data available. Do not reverse-engineer geometry from `Renderer::StaticMeshHandle`.
-- Let terrain contribute through the existing `TerrainSystem::navigationBuildData` path, then normalize terrain and scene mesh inputs into one deterministic build snapshot.
+- Let terrain contribute through `TerrainNavigationAdapter` requests, then normalize terrain and scene mesh inputs into one deterministic build snapshot. Legacy `TerrainSystem` extraction remains a compatibility input to that adapter, not a direct scene dependency.
 - Keep Recast/Detour types private to navigation implementation files; public scene geometry headers expose only engine structs, GLM values, and plain containers.
 
 Build flow:
@@ -369,7 +370,7 @@ Exit criteria:
 
 Goal: Add Jolt physics behind engine-owned handles and scene components.
 
-Status: core scene physics facade implemented. `Engine::ScenePhysicsWorld` provides Jolt-backed static, kinematic, and dynamic scene bodies, generation-counted body/collider handles, fixed scheduler sync, direct shape descriptors, raycast/capsule sweep/overlap/closest-point queries, diagnostics, and headless tests. Procedural `World`, `ActorController`, `BlockingCollisionSystem`, authored collider generation, terrain colliders, navigation obstacle integration, App gameplay migration, scripting, serialization, and debug UI remain deferred.
+Status: core scene physics facade implemented. `Engine::ScenePhysicsWorld` provides Jolt-backed static, kinematic, and dynamic scene bodies, generation-counted body/collider handles, fixed scheduler sync, direct shape descriptors, raycast/capsule sweep/overlap/closest-point queries, diagnostics, and headless tests. Terrain now has an explicit `Engine::TerrainPhysicsColliderAdapter` that can create static scene-physics triangle mesh bodies from authoritative CPU terrain chunks, but App gameplay terrain-collider wiring remains opt-in/deferred. Procedural `World`, `ActorController`, `BlockingCollisionSystem`, authored collider generation, navigation obstacle integration, App gameplay migration, scripting, serialization, and debug UI remain deferred.
 
 Detailed implementation plan and contract: `docs/scene_runtime/phase_10_physics_integration.md`.
 
@@ -421,7 +422,7 @@ Detailed implementation plan and contract: `docs/scene_runtime/phase_10_physics_
 
 - Direct descriptors are the primary Phase 10 path. Callers can create box/capsule/sphere/mesh colliders explicitly.
 - Static triangle mesh colliders may consume CPU vertices/indices from scene navigation geometry sources or authored adapter CPU data only through explicit helper functions. Do not infer colliders from renderer mesh handles.
-- Terrain collider support should be an explicit adapter from existing CPU terrain height/build data if included; otherwise defer it and keep tests on simple static mesh/box fixtures.
+- Terrain collider support is owned by `TerrainPhysicsColliderAdapter`, which consumes authoritative CPU terrain chunk data and creates explicit static `ScenePhysicsWorld` bodies/colliders. Scene physics should not infer terrain colliders from renderer LOD meshes or terrain material resources.
 - Do not generate colliders automatically during authored scene adaptation in the first implementation unless settings opt in and tests cover the ownership.
 
 ### Queries And Filters
@@ -499,6 +500,33 @@ Exit criteria:
 - Physics tests run headlessly without Renderer, App, Navigation, scripting, bgfx, or ImGui.
 - Existing procedural world movement, blocking collision, authored scene sample, render bridge, navigation runtime, and full CTest behavior remain unchanged.
 
+## 10.5. Terrain Runtime Alignment Checkpoint
+
+Goal: Make the scene roadmap aware of the completed terrain rework foundation before character movement, reflection, and serialization build on it.
+
+Status: documentation checkpoint added. The terrain roadmap now provides CPU heightmap import, `TerrainDataset`, derived CPU cache records, render LOD adapter, navigation build-data adapter, scene-physics collider adapter, terrain material metadata/rendering, and serialization prep metadata. These are explicit adapters beside the scene runtime; they are not scene components yet and do not automatically migrate App terrain ownership.
+
+Scope:
+
+- Treat `TerrainDataset` chunks and durable `TerrainSourceChunkId` values as the terrain-side identity model for future scene serialization and streaming work.
+- Use `TerrainNavigationAdapter` as the terrain contribution path for scene navigation snapshots. Do not call legacy `TerrainSystem` terrain extraction directly from scene systems except through compatibility request helpers.
+- Use `TerrainPhysicsColliderAdapter` as the terrain contribution path for scene physics static colliders. Do not derive physics collision from renderer terrain handles, terrain render LOD meshes, or material-layer resources.
+- Treat `TerrainMaterialMetadata` and `TerrainMaterialRenderAdapter` as visual/material metadata boundaries. Terrain material sets are not scene render components, and renderer-owned terrain material-set handles remain transient live resources.
+- Use `TerrainSerializationPrep` as the starting point for terrain chunk references in the Phase 13 serialization design. Runtime terrain handles, renderer terrain handles, nav tile handles, and physics body/collider handles must remain unserialized.
+- Keep procedural App terrain ownership on `TerrainSystem` until a dedicated heightmap-backed App streaming or terrain ownership migration phase is planned.
+
+Cleanup and retroactive work before Milestone 11:
+
+- Audit character movement assumptions so grounding and floor sweeps can hit terrain through `ScenePhysicsWorld` only when a caller explicitly creates terrain collider bindings.
+- Add composition tests, if character movement starts depending on terrain, that create a tiny `TerrainDataset` chunk, build a `TerrainPhysicsColliderAdapter` payload, create scene physics terrain, and verify capsule grounding without linking Renderer/App.
+- Add navigation composition tests, if path-following starts depending on terrain, that build `NavigationTerrainBuildData` through `TerrainNavigationAdapter` and query it through `SceneNavigationService`.
+- Keep terrain material rendering out of character movement and physics decisions; gameplay material classification should use CPU material metadata or future material-weight payloads, not shader results.
+
+Exit criteria:
+
+- Scene navigation, physics, and future serialization plans reference the terrain adapters rather than legacy renderer or procedural terrain internals.
+- Character movement can be planned against explicit scene physics and navigation services without assuming automatic terrain collider/navmesh generation.
+
 ## 11. Character Movement Roadmap
 
 Goal: Build a reusable character movement component on top of physics and navigation.
@@ -535,6 +563,7 @@ Exit criteria:
 Goal: Persist scene data without serializing transient runtime handles.
 
 - Serialize scene metadata, actors, stable IDs, component records, transform hierarchy, asset references, and exposed variables.
+- For terrain references, use `TerrainSerializationPrep` durable chunk identity and payload-boundary metadata; do not serialize `TerrainSourceHandle`, `TerrainChunkHandle`, renderer terrain handles, nav tile handles, terrain collider handles, or scene physics body/collider handles.
 - Add versioned scene file format and migration hooks.
 - Serialize references by stable ID or asset ID, not runtime handles.
 - Add load validation for missing assets, unknown component types, invalid parents, and property mismatches.

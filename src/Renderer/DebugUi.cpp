@@ -420,6 +420,10 @@ namespace Renderer::DebugUi {
         ImGui::Text("Live: %u", stats.liveTerrainTiles);
         ImGui::Text("Visible: %u", stats.visibleTerrainTiles);
         ImGui::Text("Submitted: %u", stats.submittedTerrainTiles);
+        ImGui::Text("Layered assigned/submitted/fallback: %u / %u / %u",
+            stats.assignedLayeredTerrainTiles,
+            stats.submittedLayeredTerrainTiles,
+            stats.fallbackTerrainTiles);
         ImGui::Text("Layer/flag culled: %u", stats.layerOrFlagCulledTerrainTiles);
         ImGui::Text("Frustum culled: %u", stats.frustumCulledTerrainTiles);
         ImGui::Text("Distance culled: %u", stats.distanceCulledTerrainTiles);
@@ -1143,6 +1147,9 @@ namespace Renderer::DebugUi {
                         group.liveTerrainTiles,
                         group.visibleTerrainTiles,
                         group.submittedTerrainTiles);
+                    ImGui::Text("Terrain layered/fallback submitted: %u / %u",
+                        group.submittedLayeredTerrainTiles,
+                        group.fallbackTerrainTiles);
                     ImGui::Text("Terrain culled layer/frustum/distance: %u / %u / %u",
                         group.layerOrFlagCulledTerrainTiles,
                         group.frustumCulledTerrainTiles,

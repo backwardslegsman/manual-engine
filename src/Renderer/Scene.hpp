@@ -15,6 +15,8 @@ namespace Renderer {
     constexpr uint32_t MaxForwardLights = 16;
     constexpr uint32_t MaxSkinnedInfluencesPerVertex = 4;
     constexpr uint32_t MaxSkinnedJointsPerMesh = 64;
+    constexpr uint32_t MaxTerrainMaterialLayers = 4;
+    constexpr uint32_t MaxTerrainMaterialRules = 8;
 
     enum class RenderLayer : uint32_t {
         None = 0,
@@ -261,6 +263,8 @@ namespace Renderer {
         uint32_t liveTerrainTiles = 0;
         uint32_t visibleTerrainTiles = 0;
         uint32_t submittedTerrainTiles = 0;
+        uint32_t submittedLayeredTerrainTiles = 0;
+        uint32_t fallbackTerrainTiles = 0;
         uint32_t layerOrFlagCulledTerrainTiles = 0;
         uint32_t frustumCulledTerrainTiles = 0;
         uint32_t distanceCulledTerrainTiles = 0;
@@ -299,6 +303,9 @@ namespace Renderer {
         uint32_t liveTerrainTiles = 0;
         uint32_t visibleTerrainTiles = 0;
         uint32_t submittedTerrainTiles = 0;
+        uint32_t assignedLayeredTerrainTiles = 0;
+        uint32_t submittedLayeredTerrainTiles = 0;
+        uint32_t fallbackTerrainTiles = 0;
         uint32_t layerOrFlagCulledTerrainTiles = 0;
         uint32_t frustumCulledTerrainTiles = 0;
         uint32_t distanceCulledTerrainTiles = 0;
@@ -346,6 +353,61 @@ namespace Renderer {
 
     struct TerrainHandle {
         uint32_t id = UINT32_MAX;
+    };
+
+    struct TerrainMaterialSetHandle {
+        uint32_t id = UINT32_MAX;
+    };
+
+    struct TerrainMaterialLayerDescriptor {
+        std::string name;
+        glm::vec4 baseColorFactor{1.0f};
+        TextureHandle baseColorTexture;
+        TextureHandle normalTexture;
+        TextureHandle metallicRoughnessTexture;
+        float normalScale = 1.0f;
+        float metallicFactor = 0.0f;
+        float roughnessFactor = 1.0f;
+        glm::vec2 tilingScale{1.0f};
+        bool enabled = true;
+    };
+
+    struct TerrainMaterialRuleDescriptor {
+        std::string name;
+        uint32_t layerIndex = 0;
+        int32_t priority = 0;
+        float weight = 1.0f;
+        float blendFalloff = 0.0f;
+        bool useHeightRange = false;
+        float minHeight = 0.0f;
+        float maxHeight = 0.0f;
+        bool useSlopeRange = false;
+        float minSlopeDegrees = 0.0f;
+        float maxSlopeDegrees = 90.0f;
+        bool useWorldXRange = false;
+        float minWorldX = 0.0f;
+        float maxWorldX = 0.0f;
+        bool useWorldZRange = false;
+        float minWorldZ = 0.0f;
+        float maxWorldZ = 0.0f;
+    };
+
+    struct TerrainMaterialSetDescriptor {
+        std::string name;
+        std::vector<TerrainMaterialLayerDescriptor> layers;
+        std::vector<TerrainMaterialRuleDescriptor> rules;
+        uint32_t fallbackLayerIndex = 0;
+    };
+
+    struct TerrainMaterialSetDiagnostics {
+        bool valid = false;
+        std::string name;
+        uint32_t layerCount = 0;
+        uint32_t ruleCount = 0;
+        uint32_t truncatedLayerCount = 0;
+        uint32_t truncatedRuleCount = 0;
+        uint32_t invalidRuleCount = 0;
+        uint32_t missingTextureFallbackCount = 0;
     };
 
     struct StaticSubmeshDescriptor {
@@ -414,6 +476,10 @@ namespace Renderer {
     void destroyMaterial(MaterialHandle material);
     void setMaterialDescriptor(MaterialHandle material, const MaterialDescriptor& descriptor);
     MaterialDiagnostics materialDiagnostics(MaterialHandle material);
+    TerrainMaterialSetHandle createTerrainMaterialSet(const TerrainMaterialSetDescriptor& descriptor);
+    void destroyTerrainMaterialSet(TerrainMaterialSetHandle materialSet);
+    void setTerrainMaterialSetDescriptor(TerrainMaterialSetHandle materialSet, const TerrainMaterialSetDescriptor& descriptor);
+    TerrainMaterialSetDiagnostics terrainMaterialSetDiagnostics(TerrainMaterialSetHandle materialSet);
     void setAtmosphereSettings(const AtmosphereSettings& settings);
     const AtmosphereSettings& atmosphereSettings();
     void setDebugDrawSettings(const DebugDrawSettings& settings);
@@ -458,6 +524,8 @@ namespace Renderer {
     void setTerrainRenderLayer(TerrainHandle terrain, RenderLayer layer);
     void setTerrainVisibilityFlags(TerrainHandle terrain, VisibilityFlags flags);
     void setTerrainMaxDrawDistance(TerrainHandle terrain, float maxDrawDistance);
+    void setTerrainMaterialSet(TerrainHandle terrain, TerrainMaterialSetHandle materialSet);
+    void clearTerrainMaterialSet(TerrainHandle terrain);
     void setTerrainRenderGroup(TerrainHandle terrain, RenderGroupHandle group);
     void clearTerrainRenderGroup(TerrainHandle terrain);
 

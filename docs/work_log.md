@@ -1307,3 +1307,47 @@ Changed:
 Rationale:
 - Terrain needs stable material metadata and diagnostic CPU rule evaluation before shader-layer blending or material resource creation can be designed safely.
 - Keeping T7 renderer-free prevents material rules from depending on render LOD normals or live renderer handles.
+
+## 2026-06-19 - T8 Layered Terrain Rendering
+
+Changed:
+- Added renderer-owned terrain material-set handles, descriptors, diagnostics, tile assignment APIs, draw stats, and a dedicated first-pass terrain shader path.
+- Added `Engine::TerrainMaterialRenderAdapter` to convert T7 material metadata into renderer terrain material-set resources through `AssetCache`, with idempotent release.
+- Updated the procedural App terrain sample to create one shared layered material set for biome fallback, slope rock, highland, and world-position soil rules while preserving per-tile biome materials as fallback.
+- Added focused layered terrain rendering tests using renderer stubs for material-set lifecycle, fallback/layered terrain stats, adapter mapping/release, and shader source coverage.
+
+Rationale:
+- Terrain material rules now have a live renderer bridge without making T7 metadata depend on renderer handles.
+- Keeping per-tile material handles as fallback lets the App sample migrate visually while preserving existing terrain ownership, LOD, navigation, physics, cache, and serialization boundaries.
+
+## 2026-06-19 - T9 Terrain Serialization Preparation
+
+Changed:
+- Added `Engine::TerrainSerializationPrep` with stable terrain chunk identity strings/hashes, future chunk-file metadata, payload boundary flags, validation, deterministic payload file names, and derived-cache source hash bridging.
+- Added `docs/terrain_runtime/t9_serialization_preparation.md` documenting durable identity, chunk metadata, payload boundaries, cache relationship, and non-goals.
+- Added focused tests covering deterministic identity, runtime-handle exclusion, invalidation inputs, invalid metadata rejection, source-vs-derived payload boundaries, and derived cache identity behavior.
+
+Rationale:
+- Future terrain serialize/deserialize needs durable chunk identity and payload boundaries before file formats or App streaming can be designed.
+- Keeping T9 metadata-only prevents serialization prep from changing live terrain ownership, renderer, navigation, physics, cache payload formats, or procedural saves.
+
+## 2026-06-19 - Terrain Rework Roadmap Wrap-Up
+
+Changed:
+- Extracted the procedural sample layered terrain material preset into `Engine::TerrainSampleMaterials`, leaving App code to provide biome colors and own live renderer resource lifetime.
+- Added focused test coverage for the sample material preset shape and validation.
+- Updated the terrain roadmap with an initial-pass wrap-up and clarified current App terrain boundaries in the overview/contracts docs.
+
+Rationale:
+- Terrain material rule construction is reusable Engine metadata, not App orchestration.
+- Marking T0 through T9 as the completed foundation makes the remaining heightmap streaming, editing, serialization, and ownership migration work easier to plan as separate follow-up scopes.
+
+## 2026-06-19 - Scene Roadmap Terrain Alignment
+
+Changed:
+- Updated the scene component roadmap to account for the terrain rework adapters now available to scene navigation, scene physics, and future serialization.
+- Added a 10.5 terrain runtime alignment checkpoint before character movement so terrain collider/navmesh/material/serialization boundaries are explicit.
+- Clarified that scene systems should use `TerrainNavigationAdapter`, `TerrainPhysicsColliderAdapter`, and `TerrainSerializationPrep` instead of reaching into renderer terrain handles or legacy procedural terrain internals.
+
+Rationale:
+- Character movement and serialization planning need to know that terrain integration is explicit and adapter-driven, not automatic side effects of terrain rendering or legacy `TerrainSystem` ownership.

@@ -21,6 +21,13 @@ namespace {
         uint32_t truncatedJointCount = 0;
     };
 
+    struct TerrainRecord {
+        bool alive = false;
+        Renderer::MaterialHandle material;
+        Renderer::TerrainMaterialSetHandle materialSet;
+        Renderer::RenderVisibility visibility{Renderer::RenderLayer::Terrain, Renderer::VisibilityFlags::Visible, 0.0f};
+    };
+
     std::vector<bool> g_textures;
     std::vector<Renderer::TextureDescriptor> g_textureDescriptors;
     std::vector<bool> g_materials;
@@ -31,6 +38,9 @@ namespace {
     std::vector<Renderer::StaticMeshDescriptor> g_meshDescriptors;
     std::vector<bool> g_skinnedMeshes;
     std::vector<Renderer::SkinnedMeshDescriptor> g_skinnedMeshDescriptors;
+    std::vector<bool> g_terrainMaterialSets;
+    std::vector<Renderer::TerrainMaterialSetDescriptor> g_terrainMaterialSetDescriptors;
+    std::vector<TerrainRecord> g_terrainTiles;
     std::vector<InstanceRecord> g_instances;
     std::vector<SkinnedInstanceRecord> g_skinnedInstances;
     std::vector<bool> g_renderGroups;
@@ -63,6 +73,9 @@ namespace TestRenderer {
         g_meshDescriptors.clear();
         g_skinnedMeshes.clear();
         g_skinnedMeshDescriptors.clear();
+        g_terrainMaterialSets.clear();
+        g_terrainMaterialSetDescriptors.clear();
+        g_terrainTiles.clear();
         g_instances.clear();
         g_skinnedInstances.clear();
         g_renderGroups.clear();
@@ -135,6 +148,15 @@ namespace TestRenderer {
     {
         uint32_t count = 0;
         for (bool alive : g_renderGroups) {
+            count += alive ? 1u : 0u;
+        }
+        return count;
+    }
+
+    uint32_t liveTerrainMaterialSetCount()
+    {
+        uint32_t count = 0;
+        for (bool alive : g_terrainMaterialSets) {
             count += alive ? 1u : 0u;
         }
         return count;
@@ -226,6 +248,22 @@ namespace TestRenderer {
             return {};
         }
         return g_textureDescriptors[handle.id];
+    }
+
+    Renderer::TerrainMaterialSetDescriptor terrainMaterialSetDescriptor(Renderer::TerrainMaterialSetHandle handle)
+    {
+        if (handle.id >= g_terrainMaterialSetDescriptors.size()) {
+            return {};
+        }
+        return g_terrainMaterialSetDescriptors[handle.id];
+    }
+
+    Renderer::TerrainMaterialSetHandle terrainMaterialSetForTerrain(Renderer::TerrainHandle handle)
+    {
+        if (handle.id >= g_terrainTiles.size() || !g_terrainTiles[handle.id].alive) {
+            return {};
+        }
+        return g_terrainTiles[handle.id].materialSet;
     }
 }
 
@@ -402,6 +440,51 @@ namespace Renderer {
         return diagnostics;
     }
 
+    TerrainMaterialSetHandle createTerrainMaterialSet(const TerrainMaterialSetDescriptor& descriptor)
+    {
+        const uint32_t index = storeAlive(g_terrainMaterialSets);
+        if (index >= g_terrainMaterialSetDescriptors.size()) {
+            g_terrainMaterialSetDescriptors.resize(index + 1);
+        }
+        g_terrainMaterialSetDescriptors[index] = descriptor;
+        return {index};
+    }
+
+    void destroyTerrainMaterialSet(TerrainMaterialSetHandle materialSet)
+    {
+        if (materialSet.id < g_terrainMaterialSets.size()) {
+            g_terrainMaterialSets[materialSet.id] = false;
+        }
+    }
+
+    void setTerrainMaterialSetDescriptor(TerrainMaterialSetHandle materialSet, const TerrainMaterialSetDescriptor& descriptor)
+    {
+        if (materialSet.id < g_terrainMaterialSetDescriptors.size()) {
+            g_terrainMaterialSetDescriptors[materialSet.id] = descriptor;
+        }
+    }
+
+    TerrainMaterialSetDiagnostics terrainMaterialSetDiagnostics(TerrainMaterialSetHandle materialSet)
+    {
+        TerrainMaterialSetDiagnostics diagnostics;
+        if (materialSet.id >= g_terrainMaterialSets.size() || !g_terrainMaterialSets[materialSet.id] ||
+            materialSet.id >= g_terrainMaterialSetDescriptors.size()) {
+            return diagnostics;
+        }
+        const TerrainMaterialSetDescriptor& descriptor = g_terrainMaterialSetDescriptors[materialSet.id];
+        diagnostics.valid = true;
+        diagnostics.name = descriptor.name;
+        diagnostics.layerCount = static_cast<uint32_t>(std::min<size_t>(descriptor.layers.size(), MaxTerrainMaterialLayers));
+        diagnostics.ruleCount = static_cast<uint32_t>(std::min<size_t>(descriptor.rules.size(), MaxTerrainMaterialRules));
+        diagnostics.truncatedLayerCount = descriptor.layers.size() > MaxTerrainMaterialLayers
+            ? static_cast<uint32_t>(descriptor.layers.size() - MaxTerrainMaterialLayers)
+            : 0u;
+        diagnostics.truncatedRuleCount = descriptor.rules.size() > MaxTerrainMaterialRules
+            ? static_cast<uint32_t>(descriptor.rules.size() - MaxTerrainMaterialRules)
+            : 0u;
+        return diagnostics;
+    }
+
     StaticMeshHandle createStaticMesh(const StaticMeshDescriptor& descriptor)
     {
         if (descriptor.submeshes.empty()) {
@@ -483,6 +566,106 @@ namespace Renderer {
             }
         }
         return diagnostics;
+    }
+
+    TerrainHandle createTerrainTile(
+        const std::vector<MeshVertex>& vertices,
+        const std::vector<uint32_t>& indices,
+        MaterialHandle material)
+    {
+        if (vertices.empty() || indices.empty()) {
+            return {};
+        }
+        TerrainRecord record;
+        record.alive = true;
+        record.material = material;
+        for (uint32_t index = 0; index < g_terrainTiles.size(); ++index) {
+            if (!g_terrainTiles[index].alive) {
+                g_terrainTiles[index] = record;
+                return {index};
+            }
+        }
+        const uint32_t index = static_cast<uint32_t>(g_terrainTiles.size());
+        g_terrainTiles.push_back(record);
+        return {index};
+    }
+
+    void destroyTerrainTile(TerrainHandle terrain)
+    {
+        if (terrain.id < g_terrainTiles.size()) {
+            g_terrainTiles[terrain.id] = {};
+        }
+    }
+
+    void setTerrainMaterial(TerrainHandle terrain, MaterialHandle material)
+    {
+        if (terrain.id < g_terrainTiles.size() && g_terrainTiles[terrain.id].alive) {
+            g_terrainTiles[terrain.id].material = material;
+        }
+    }
+
+    void setTerrainRenderLayer(TerrainHandle terrain, RenderLayer layer)
+    {
+        if (terrain.id < g_terrainTiles.size() && g_terrainTiles[terrain.id].alive) {
+            g_terrainTiles[terrain.id].visibility.layer = layer;
+        }
+    }
+
+    void setTerrainVisibilityFlags(TerrainHandle terrain, VisibilityFlags flags)
+    {
+        if (terrain.id < g_terrainTiles.size() && g_terrainTiles[terrain.id].alive) {
+            g_terrainTiles[terrain.id].visibility.flags = flags;
+        }
+    }
+
+    void setTerrainMaxDrawDistance(TerrainHandle terrain, float maxDrawDistance)
+    {
+        if (terrain.id < g_terrainTiles.size() && g_terrainTiles[terrain.id].alive) {
+            g_terrainTiles[terrain.id].visibility.maxDrawDistance = maxDrawDistance;
+        }
+    }
+
+    void setTerrainMaterialSet(TerrainHandle terrain, TerrainMaterialSetHandle materialSet)
+    {
+        if (terrain.id < g_terrainTiles.size() && g_terrainTiles[terrain.id].alive &&
+            materialSet.id < g_terrainMaterialSets.size() && g_terrainMaterialSets[materialSet.id]) {
+            g_terrainTiles[terrain.id].materialSet = materialSet;
+        }
+    }
+
+    void clearTerrainMaterialSet(TerrainHandle terrain)
+    {
+        if (terrain.id < g_terrainTiles.size() && g_terrainTiles[terrain.id].alive) {
+            g_terrainTiles[terrain.id].materialSet = {};
+        }
+    }
+
+    void setTerrainRenderGroup(TerrainHandle, RenderGroupHandle)
+    {
+    }
+
+    void clearTerrainRenderGroup(TerrainHandle)
+    {
+    }
+
+    SceneDrawStats drawScene(const RenderView&)
+    {
+        SceneDrawStats stats;
+        for (const TerrainRecord& terrain : g_terrainTiles) {
+            if (!terrain.alive) {
+                continue;
+            }
+            ++stats.liveTerrainTiles;
+            ++stats.visibleTerrainTiles;
+            ++stats.submittedTerrainTiles;
+            if (terrain.materialSet.id < g_terrainMaterialSets.size() && g_terrainMaterialSets[terrain.materialSet.id]) {
+                ++stats.assignedLayeredTerrainTiles;
+                ++stats.submittedLayeredTerrainTiles;
+            } else {
+                ++stats.fallbackTerrainTiles;
+            }
+        }
+        return stats;
     }
 
     SkinnedMeshInstanceHandle createSkinnedInstance(SkinnedMeshHandle mesh)

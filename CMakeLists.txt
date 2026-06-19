@@ -72,9 +72,12 @@ add_executable(manual_engine
     src/Engine/TerrainDerivedCacheAsync.cpp
     src/Engine/TerrainImport.cpp
     src/Engine/TerrainMaterialMetadata.cpp
+    src/Engine/TerrainMaterialRenderAdapter.cpp
     src/Engine/TerrainNavigationAdapter.cpp
     src/Engine/TerrainPhysicsColliderAdapter.cpp
     src/Engine/TerrainRenderLodAdapter.cpp
+    src/Engine/TerrainSampleMaterials.cpp
+    src/Engine/TerrainSerializationPrep.cpp
     src/Engine/World.cpp
     src/Engine/WorldNavigationGraph.cpp
     src/Engine/WorldObjectOverrides.cpp
@@ -389,6 +392,57 @@ target_link_libraries(manual_engine_terrain_material_metadata_tests
 
 add_test(NAME manual_engine_terrain_material_metadata_tests COMMAND manual_engine_terrain_material_metadata_tests)
 
+add_executable(manual_engine_terrain_layered_rendering_tests
+    tests/terrain/TerrainLayeredRenderingTestRunner.cpp
+    tests/authored_scene/RendererOwnershipStubs.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Engine/AssetCache.cpp
+    src/Engine/AssetRegistry.cpp
+    src/Engine/Biome.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainMaterialMetadata.cpp
+    src/Engine/TerrainMaterialRenderAdapter.cpp
+    src/Engine/TerrainSampleMaterials.cpp
+)
+
+target_include_directories(manual_engine_terrain_layered_rendering_tests
+    PRIVATE
+        src
+)
+
+target_compile_definitions(manual_engine_terrain_layered_rendering_tests
+    PRIVATE
+        MANUAL_ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(manual_engine_terrain_layered_rendering_tests
+    PRIVATE
+        assimp::assimp
+        glm::glm
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_terrain_layered_rendering_tests COMMAND manual_engine_terrain_layered_rendering_tests)
+
+add_executable(manual_engine_terrain_serialization_prep_tests
+    tests/terrain/TerrainSerializationPrepTestRunner.cpp
+    src/Engine/TerrainDerivedCache.cpp
+    src/Engine/TerrainSerializationPrep.cpp
+)
+
+target_include_directories(manual_engine_terrain_serialization_prep_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_terrain_serialization_prep_tests
+    PRIVATE
+        glm::glm
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_terrain_serialization_prep_tests COMMAND manual_engine_terrain_serialization_prep_tests)
+
 add_executable(manual_engine_asset_registry_tests
     tests/assets/AssetRegistryTestRunner.cpp
     src/Assets/Assimp/Importer.cpp
@@ -619,8 +673,10 @@ find_program(BGFX_SHADERC shaderc
 add_custom_command(
     OUTPUT
         "${SHADER_OUTPUT_DIR}/vs_mesh.bin"
+        "${SHADER_OUTPUT_DIR}/vs_terrain.bin"
         "${SHADER_OUTPUT_DIR}/vs_skinned_mesh.bin"
         "${SHADER_OUTPUT_DIR}/fs_mesh.bin"
+        "${SHADER_OUTPUT_DIR}/fs_terrain.bin"
         "${SHADER_OUTPUT_DIR}/vs_imgui.bin"
         "${SHADER_OUTPUT_DIR}/fs_imgui.bin"
         "${SHADER_OUTPUT_DIR}/vs_debug_line.bin"
@@ -638,6 +694,24 @@ add_custom_command(
     COMMAND "${BGFX_SHADERC}"
         -f "${SHADER_SOURCE_DIR}/fs_mesh.fs"
         -o "${SHADER_OUTPUT_DIR}/fs_mesh.bin"
+        --type fragment
+        --platform windows
+        -p s_5_0
+        --varyingdef "${SHADER_SOURCE_DIR}/varying.def.sc"
+        -i "${SHADER_SOURCE_DIR}"
+        -i "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/bgfx"
+    COMMAND "${BGFX_SHADERC}"
+        -f "${SHADER_SOURCE_DIR}/vs_terrain.vs"
+        -o "${SHADER_OUTPUT_DIR}/vs_terrain.bin"
+        --type vertex
+        --platform windows
+        -p s_5_0
+        --varyingdef "${SHADER_SOURCE_DIR}/varying.def.sc"
+        -i "${SHADER_SOURCE_DIR}"
+        -i "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/bgfx"
+    COMMAND "${BGFX_SHADERC}"
+        -f "${SHADER_SOURCE_DIR}/fs_terrain.fs"
+        -o "${SHADER_OUTPUT_DIR}/fs_terrain.bin"
         --type fragment
         --platform windows
         -p s_5_0
@@ -691,8 +765,10 @@ add_custom_command(
         -i "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/bgfx"
     DEPENDS
         "${SHADER_SOURCE_DIR}/vs_mesh.vs"
+        "${SHADER_SOURCE_DIR}/vs_terrain.vs"
         "${SHADER_SOURCE_DIR}/vs_skinned_mesh.vs"
         "${SHADER_SOURCE_DIR}/fs_mesh.fs"
+        "${SHADER_SOURCE_DIR}/fs_terrain.fs"
         "${SHADER_SOURCE_DIR}/vs_imgui.vs"
         "${SHADER_SOURCE_DIR}/fs_imgui.fs"
         "${SHADER_SOURCE_DIR}/vs_debug_line.vs"
@@ -704,8 +780,10 @@ add_custom_command(
 add_custom_target(manual_engine_shaders
     DEPENDS
         "${SHADER_OUTPUT_DIR}/vs_mesh.bin"
+        "${SHADER_OUTPUT_DIR}/vs_terrain.bin"
         "${SHADER_OUTPUT_DIR}/vs_skinned_mesh.bin"
         "${SHADER_OUTPUT_DIR}/fs_mesh.bin"
+        "${SHADER_OUTPUT_DIR}/fs_terrain.bin"
         "${SHADER_OUTPUT_DIR}/vs_imgui.bin"
         "${SHADER_OUTPUT_DIR}/fs_imgui.bin"
         "${SHADER_OUTPUT_DIR}/vs_debug_line.bin"

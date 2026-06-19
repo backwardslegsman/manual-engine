@@ -120,10 +120,17 @@ namespace {
         bgfx::IndexBufferHandle indexBuffer = BGFX_INVALID_HANDLE;
         uint32_t indexCount = 0;
         Renderer::MaterialHandle material;
+        Renderer::TerrainMaterialSetHandle materialSet;
         Renderer::RenderVisibility visibility{Renderer::RenderLayer::Terrain, Renderer::VisibilityFlags::Visible, 0.0f};
         Renderer::Aabb worldBounds;
         bool hasBounds = false;
         Renderer::RenderGroupHandle renderGroup;
+    };
+
+    struct TerrainMaterialSetResource {
+        bool alive = false;
+        Renderer::TerrainMaterialSetDescriptor descriptor;
+        Renderer::TerrainMaterialSetDiagnostics diagnostics;
     };
 
     std::vector<RenderGroupResource> g_renderGroups;
@@ -134,9 +141,11 @@ namespace {
     std::vector<MeshInstanceResource> g_instances;
     std::vector<SkinnedMeshInstanceResource> g_skinnedInstances;
     std::vector<TerrainTileResource> g_terrainTiles;
+    std::vector<TerrainMaterialSetResource> g_terrainMaterialSets;
     std::vector<Renderer::PosColorVertex> g_debugLineVertices;
 
     bgfx::ProgramHandle g_meshProgram = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle g_terrainProgram = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle g_skinnedMeshProgram = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle g_debugLineProgram = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle g_baseColorSampler = BGFX_INVALID_HANDLE;
@@ -164,6 +173,15 @@ namespace {
     bgfx::UniformHandle g_fogColor = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle g_fogParams = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle g_jointPalette = BGFX_INVALID_HANDLE;
+    std::array<bgfx::UniformHandle, Renderer::MaxTerrainMaterialLayers> g_terrainBaseColorSamplers{};
+    std::array<bgfx::UniformHandle, Renderer::MaxTerrainMaterialLayers> g_terrainNormalSamplers{};
+    std::array<bgfx::UniformHandle, Renderer::MaxTerrainMaterialLayers> g_terrainMetallicRoughnessSamplers{};
+    bgfx::UniformHandle g_terrainLayerBaseColor = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle g_terrainLayerParams = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle g_terrainLayerTiling = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle g_terrainRuleParams0 = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle g_terrainRuleHeightSlope = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle g_terrainRuleWorldXz0 = BGFX_INVALID_HANDLE;
 
     Renderer::TextureHandle g_whiteTexture;
     Renderer::TextureHandle g_flatNormalTexture;
@@ -200,6 +218,11 @@ namespace {
     bool isValidTerrain(Renderer::TerrainHandle handle)
     {
         return handle.id < g_terrainTiles.size() && g_terrainTiles[handle.id].alive;
+    }
+
+    bool isValidTerrainMaterialSet(Renderer::TerrainMaterialSetHandle handle)
+    {
+        return handle.id < g_terrainMaterialSets.size() && g_terrainMaterialSets[handle.id].alive;
     }
 
     bool isValidRenderGroup(Renderer::RenderGroupHandle handle)
@@ -261,6 +284,16 @@ namespace {
     bool isFiniteVec3(const glm::vec3& value)
     {
         return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+    }
+
+    bool isFiniteVec2(const glm::vec2& value)
+    {
+        return std::isfinite(value.x) && std::isfinite(value.y);
+    }
+
+    bool isFiniteVec4(const glm::vec4& value)
+    {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z) && std::isfinite(value.w);
     }
 
     bool isValidAabb(const Renderer::Aabb& bounds)
@@ -477,6 +510,108 @@ namespace {
         material.alphaCutoff = descriptor.alphaCutoff;
         material.doubleSided = descriptor.doubleSided;
         return material;
+    }
+
+    TerrainMaterialSetResource makeTerrainMaterialSetResource(const Renderer::TerrainMaterialSetDescriptor& descriptor)
+    {
+        TerrainMaterialSetResource resource;
+        resource.alive = true;
+        resource.descriptor.name = descriptor.name;
+        resource.descriptor.fallbackLayerIndex = std::min<uint32_t>(
+            descriptor.fallbackLayerIndex,
+            Renderer::MaxTerrainMaterialLayers - 1u);
+
+        resource.diagnostics.valid = true;
+        resource.diagnostics.name = descriptor.name;
+        resource.diagnostics.truncatedLayerCount = descriptor.layers.size() > Renderer::MaxTerrainMaterialLayers
+            ? static_cast<uint32_t>(descriptor.layers.size() - Renderer::MaxTerrainMaterialLayers)
+            : 0u;
+        resource.diagnostics.truncatedRuleCount = descriptor.rules.size() > Renderer::MaxTerrainMaterialRules
+            ? static_cast<uint32_t>(descriptor.rules.size() - Renderer::MaxTerrainMaterialRules)
+            : 0u;
+
+        const uint32_t layerCount = std::min<uint32_t>(
+            static_cast<uint32_t>(descriptor.layers.size()),
+            Renderer::MaxTerrainMaterialLayers);
+        resource.descriptor.layers.reserve(layerCount);
+        for (uint32_t index = 0; index < layerCount; ++index) {
+            Renderer::TerrainMaterialLayerDescriptor layer = descriptor.layers[index];
+            if (!isFiniteVec4(layer.baseColorFactor)) {
+                layer.baseColorFactor = glm::vec4{1.0f};
+            }
+            if (!isFiniteVec2(layer.tilingScale) || layer.tilingScale.x == 0.0f || layer.tilingScale.y == 0.0f) {
+                layer.tilingScale = glm::vec2{1.0f};
+            }
+            layer.normalScale = std::isfinite(layer.normalScale) ? layer.normalScale : 1.0f;
+            layer.metallicFactor = std::clamp(std::isfinite(layer.metallicFactor) ? layer.metallicFactor : 0.0f, 0.0f, 1.0f);
+            layer.roughnessFactor = std::clamp(std::isfinite(layer.roughnessFactor) ? layer.roughnessFactor : 1.0f, 0.04f, 1.0f);
+            if (!Renderer::isValid(layer.baseColorTexture)) {
+                layer.baseColorTexture = g_whiteTexture;
+                ++resource.diagnostics.missingTextureFallbackCount;
+            }
+            if (!Renderer::isValid(layer.normalTexture)) {
+                layer.normalTexture = g_flatNormalTexture;
+                ++resource.diagnostics.missingTextureFallbackCount;
+            }
+            if (!Renderer::isValid(layer.metallicRoughnessTexture)) {
+                layer.metallicRoughnessTexture = g_whiteTexture;
+                ++resource.diagnostics.missingTextureFallbackCount;
+            }
+            resource.descriptor.layers.push_back(layer);
+        }
+
+        if (resource.descriptor.layers.empty()) {
+            Renderer::TerrainMaterialLayerDescriptor fallback;
+            fallback.name = "default";
+            fallback.baseColorTexture = g_whiteTexture;
+            fallback.normalTexture = g_flatNormalTexture;
+            fallback.metallicRoughnessTexture = g_whiteTexture;
+            resource.descriptor.layers.push_back(fallback);
+            resource.descriptor.fallbackLayerIndex = 0;
+        } else if (resource.descriptor.fallbackLayerIndex >= resource.descriptor.layers.size()) {
+            resource.descriptor.fallbackLayerIndex = 0;
+        }
+
+        const uint32_t ruleCount = std::min<uint32_t>(
+            static_cast<uint32_t>(descriptor.rules.size()),
+            Renderer::MaxTerrainMaterialRules);
+        resource.descriptor.rules.reserve(ruleCount);
+        for (uint32_t index = 0; index < ruleCount; ++index) {
+            Renderer::TerrainMaterialRuleDescriptor rule = descriptor.rules[index];
+            if (rule.layerIndex >= resource.descriptor.layers.size()) {
+                ++resource.diagnostics.invalidRuleCount;
+                continue;
+            }
+            rule.weight = std::max(std::isfinite(rule.weight) ? rule.weight : 1.0f, 0.0f);
+            rule.blendFalloff = std::max(std::isfinite(rule.blendFalloff) ? rule.blendFalloff : 0.0f, 0.0f);
+            if (rule.useHeightRange && (!std::isfinite(rule.minHeight) || !std::isfinite(rule.maxHeight) || rule.minHeight > rule.maxHeight)) {
+                ++resource.diagnostics.invalidRuleCount;
+                continue;
+            }
+            if (rule.useSlopeRange && (!std::isfinite(rule.minSlopeDegrees) || !std::isfinite(rule.maxSlopeDegrees) || rule.minSlopeDegrees > rule.maxSlopeDegrees)) {
+                ++resource.diagnostics.invalidRuleCount;
+                continue;
+            }
+            if (rule.useWorldXRange && (!std::isfinite(rule.minWorldX) || !std::isfinite(rule.maxWorldX) || rule.minWorldX > rule.maxWorldX)) {
+                ++resource.diagnostics.invalidRuleCount;
+                continue;
+            }
+            if (rule.useWorldZRange && (!std::isfinite(rule.minWorldZ) || !std::isfinite(rule.maxWorldZ) || rule.minWorldZ > rule.maxWorldZ)) {
+                ++resource.diagnostics.invalidRuleCount;
+                continue;
+            }
+            resource.descriptor.rules.push_back(rule);
+        }
+
+        resource.diagnostics.layerCount = static_cast<uint32_t>(resource.descriptor.layers.size());
+        std::stable_sort(
+            resource.descriptor.rules.begin(),
+            resource.descriptor.rules.end(),
+            [](const Renderer::TerrainMaterialRuleDescriptor& lhs, const Renderer::TerrainMaterialRuleDescriptor& rhs) {
+                return lhs.priority > rhs.priority;
+            });
+        resource.diagnostics.ruleCount = static_cast<uint32_t>(resource.descriptor.rules.size());
+        return resource;
     }
 
     Renderer::StaticMeshHandle addMesh(StaticMeshResource mesh)
@@ -815,6 +950,121 @@ namespace {
         bgfx::setTexture(6, g_emissiveSampler, getNativeTexture(emissiveTexture));
     }
 
+    void setTerrainMaterialSetAndSceneUniforms(
+        const TerrainMaterialSetResource& materialSet,
+        const SceneUniforms& uniforms)
+    {
+        std::array<glm::vec4, Renderer::MaxTerrainMaterialLayers> layerBaseColors{};
+        std::array<glm::vec4, Renderer::MaxTerrainMaterialLayers> layerParams{};
+        std::array<glm::vec4, Renderer::MaxTerrainMaterialLayers> layerTilings{};
+        std::array<glm::vec4, Renderer::MaxTerrainMaterialRules> ruleParams{};
+        std::array<glm::vec4, Renderer::MaxTerrainMaterialRules> ruleHeightSlope{};
+        std::array<glm::vec4, Renderer::MaxTerrainMaterialRules> ruleWorldXz{};
+
+        const uint32_t layerCount = std::min<uint32_t>(
+            static_cast<uint32_t>(materialSet.descriptor.layers.size()),
+            Renderer::MaxTerrainMaterialLayers);
+        for (uint32_t index = 0; index < Renderer::MaxTerrainMaterialLayers; ++index) {
+            Renderer::TextureHandle baseColorTexture = g_whiteTexture;
+            Renderer::TextureHandle normalTexture = g_flatNormalTexture;
+            Renderer::TextureHandle metallicRoughnessTexture = g_whiteTexture;
+            if (index < layerCount) {
+                const Renderer::TerrainMaterialLayerDescriptor& layer = materialSet.descriptor.layers[index];
+                baseColorTexture = Renderer::isValid(layer.baseColorTexture) ? layer.baseColorTexture : g_whiteTexture;
+                normalTexture = Renderer::isValid(layer.normalTexture) ? layer.normalTexture : g_flatNormalTexture;
+                metallicRoughnessTexture = Renderer::isValid(layer.metallicRoughnessTexture)
+                    ? layer.metallicRoughnessTexture
+                    : g_whiteTexture;
+                layerBaseColors[index] = layer.baseColorFactor;
+                layerParams[index] = glm::vec4{
+                    std::clamp(layer.metallicFactor, 0.0f, 1.0f),
+                    std::clamp(layer.roughnessFactor, 0.04f, 1.0f),
+                    layer.normalScale,
+                    (layer.enabled ? 1.0f : 0.0f) +
+                        (normalTexture.id != g_flatNormalTexture.id ? 2.0f : 0.0f) +
+                        (metallicRoughnessTexture.id != g_whiteTexture.id ? 4.0f : 0.0f),
+                };
+                layerTilings[index] = glm::vec4{layer.tilingScale, 0.0f, 0.0f};
+            } else {
+                layerBaseColors[index] = glm::vec4{1.0f};
+                layerParams[index] = glm::vec4{0.0f, 1.0f, 1.0f, 0.0f};
+                layerTilings[index] = glm::vec4{1.0f, 1.0f, 0.0f, 0.0f};
+            }
+            bgfx::setTexture(index, g_terrainBaseColorSamplers[index], getNativeTexture(baseColorTexture));
+            bgfx::setTexture(4 + index, g_terrainNormalSamplers[index], getNativeTexture(normalTexture));
+            bgfx::setTexture(
+                8 + index,
+                g_terrainMetallicRoughnessSamplers[index],
+                getNativeTexture(metallicRoughnessTexture));
+        }
+
+        const uint32_t ruleCount = std::min<uint32_t>(
+            static_cast<uint32_t>(materialSet.descriptor.rules.size()),
+            Renderer::MaxTerrainMaterialRules);
+        for (uint32_t index = 0; index < Renderer::MaxTerrainMaterialRules; ++index) {
+            if (index < ruleCount) {
+                const Renderer::TerrainMaterialRuleDescriptor& rule = materialSet.descriptor.rules[index];
+                const float flags =
+                    (rule.useHeightRange ? 1.0f : 0.0f) +
+                    (rule.useSlopeRange ? 2.0f : 0.0f) +
+                    (rule.useWorldXRange ? 4.0f : 0.0f) +
+                    (rule.useWorldZRange ? 8.0f : 0.0f);
+                ruleParams[index] = glm::vec4{
+                    static_cast<float>(rule.layerIndex),
+                    rule.weight,
+                    rule.blendFalloff,
+                    flags,
+                };
+                ruleHeightSlope[index] = glm::vec4{
+                    rule.minHeight,
+                    rule.maxHeight,
+                    rule.minSlopeDegrees,
+                    rule.maxSlopeDegrees,
+                };
+                ruleWorldXz[index] = glm::vec4{
+                    rule.minWorldX,
+                    rule.maxWorldX,
+                    rule.minWorldZ,
+                    rule.maxWorldZ,
+                };
+            } else {
+                ruleParams[index] = glm::vec4{-1.0f, 0.0f, 0.0f, 0.0f};
+            }
+        }
+
+        const glm::vec4 alphaParams{0.0f, 0.5f, 0.0f, 0.0f};
+        bgfx::setUniform(g_alphaParams, &alphaParams[0]);
+        bgfx::setUniform(g_lightDirection, &uniforms.lightDirection[0]);
+        bgfx::setUniform(g_sunColorIntensity, &uniforms.sunColorIntensity[0]);
+        bgfx::setUniform(g_cameraPosition, &uniforms.cameraPosition[0]);
+        bgfx::setUniform(g_pbrParams, &uniforms.pbrParams[0]);
+        bgfx::setUniform(g_environmentParams, &uniforms.environmentParams[0]);
+        bgfx::setUniform(
+            g_forwardLightPositionRange,
+            uniforms.forwardLightPositionRange.data(),
+            Renderer::MaxForwardLights);
+        bgfx::setUniform(
+            g_forwardLightDirectionType,
+            uniforms.forwardLightDirectionType.data(),
+            Renderer::MaxForwardLights);
+        bgfx::setUniform(
+            g_forwardLightColorIntensity,
+            uniforms.forwardLightColorIntensity.data(),
+            Renderer::MaxForwardLights);
+        bgfx::setUniform(
+            g_forwardLightSpotParams,
+            uniforms.forwardLightSpotParams.data(),
+            Renderer::MaxForwardLights);
+        bgfx::setUniform(g_fogColor, &g_atmosphere.fogColor[0]);
+        bgfx::setUniform(g_fogParams, &uniforms.fogParams[0]);
+        bgfx::setUniform(g_terrainLayerBaseColor, layerBaseColors.data(), Renderer::MaxTerrainMaterialLayers);
+        bgfx::setUniform(g_terrainLayerParams, layerParams.data(), Renderer::MaxTerrainMaterialLayers);
+        bgfx::setUniform(g_terrainLayerTiling, layerTilings.data(), Renderer::MaxTerrainMaterialLayers);
+        bgfx::setUniform(g_terrainRuleParams0, ruleParams.data(), Renderer::MaxTerrainMaterialRules);
+        bgfx::setUniform(g_terrainRuleHeightSlope, ruleHeightSlope.data(), Renderer::MaxTerrainMaterialRules);
+        bgfx::setUniform(g_terrainRuleWorldXz0, ruleWorldXz.data(), Renderer::MaxTerrainMaterialRules);
+    }
+
     bool sameBatch(const VisibleMeshDrawItem& lhs, const VisibleMeshDrawItem& rhs)
     {
         return lhs.mesh.id == rhs.mesh.id &&
@@ -1096,6 +1346,19 @@ namespace Renderer {
             return false;
         }
 
+        bgfx::ShaderHandle terrainVsh = loadShader("vs_terrain.bin");
+        bgfx::ShaderHandle terrainFsh = loadShader("fs_terrain.bin");
+        if (bgfx::isValid(terrainVsh) && bgfx::isValid(terrainFsh)) {
+            g_terrainProgram = bgfx::createProgram(terrainVsh, terrainFsh, true);
+        } else {
+            if (bgfx::isValid(terrainVsh)) {
+                bgfx::destroy(terrainVsh);
+            }
+            if (bgfx::isValid(terrainFsh)) {
+                bgfx::destroy(terrainFsh);
+            }
+        }
+
         bgfx::ShaderHandle skinnedVsh = loadShader("vs_skinned_mesh.bin");
         bgfx::ShaderHandle skinnedFsh = loadShader("fs_mesh.bin");
         if (!bgfx::isValid(skinnedVsh) || !bgfx::isValid(skinnedFsh)) {
@@ -1171,6 +1434,39 @@ namespace Renderer {
             "u_jointPalette",
             bgfx::UniformType::Mat4,
             MaxSkinnedJointsPerMesh);
+        for (uint32_t index = 0; index < MaxTerrainMaterialLayers; ++index) {
+            const std::string suffix = std::to_string(index);
+            g_terrainBaseColorSamplers[index] =
+                bgfx::createUniform(("s_terrainBaseColor" + suffix).c_str(), bgfx::UniformType::Sampler);
+            g_terrainNormalSamplers[index] =
+                bgfx::createUniform(("s_terrainNormal" + suffix).c_str(), bgfx::UniformType::Sampler);
+            g_terrainMetallicRoughnessSamplers[index] =
+                bgfx::createUniform(("s_terrainMetallicRoughness" + suffix).c_str(), bgfx::UniformType::Sampler);
+        }
+        g_terrainLayerBaseColor = bgfx::createUniform(
+            "u_terrainLayerBaseColor",
+            bgfx::UniformType::Vec4,
+            MaxTerrainMaterialLayers);
+        g_terrainLayerParams = bgfx::createUniform(
+            "u_terrainLayerParams",
+            bgfx::UniformType::Vec4,
+            MaxTerrainMaterialLayers);
+        g_terrainLayerTiling = bgfx::createUniform(
+            "u_terrainLayerTiling",
+            bgfx::UniformType::Vec4,
+            MaxTerrainMaterialLayers);
+        g_terrainRuleParams0 = bgfx::createUniform(
+            "u_terrainRuleParams0",
+            bgfx::UniformType::Vec4,
+            MaxTerrainMaterialRules);
+        g_terrainRuleHeightSlope = bgfx::createUniform(
+            "u_terrainRuleHeightSlope",
+            bgfx::UniformType::Vec4,
+            MaxTerrainMaterialRules);
+        g_terrainRuleWorldXz0 = bgfx::createUniform(
+            "u_terrainRuleWorldXz0",
+            bgfx::UniformType::Vec4,
+            MaxTerrainMaterialRules);
 
         MaterialResource defaultMaterial;
         defaultMaterial.name = "default";
@@ -1271,6 +1567,51 @@ namespace Renderer {
         diagnostics.doubleSided = resource.doubleSided;
         diagnostics.renderPass = renderPassFor(resource.alphaMode);
         return diagnostics;
+    }
+
+    TerrainMaterialSetHandle createTerrainMaterialSet(const TerrainMaterialSetDescriptor& descriptor)
+    {
+        TerrainMaterialSetResource resource = makeTerrainMaterialSetResource(descriptor);
+        for (uint32_t index = 0; index < g_terrainMaterialSets.size(); ++index) {
+            if (!g_terrainMaterialSets[index].alive) {
+                g_terrainMaterialSets[index] = std::move(resource);
+                return {index};
+            }
+        }
+
+        const uint32_t id = static_cast<uint32_t>(g_terrainMaterialSets.size());
+        g_terrainMaterialSets.push_back(std::move(resource));
+        return {id};
+    }
+
+    void destroyTerrainMaterialSet(TerrainMaterialSetHandle materialSet)
+    {
+        if (!isValidTerrainMaterialSet(materialSet)) {
+            return;
+        }
+
+        for (TerrainTileResource& terrain : g_terrainTiles) {
+            if (terrain.alive && terrain.materialSet.id == materialSet.id) {
+                terrain.materialSet = {};
+            }
+        }
+        g_terrainMaterialSets[materialSet.id] = {};
+    }
+
+    void setTerrainMaterialSetDescriptor(TerrainMaterialSetHandle materialSet, const TerrainMaterialSetDescriptor& descriptor)
+    {
+        if (!isValidTerrainMaterialSet(materialSet)) {
+            return;
+        }
+        g_terrainMaterialSets[materialSet.id] = makeTerrainMaterialSetResource(descriptor);
+    }
+
+    TerrainMaterialSetDiagnostics terrainMaterialSetDiagnostics(TerrainMaterialSetHandle materialSet)
+    {
+        if (!isValidTerrainMaterialSet(materialSet)) {
+            return {};
+        }
+        return g_terrainMaterialSets[materialSet.id].diagnostics;
     }
 
     void setAtmosphereSettings(const AtmosphereSettings& settings)
@@ -1429,6 +1770,7 @@ namespace Renderer {
         g_skinnedInstances.clear();
         g_lights.clear();
         g_renderGroups.clear();
+        g_terrainMaterialSets.clear();
 
         for (TerrainTileResource& terrain : g_terrainTiles) {
             if (bgfx::isValid(terrain.vertexBuffer)) {
@@ -1443,7 +1785,7 @@ namespace Renderer {
         g_terrainTiles.clear();
         g_debugLineVertices.clear();
 
-        const std::array uniforms = {
+        std::vector<bgfx::UniformHandle> uniforms = {
             g_baseColorSampler,
             g_normalSampler,
             g_metallicSampler,
@@ -1469,7 +1811,18 @@ namespace Renderer {
             g_fogColor,
             g_fogParams,
             g_jointPalette,
+            g_terrainLayerBaseColor,
+            g_terrainLayerParams,
+            g_terrainLayerTiling,
+            g_terrainRuleParams0,
+            g_terrainRuleHeightSlope,
+            g_terrainRuleWorldXz0,
         };
+        for (uint32_t index = 0; index < MaxTerrainMaterialLayers; ++index) {
+            uniforms.push_back(g_terrainBaseColorSamplers[index]);
+            uniforms.push_back(g_terrainNormalSamplers[index]);
+            uniforms.push_back(g_terrainMetallicRoughnessSamplers[index]);
+        }
         for (bgfx::UniformHandle uniform : uniforms) {
             if (bgfx::isValid(uniform)) {
                 bgfx::destroy(uniform);
@@ -1479,6 +1832,10 @@ namespace Renderer {
         if (bgfx::isValid(g_meshProgram)) {
             bgfx::destroy(g_meshProgram);
             g_meshProgram = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(g_terrainProgram)) {
+            bgfx::destroy(g_terrainProgram);
+            g_terrainProgram = BGFX_INVALID_HANDLE;
         }
         if (bgfx::isValid(g_skinnedMeshProgram)) {
             bgfx::destroy(g_skinnedMeshProgram);
@@ -2002,6 +2359,22 @@ namespace Renderer {
         g_terrainTiles[terrain.id].visibility.maxDrawDistance = maxDrawDistance;
     }
 
+    void setTerrainMaterialSet(TerrainHandle terrain, TerrainMaterialSetHandle materialSet)
+    {
+        if (!isValidTerrain(terrain) || !isValidTerrainMaterialSet(materialSet)) {
+            return;
+        }
+        g_terrainTiles[terrain.id].materialSet = materialSet;
+    }
+
+    void clearTerrainMaterialSet(TerrainHandle terrain)
+    {
+        if (!isValidTerrain(terrain)) {
+            return;
+        }
+        g_terrainTiles[terrain.id].materialSet = {};
+    }
+
     void setTerrainRenderGroup(TerrainHandle terrain, RenderGroupHandle group)
     {
         if (!isValidTerrain(terrain) || !isValidRenderGroup(group)) {
@@ -2107,6 +2480,9 @@ namespace Renderer {
                 continue;
             }
             ++stats.liveTerrainTiles;
+            if (isValidTerrainMaterialSet(terrain.materialSet)) {
+                ++stats.assignedLayeredTerrainTiles;
+            }
             Renderer::RenderGroupDrawStats* groupStats = findGroupStats(stats, terrain.renderGroup);
             if (groupStats) {
                 ++groupStats->liveTerrainTiles;
@@ -2141,16 +2517,28 @@ namespace Renderer {
                 ++groupStats->visibleTerrainTiles;
             }
 
-            const MaterialResource& material = isValidMaterial(terrain.material)
-                ? g_materials[terrain.material.id]
-                : g_materials[0];
-
             bgfx::setTransform(&identity[0][0]);
-            setMaterialAndSceneUniforms(material, sceneUniforms, MaterialRenderPass::Opaque);
             bgfx::setVertexBuffer(0, terrain.vertexBuffer);
             bgfx::setIndexBuffer(terrain.indexBuffer, 0, terrain.indexCount);
             bgfx::setState(BGFX_STATE_DEFAULT | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
-            bgfx::submit(view.viewId, g_meshProgram);
+            if (isValidTerrainMaterialSet(terrain.materialSet) && bgfx::isValid(g_terrainProgram)) {
+                setTerrainMaterialSetAndSceneUniforms(g_terrainMaterialSets[terrain.materialSet.id], sceneUniforms);
+                bgfx::submit(view.viewId, g_terrainProgram);
+                ++stats.submittedLayeredTerrainTiles;
+                if (groupStats) {
+                    ++groupStats->submittedLayeredTerrainTiles;
+                }
+            } else {
+                const MaterialResource& material = isValidMaterial(terrain.material)
+                    ? g_materials[terrain.material.id]
+                    : g_materials[0];
+                setMaterialAndSceneUniforms(material, sceneUniforms, MaterialRenderPass::Opaque);
+                bgfx::submit(view.viewId, g_meshProgram);
+                ++stats.fallbackTerrainTiles;
+                if (groupStats) {
+                    ++groupStats->fallbackTerrainTiles;
+                }
+            }
             ++stats.submittedTerrainTiles;
             if (groupStats) {
                 ++groupStats->submittedTerrainTiles;

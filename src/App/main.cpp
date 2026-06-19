@@ -60,6 +60,8 @@
 #include "Engine/ProceduralChunkContent.hpp"
 #include "Engine/SpatialRegistry.hpp"
 #include "Engine/Terrain.hpp"
+#include "Engine/TerrainMaterialRenderAdapter.hpp"
+#include "Engine/TerrainSampleMaterials.hpp"
 #include "Engine/TerrainNavigationAdapter.hpp"
 #include "Engine/TerrainRenderLodAdapter.hpp"
 #include "Engine/World.hpp"
@@ -2063,6 +2065,31 @@ int main(int argc, char** argv)
             terrainMaterial,
         });
     }
+    std::vector<Engine::TerrainSampleBiomeMaterialInput> layeredTerrainInputs;
+    layeredTerrainInputs.reserve(biomeTerrainMaterials.size());
+    for (const RuntimeBiomeTerrainMaterial& material : biomeTerrainMaterials) {
+        layeredTerrainInputs.push_back({material.biomeId, material.color});
+    }
+    Engine::TerrainMaterialRenderCreateResult layeredTerrainMaterial =
+        Engine::createTerrainMaterialResources(
+            assetCache,
+            Engine::makeSampleProceduralTerrainMaterialSet(layeredTerrainInputs, FallbackTerrainColor));
+    if (!layeredTerrainMaterial.success) {
+        SDL_Log("Layered terrain material set unavailable; using per-tile terrain material fallback.");
+        for (const std::string& warning : layeredTerrainMaterial.diagnostics.warnings) {
+            SDL_Log("Layered terrain material warning: %s", warning.c_str());
+        }
+    } else if (layeredTerrainMaterial.diagnostics.truncatedLayerCount > 0 ||
+        layeredTerrainMaterial.diagnostics.truncatedRuleCount > 0 ||
+        layeredTerrainMaterial.diagnostics.missingTextureFallbackCount > 0) {
+        SDL_Log(
+            "Layered terrain material set ready (layers %u rules %u truncated layers/rules %u/%u fallback textures %u).",
+            layeredTerrainMaterial.diagnostics.layerCount,
+            layeredTerrainMaterial.diagnostics.ruleCount,
+            layeredTerrainMaterial.diagnostics.truncatedLayerCount,
+            layeredTerrainMaterial.diagnostics.truncatedRuleCount,
+            layeredTerrainMaterial.diagnostics.missingTextureFallbackCount);
+    }
 
     std::vector<RuntimeObjectArchetypeVisual> archetypeVisuals;
     for (const Engine::ObjectArchetypeDescriptor* archetype : objectArchetypes.all()) {
@@ -2308,6 +2335,24 @@ int main(int argc, char** argv)
         const std::optional<Engine::BiomeSample> tileBiome = terrain.tileBiome(handle);
         return tileBiome ? terrainMaterialForBiome(tileBiome->id) : cyanMaterial;
     };
+    const auto applyTerrainRendererMetadata = [&](
+        Renderer::TerrainHandle rendererTerrain,
+        Renderer::MaterialHandle fallbackMaterial,
+        Renderer::RenderGroupHandle renderGroup = {}) {
+        Renderer::setTerrainMaterial(rendererTerrain, fallbackMaterial);
+        if (layeredTerrainMaterial.success &&
+            layeredTerrainMaterial.binding.materialSet.id != UINT32_MAX) {
+            Renderer::setTerrainMaterialSet(rendererTerrain, layeredTerrainMaterial.binding.materialSet);
+        } else {
+            Renderer::clearTerrainMaterialSet(rendererTerrain);
+        }
+        Renderer::setTerrainRenderLayer(rendererTerrain, Renderer::RenderLayer::Terrain);
+        Renderer::setTerrainVisibilityFlags(rendererTerrain, Renderer::VisibilityFlags::Visible);
+        Renderer::setTerrainMaxDrawDistance(rendererTerrain, debugSettings.terrainMaxDrawDistance);
+        if (renderGroup.id != UINT32_MAX) {
+            Renderer::setTerrainRenderGroup(rendererTerrain, renderGroup);
+        }
+    };
     const auto generateChunkData = [&](
         Engine::ChunkCoord coord,
         const Engine::WorldStateSnapshot& overrideSnapshot,
@@ -2465,7 +2510,7 @@ int main(int argc, char** argv)
         return result;
     };
     const Engine::ChunkContentFactory chunkFactory =
-        [&terrainMaterialForChunk, &debugSettings, &spatialRegistry, &chunkContentConfig, &objectOverrides, &archetypeVisuals](
+        [&terrainMaterialForChunk, &applyTerrainRendererMetadata, &debugSettings, &spatialRegistry, &chunkContentConfig, &objectOverrides, &archetypeVisuals](
             Engine::ChunkCoord coord,
             Engine::World& targetWorld,
             Engine::TerrainSystem& targetTerrain) {
@@ -2478,11 +2523,10 @@ int main(int argc, char** argv)
             content.renderGroup = Renderer::createRenderGroup(groupDescriptor);
             const Renderer::MaterialHandle terrainMaterial = terrainMaterialForChunk(coord);
             content.terrain = targetTerrain.createTile(coord, terrainMaterial);
-            Renderer::setTerrainMaterial(targetTerrain.rendererTerrain(content.terrain), terrainMaterial);
-            Renderer::setTerrainRenderLayer(targetTerrain.rendererTerrain(content.terrain), Renderer::RenderLayer::Terrain);
-            Renderer::setTerrainVisibilityFlags(targetTerrain.rendererTerrain(content.terrain), Renderer::VisibilityFlags::Visible);
-            Renderer::setTerrainMaxDrawDistance(targetTerrain.rendererTerrain(content.terrain), debugSettings.terrainMaxDrawDistance);
-            Renderer::setTerrainRenderGroup(targetTerrain.rendererTerrain(content.terrain), content.renderGroup);
+            applyTerrainRendererMetadata(
+                targetTerrain.rendererTerrain(content.terrain),
+                terrainMaterial,
+                content.renderGroup);
             const std::vector<Engine::ProceduralPropSpawn> propSpawns = chunkContentConfig.propsForChunk(coord);
             content.objects.reserve(propSpawns.size());
 
@@ -2653,11 +2697,10 @@ int main(int argc, char** argv)
                             terrainMaterialForBiome(pending->generated.chunk.terrain.biome.id);
                         const Renderer::TerrainHandle rendererTerrain =
                             terrain.ensureRendererTerrain(pending->content.terrain);
-                        Renderer::setTerrainMaterial(rendererTerrain, terrainMaterial);
-                        Renderer::setTerrainRenderLayer(rendererTerrain, Renderer::RenderLayer::Terrain);
-                        Renderer::setTerrainVisibilityFlags(rendererTerrain, Renderer::VisibilityFlags::Visible);
-                        Renderer::setTerrainMaxDrawDistance(rendererTerrain, debugSettings.terrainMaxDrawDistance);
-                        Renderer::setTerrainRenderGroup(rendererTerrain, pending->content.renderGroup);
+                        applyTerrainRendererMetadata(
+                            rendererTerrain,
+                            terrainMaterial,
+                            pending->content.renderGroup);
                         pending->content.objects.reserve(pending->generated.chunk.props.size());
                         pending->phase = ChunkCommitPhase::SpawnPropsBatch;
                         scheduleChunkCommitPhase(pending);
@@ -2869,11 +2912,10 @@ int main(int argc, char** argv)
         const std::vector<Engine::WorldObjectHandle>& objects,
         Renderer::RenderGroupHandle renderGroup) {
         const Renderer::TerrainHandle rendererTerrain = terrain.rendererTerrain(terrainTile);
-        Renderer::setTerrainMaterial(rendererTerrain, terrainMaterialForTile(terrainTile));
-        Renderer::setTerrainRenderLayer(rendererTerrain, Renderer::RenderLayer::Terrain);
-        Renderer::setTerrainVisibilityFlags(rendererTerrain, Renderer::VisibilityFlags::Visible);
-        Renderer::setTerrainMaxDrawDistance(rendererTerrain, debugSettings.terrainMaxDrawDistance);
-        Renderer::setTerrainRenderGroup(rendererTerrain, renderGroup);
+        applyTerrainRendererMetadata(
+            rendererTerrain,
+            terrainMaterialForTile(terrainTile),
+            renderGroup);
         ++visibilityMetadataStats.terrainUpdatedThisFrame;
 
         for (Engine::WorldObjectHandle object : objects) {
@@ -5435,6 +5477,7 @@ int main(int argc, char** argv)
         Renderer::destroyMaterial(visual.material);
     }
 
+    Engine::releaseTerrainMaterialResources(assetCache, layeredTerrainMaterial.binding);
     assetCache.release(yellowTexture);
     assetCache.release(squadRedTexture);
     assetCache.release(squadGreenTexture);

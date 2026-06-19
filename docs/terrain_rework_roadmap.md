@@ -1,8 +1,8 @@
 # Terrain Rework Roadmap
 
-This roadmap defines a full terrain-system rework for ManualEngine. The target is a chunked terrain runtime where heightmap import is first-class, procedural terrain remains supported, generated assets are cached, and future chunked serialization can be added without replacing the runtime model.
+This roadmap defines the first full terrain-system rework for ManualEngine. The target is a chunked terrain runtime where heightmap import is first-class, procedural terrain remains supported, generated assets are cached, and future chunked serialization can be added without replacing the runtime model.
 
-The first implementation pass should focus on import, chunking, runtime ownership, derived-data cache identity, render LOD generation, navigation build data, physics collider generation hooks, and terrain material metadata. Runtime scene serialization, terrain editing, and durable chunk save/load are design constraints for this roadmap, but they are not part of the first pass.
+The first implementation pass now covers import, chunking, runtime ownership, derived-data cache identity, render LOD generation, navigation build data, physics collider generation hooks, terrain material metadata, first-pass layered rendering, and serialization preparation. Runtime scene serialization, terrain editing, durable chunk save/load, and App migration to heightmap streaming are design constraints for this roadmap, but they are not part of the first pass.
 
 Before planning Phase T1, complete the docs-only preflight contract in `docs/terrain_runtime/t0_heightmap_preflight.md`. T0 locks the coordinate convention, fixture policy, real-heightmap validation role, import settings inputs, chunk identity expectations, and source-versus-derived asset boundary that T1 depends on.
 
@@ -435,6 +435,8 @@ Exit criteria:
 
 ### Phase T8: Layered Terrain Rendering
 
+Status: first-pass implementation added. Renderer now owns fixed-size terrain material-set resources, terrain tiles can reference a layered material set while keeping their single-material fallback, and the App procedural terrain sample builds one shared layered material set from T7 metadata for biome fallback, slope rock, highland tint, and world-position soil rules. `Engine::TerrainMaterialRenderAdapter` bridges T7 metadata to renderer resources through `AssetCache` and reports truncation, unsupported metadata, and fallback texture diagnostics. Mask sampling, texture arrays, cached material weights, YAML terrain material loading, terrain editing, and serialization remain deferred.
+
 Deliverables:
 
 - Add renderer support for a small fixed number of PBR terrain layers.
@@ -448,6 +450,8 @@ Exit criteria:
 - Renderer diagnostics report terrain layer usage and fallback paths.
 
 ### Phase T9: Serialization Preparation
+
+Status: initial preparation contracts added. `Engine::TerrainSerializationPrep` now defines the future durable chunk identity shape, versioned chunk-file metadata, payload boundary flags, validation diagnostics, deterministic payload file names, and a derived-cache source-hash bridge. No chunk file reader/writer, scene/world serialization, terrain editing, App streaming integration, or cache migration is implemented. Detailed contract: `docs/terrain_runtime/t9_serialization_preparation.md`.
 
 Deliverables:
 
@@ -481,6 +485,21 @@ Avoid optional large terrain assets in default CTest. Use the real `assets/heigh
 - Using render LOD data for navigation or physics would create gameplay instability.
 - Large heightmaps can create import hitches unless decoding, chunk extraction, and derived builds are worker-friendly.
 - Future serialization will be awkward if chunk identity is not separated from runtime handles from the start.
+
+## Initial Pass Wrap-Up
+
+Status: T0 through T9 are implemented as the terrain rework foundation. Heightmap import, runtime dataset ownership, derived CPU cache records, render LOD generation, navigation build-data generation, scene-physics collider payloads, CPU material metadata, layered terrain renderer resources, and future serialization identity all have explicit Engine boundaries and focused tests.
+
+Current App behavior is intentionally conservative:
+
+- procedural terrain still uses `TerrainSystem` as the live terrain owner;
+- App terrain LOD workers use `TerrainRenderLodAdapter`, then commit renderer resources through `TerrainSystem`;
+- App navigation build inputs use `TerrainNavigationAdapter`, then preserve the existing nav cache/live-tile flow;
+- terrain physics collider creation remains explicit and is not wired into procedural gameplay;
+- the procedural sample uses an Engine sample material-set helper plus `TerrainMaterialRenderAdapter` for one shared layered terrain material set, with per-tile biome materials preserved as fallback;
+- serialization prep is metadata-only and does not add chunk file readers, writers, or streaming policy.
+
+The roadmap should be treated as complete for the initial pass. Follow-up work should start from a focused plan rather than extending this first-pass scope. The likely next roadmaps are heightmap-backed App streaming, terrain editor/serialization, material weight caching and authoring, or replacement of legacy `TerrainSystem` live ownership with `TerrainDataset`.
 
 ## First-Pass Definition Of Done
 
