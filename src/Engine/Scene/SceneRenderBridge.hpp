@@ -192,18 +192,26 @@ namespace Engine {
 
         [[nodiscard]] SceneMeshComponentHandle attachMesh(const SceneMeshComponentDescriptor& descriptor);
         bool detachMesh(SceneMeshComponentHandle component);
+        [[nodiscard]] bool contains(SceneMeshComponentHandle component) const;
+        [[nodiscard]] std::optional<SceneMeshComponentDescriptor> meshDescriptor(SceneMeshComponentHandle component) const;
         bool setMeshDescriptor(SceneMeshComponentHandle component, const SceneMeshComponentDescriptor& descriptor);
 
         [[nodiscard]] SceneSkinnedMeshComponentHandle attachSkinnedMesh(const SceneSkinnedMeshComponentDescriptor& descriptor);
         bool detachSkinnedMesh(SceneSkinnedMeshComponentHandle component);
+        [[nodiscard]] bool contains(SceneSkinnedMeshComponentHandle component) const;
+        [[nodiscard]] std::optional<SceneSkinnedMeshComponentDescriptor> skinnedMeshDescriptor(SceneSkinnedMeshComponentHandle component) const;
         bool setSkinnedMeshDescriptor(SceneSkinnedMeshComponentHandle component, const SceneSkinnedMeshComponentDescriptor& descriptor);
 
         [[nodiscard]] SceneLightComponentHandle attachLight(const SceneLightComponentDescriptor& descriptor);
         bool detachLight(SceneLightComponentHandle component);
+        [[nodiscard]] bool contains(SceneLightComponentHandle component) const;
+        [[nodiscard]] std::optional<SceneLightComponentDescriptor> lightDescriptor(SceneLightComponentHandle component) const;
         bool setLightDescriptor(SceneLightComponentHandle component, const SceneLightComponentDescriptor& descriptor);
 
         [[nodiscard]] SceneCameraComponentHandle attachCamera(const SceneCameraComponentDescriptor& descriptor);
         bool detachCamera(SceneCameraComponentHandle component);
+        [[nodiscard]] bool contains(SceneCameraComponentHandle component) const;
+        [[nodiscard]] std::optional<SceneCameraComponentDescriptor> cameraDescriptor(SceneCameraComponentHandle component) const;
         bool setCameraDescriptor(SceneCameraComponentHandle component, const SceneCameraComponentDescriptor& descriptor);
         [[nodiscard]] std::optional<Renderer::RenderView> buildRenderView(
             SceneCameraComponentHandle camera,

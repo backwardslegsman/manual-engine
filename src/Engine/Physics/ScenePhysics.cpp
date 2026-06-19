@@ -808,6 +808,15 @@ namespace Engine {
         return impl_->record(collider) != nullptr;
     }
 
+    std::optional<ScenePhysicsColliderDescriptor> ScenePhysicsWorld::collider(SceneColliderHandle collider) const
+    {
+        const Impl::ColliderRecord* record = impl_->record(collider);
+        if (!record) {
+            return std::nullopt;
+        }
+        return ScenePhysicsColliderDescriptor{record->body, record->shape};
+    }
+
     std::vector<SceneColliderHandle> ScenePhysicsWorld::colliders(ScenePhysicsBodyHandle body) const
     {
         const Impl::BodyRecord* record = impl_->record(body);

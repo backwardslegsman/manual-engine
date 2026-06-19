@@ -72,6 +72,20 @@ namespace Engine {
         return true;
     }
 
+    bool SceneRenderBridge::contains(SceneMeshComponentHandle component) const
+    {
+        return record(component) != nullptr;
+    }
+
+    std::optional<SceneMeshComponentDescriptor> SceneRenderBridge::meshDescriptor(SceneMeshComponentHandle component) const
+    {
+        const MeshRecord* mesh = record(component);
+        if (!mesh) {
+            return std::nullopt;
+        }
+        return mesh->descriptor;
+    }
+
     bool SceneRenderBridge::setMeshDescriptor(SceneMeshComponentHandle component, const SceneMeshComponentDescriptor& descriptor)
     {
         MeshRecord* mesh = record(component);
@@ -129,6 +143,20 @@ namespace Engine {
         freeSkinnedMeshRecord(*mesh, lastBackend_);
         refreshDiagnostics();
         return true;
+    }
+
+    bool SceneRenderBridge::contains(SceneSkinnedMeshComponentHandle component) const
+    {
+        return record(component) != nullptr;
+    }
+
+    std::optional<SceneSkinnedMeshComponentDescriptor> SceneRenderBridge::skinnedMeshDescriptor(SceneSkinnedMeshComponentHandle component) const
+    {
+        const SkinnedMeshRecord* mesh = record(component);
+        if (!mesh) {
+            return std::nullopt;
+        }
+        return mesh->descriptor;
     }
 
     bool SceneRenderBridge::setSkinnedMeshDescriptor(
@@ -192,6 +220,20 @@ namespace Engine {
         return true;
     }
 
+    bool SceneRenderBridge::contains(SceneLightComponentHandle component) const
+    {
+        return record(component) != nullptr;
+    }
+
+    std::optional<SceneLightComponentDescriptor> SceneRenderBridge::lightDescriptor(SceneLightComponentHandle component) const
+    {
+        const LightRecord* light = record(component);
+        if (!light) {
+            return std::nullopt;
+        }
+        return light->descriptor;
+    }
+
     bool SceneRenderBridge::setLightDescriptor(SceneLightComponentHandle component, const SceneLightComponentDescriptor& descriptor)
     {
         LightRecord* light = record(component);
@@ -241,6 +283,20 @@ namespace Engine {
         camera->generation = generation;
         refreshDiagnostics();
         return true;
+    }
+
+    bool SceneRenderBridge::contains(SceneCameraComponentHandle component) const
+    {
+        return record(component) != nullptr;
+    }
+
+    std::optional<SceneCameraComponentDescriptor> SceneRenderBridge::cameraDescriptor(SceneCameraComponentHandle component) const
+    {
+        const CameraRecord* camera = record(component);
+        if (!camera) {
+            return std::nullopt;
+        }
+        return camera->descriptor;
     }
 
     bool SceneRenderBridge::setCameraDescriptor(SceneCameraComponentHandle component, const SceneCameraComponentDescriptor& descriptor)

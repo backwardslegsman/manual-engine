@@ -602,16 +602,116 @@ Exit criteria:
 
 Goal: Expose component state safely to editors, serialization, native hooks, and Lua.
 
-- Add property metadata: name, type, default, range, flags, category, and documentation.
-- Add getter/setter APIs that validate access and preserve invariants.
-- Add opaque handles for scenes, actors, components, assets, physics objects, and navigation agents.
-- Define system access boundaries for read-only and mutating APIs.
-- Add change notifications or dirty flags for reflected writes.
-- Add tests for property lookup, invalid writes, default values, and system boundary enforcement.
+Status: Implemented. This phase adds the reflection and opaque-access contract only. It does not add a file serializer, editor UI, Lua VM, native behavior hook framework, network replication, hot reload, ECS conversion, or App gameplay migration.
+
+Scope:
+
+- Add an Engine-owned reflection layer that describes approved runtime and serialized properties without exposing subsystem storage.
+- Add opaque runtime handles for tools, hooks, and future scripts so callers can address scene objects without including subsystem-specific handle types everywhere.
+- Keep stable identity separate from runtime access: `SceneObjectId`, `AssetId`, and `TerrainSourceChunkId` are durable identity; scene actor/component/system/physics/render/navigation/terrain runtime handles remain transient and unserialized.
+- Route all reflected reads and writes through public subsystem APIs. Reflection must not return raw pointers, mutable references to internal records, or renderer/physics/navigation implementation objects.
+- Support scene-owned systems first: `Scene`, transform hierarchy, `SceneRenderBridge`, `ScenePhysicsWorld`, `SceneCharacterMovementSystem`, asset metadata, terrain durable references, and navigation query configuration where appropriate.
+- Keep legacy procedural `World`, `ActorController`, `BlockingCollisionSystem`, App debug panels, and current terrain/rendering runtime behavior unchanged.
+
+Opaque access model:
+
+- Define a compact opaque handle type with a kind tag, slot/generation payload, and optional owner/domain tag so diagnostics can explain mismatched handle use.
+- Handle kinds should cover at least scene actors, generic scene components, render bridge mesh/skinned/light/camera components, physics bodies/colliders, scene characters, asset metadata records, terrain sources/chunks, and navigation query/service records.
+- Opaque handles are runtime access tokens only. They must never be written directly to scene files, terrain files, cache manifests, or saved gameplay state.
+- Provide conversion helpers at subsystem boundaries, such as scene actor handle to opaque handle and opaque handle back to a validated `SceneActorHandle`.
+- Invalid, stale, wrong-kind, and wrong-owner opaque handles must fail cleanly with typed status results and diagnostics.
+- Opaque APIs should be thread-neutral value APIs; they should not imply async safety or background mutation.
+
+Reflection metadata:
+
+- Add reflected type descriptors for primitive and engine value types: bool, signed/unsigned integers, float, double where needed, string, enum, bitmask, `glm::vec2`, `glm::vec3`, `glm::quat`, `glm::mat4` read-only where needed, `AssetId`, `SceneObjectId`, terrain durable chunk IDs, and opaque handles.
+- Add property descriptors with stable property IDs, public names, display/category strings, value type, default value, min/max/range hints, enum labels, unit metadata, flags, and documentation.
+- Property flags should include read-only, runtime-only, serializable, editor-visible, script-visible, advanced, transient, asset-reference, stable-reference, and requires-explicit-apply.
+- Add reflected object/type descriptors for actor transform state, render component descriptors, physics body/collider descriptors, character movement descriptors/state, asset metadata, terrain serialization-prep references, and selected navigation query settings.
+- Descriptor ordering must be deterministic so generated docs, future serialized output, and tests produce stable diffs.
+- The metadata registry should allow subsystem-local registration without global static initialization ordering hazards.
+
+Getter/setter API:
+
+- Use a bounded reflected value variant for get/set operations; do not accept untyped `void*` values.
+- Getter calls return typed values plus status. Setter calls return status and optional validation messages.
+- Setter statuses should distinguish invalid handle, unknown property, type mismatch, read-only property, validation failure, unsupported operation, and subsystem rejection.
+- Reflected writes must call the same public APIs as normal runtime code. Examples: transform writes use `Scene::setLocalTransform`, render descriptor writes use bridge descriptor replacement APIs, physics writes use physics world mutators, and character writes use movement-system descriptor/enabled/input APIs.
+- Reflected writes that affect transforms, render descriptors, physics bodies, terrain metadata, or character movement must mark the same dirty state or diagnostics as direct API writes.
+- Avoid hidden allocation or loading in setters. Asset references may be changed as metadata, but renderer resource creation, physics shape creation, nav tile building, and terrain cache generation remain explicit API calls.
+
+Subsystem adapter plan:
+
+- Scene core adapter:
+  - Reflect actor validity, stable object ID, lifecycle state, parent/children queries, local transform, and world matrix read-only.
+  - Allow local transform writes through `Scene::setLocalTransform`.
+  - Keep hierarchy mutation as explicit API calls rather than generic property writes unless a later editor workflow needs it.
+- Render bridge adapter:
+  - Reflect mesh, skinned mesh, light, and camera descriptors in terms of scene owner, enabled flag, renderer handle values, layers, culling fields, material overrides, light fields, and camera projection fields.
+  - Treat live renderer instance/light handles as internal bridge state, not reflected properties.
+  - Require descriptor replacement through bridge APIs; no direct renderer mutation.
+- Physics adapter:
+  - Reflect body descriptor fields, motion type, enabled state, layer/filter metadata, velocities, and collider descriptor summaries.
+  - Allow safe mutators such as enabled state, kinematic target, motion type where supported, velocity, force, and impulse through `ScenePhysicsWorld`.
+  - Keep Jolt identifiers, broadphase state, and shape pointers private.
+- Character movement adapter:
+  - Reflect character descriptor, enabled flag, movement mode/state, velocity, grounding information, active path summary, and diagnostics.
+  - Allow descriptor-safe settings and move input to be updated; keep path request APIs explicit because they perform navigation queries.
+- Asset and terrain adapters:
+  - Reflect `AssetRegistry` metadata, asset IDs, source paths, import settings keys, dependencies, and statuses.
+  - Reflect terrain durable IDs and serialization-prep metadata for future serialization. Runtime terrain handles, renderer terrain handles, nav tile handles, terrain physics collider handles, and cache file paths remain outside serialized reflection.
+- Navigation adapter:
+  - Reflect agent/filter configuration and query diagnostics where useful.
+  - Keep pathfinding/projection/raycast operations as explicit query APIs, not property getters with hidden work.
+
+Validation and boundaries:
+
+- All reflected write paths must validate finite numeric values, required ranges, enum values, handle kind/owner, and subsystem invariants before mutation.
+- Read-only properties should be common for derived state: world matrices, live renderer counts, physics query results, nav diagnostics, cache diagnostics, and generated terrain bounds.
+- The reflection layer should surface clear diagnostics for rejected changes, but it should not attempt rollback across multiple subsystem writes in Phase 12.
+- Batch editing can be planned as a later improvement; Phase 12 may provide single-property writes plus enough status detail for callers to build their own UI/serialization validation.
+- Change notifications should be explicit and simple: reflected setters return changed/unchanged status and may append subsystem-owned dirty/debug records. A global event bus is out of scope.
+
+Implementation phases inside Phase 12:
+
+1. Reflection core:
+   - Added value variant, type/property/object descriptors, registry, status codes, diagnostics, and deterministic descriptor enumeration.
+   - Added tests for metadata registration, duplicate descriptor rejection, stable ordering, type validation, default values, range validation, and wrong-kind opaque handles.
+2. Opaque handle conversion:
+   - Added conversion helpers for scene actors, generic scene components, render bridge components, physics body/collider handles, character handles, asset handles, terrain runtime handles, and terrain durable references.
+   - Added tests for invalid/stale/wrong-owner handles and stable-ID separation.
+3. Scene and transform adapter:
+   - Reflected actor/object metadata and transform properties.
+   - Added tests that reflected local transform writes update scene local/world state through `Scene::setLocalTransform`.
+4. Runtime subsystem adapters:
+   - Added render bridge, physics, character, asset, terrain, and limited navigation metadata descriptors through small isolated files.
+   - Added tests that adapter writes route through public APIs and reject unsupported mutation.
+5. Documentation and compatibility:
+   - Updated `docs/system_contracts.md` and `docs/engine_overview.md` with the reflection boundary, opaque runtime handle rule, and stable-ID serialization boundary.
+   - Existing scene, terrain, navigation, physics, render bridge, authored, animated, and procedural tests remain in the regression set.
+
+Test plan:
+
+- Add `manual_engine_scene_reflection_tests` for the core reflection registry and opaque handle conversion.
+- Add subsystem adapter coverage either in that target or focused CPU-only targets, keeping them independent from App, Renderer/bgfx implementation, scripting, editor UI, serialization file I/O, and optional sample assets.
+- Required cases:
+  - descriptor registration is deterministic and duplicate IDs are rejected;
+  - property lookup by stable ID and name works;
+  - default values and range metadata are exposed;
+  - get/set rejects wrong type, read-only property, invalid handle, stale handle, wrong handle kind, and wrong owner;
+  - scene transform reflected write uses `Scene::setLocalTransform` and updates dirty/world state correctly;
+  - render bridge descriptor reflected write updates only the targeted component record;
+  - physics reflected mutators use `ScenePhysicsWorld` APIs and keep Jolt private;
+  - character movement reflected settings update descriptor/enabled/input state without creating terrain/nav/renderer side effects;
+  - asset and terrain reflected metadata uses stable IDs/durable chunk identity, not transient runtime handles;
+  - reflection headers do not include Jolt, Recast/Detour, bgfx, Lua, ImGui, or App headers;
+  - existing full CTest remains green.
 
 Exit criteria:
 
-- Tools and scripts can inspect and edit approved component variables without direct storage access.
+- Tools, future serializers, native hooks, and future Lua bindings can inspect and edit approved scene/runtime properties through typed metadata and opaque handles without direct storage access.
+- Runtime opaque handles are clearly separated from stable serialized identity.
+- Reflected writes preserve subsystem invariants by routing through existing public APIs.
 
 ## 13. Serialization Roadmap
 

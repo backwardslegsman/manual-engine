@@ -108,6 +108,11 @@ namespace Engine {
         glm::vec3 initialAngularVelocity{0.0f};
     };
 
+    struct ScenePhysicsColliderDescriptor {
+        ScenePhysicsBodyHandle body;
+        ScenePhysicsShapeDescriptor shape;
+    };
+
     struct ScenePhysicsHit {
         ScenePhysicsBodyHandle body;
         SceneColliderHandle collider;
@@ -218,6 +223,7 @@ namespace Engine {
             const ScenePhysicsShapeDescriptor& shape);
         bool detachCollider(SceneColliderHandle collider);
         [[nodiscard]] bool contains(SceneColliderHandle collider) const;
+        [[nodiscard]] std::optional<ScenePhysicsColliderDescriptor> collider(SceneColliderHandle collider) const;
         [[nodiscard]] std::vector<SceneColliderHandle> colliders(ScenePhysicsBodyHandle body) const;
 
         bool setBodyEnabled(ScenePhysicsBodyHandle body, bool enabled);

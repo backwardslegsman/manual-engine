@@ -1381,3 +1381,25 @@ Changed:
 
 Rationale:
 - Scene gameplay now has a headless character controller built on the scene physics and navigation services without migrating App commands or procedural actor movement.
+
+## 2026-06-19 - Phase 12 Reflection And Opaque APIs Roadmap Expansion
+
+Changed:
+- Expanded the scene component roadmap's Phase 12 section into a full reflection and opaque API plan.
+- Documented runtime opaque handle boundaries, reflected metadata/value access, subsystem adapter scope, validation rules, implementation subphases, and required tests.
+- Clarified that Phase 12 prepares editor, serialization, native hook, and Lua access without adding those systems or exposing subsystem storage.
+
+Rationale:
+- Serialization and scripting need a typed access layer that preserves scene, render bridge, physics, navigation, asset, character, and terrain invariants while keeping transient runtime handles separate from durable IDs.
+
+## 2026-06-19 - Phase 12 Reflection And Opaque APIs
+
+Changed:
+- Added `Engine::ReflectionRegistry`, typed reflected values/descriptors, reflection statuses, and generation-counted `OpaqueHandle` runtime access tokens.
+- Added `Engine::SceneReflection` adapters for approved scene actor, component, render bridge, physics, character movement, asset, terrain, and limited navigation metadata access.
+- Added narrow render bridge descriptor getters and scene physics collider descriptor reads needed for validated reflection without exposing internal storage.
+- Added `manual_engine_scene_reflection_tests` covering deterministic metadata, opaque handle validation, reflected scene transform writes, render/physics/character writes through public APIs, and stable asset/terrain identity exposure.
+- Updated system contracts, overview, and the scene roadmap to document the reflection boundary and runtime-handle serialization rule.
+
+Rationale:
+- Future serialization, native hooks, and scripting need a typed inspection/mutation layer that preserves subsystem invariants and keeps transient handles separate from durable scene, asset, and terrain IDs.
