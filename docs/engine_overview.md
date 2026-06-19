@@ -7,7 +7,7 @@ Keep this document current whenever subsystem ownership, data flow, or save-faci
 ## Runtime Ownership
 
 - App owns SDL window lifetime, bgfx init/shutdown, frame pumping, debug UI composition, sample asset/material creation, and explicit service wiring.
-- Engine owns world object lifetime, stable object identity, the renderer-independent scene kernel, transform hierarchy, tick scheduler shell, scene render bridge records, CPU-only asset registry metadata, fixed-step actor updates, chunk streaming membership, async CPU work primitives, main-thread frame budgeting, terrain CPU data, procedural content rules, biome sampling, input mapping, interaction events, picking helpers, persistence records, and simple debug/editor mutations.
+- Engine owns world object lifetime, stable object identity, the renderer-independent scene kernel, transform hierarchy, tick scheduler shell, scene render bridge records, scene authored adapter resource bindings, CPU-only asset registry metadata, fixed-step actor updates, chunk streaming membership, async CPU work primitives, main-thread frame budgeting, terrain CPU data, procedural content rules, biome sampling, input mapping, interaction events, picking helpers, persistence records, and simple debug/editor mutations.
 - Renderer owns GPU resources, renderer handles, materials, terrain draw buffers, mesh instances, render groups, culling, draw batching, atmosphere state, and Dear ImGui rendering.
 - Asset registry is an Engine metadata service for stable asset IDs, source paths, import settings, dependencies, and stale/missing diagnostics. Asset cache remains the Engine service that deduplicates reusable renderer mesh/texture handles. Terrain draw buffers remain transient and are not cached.
 
@@ -42,7 +42,8 @@ Keep this document current whenever subsystem ownership, data flow, or save-faci
 - Default renderer distance culling is finite for gameplay-scale visibility: props draw to about `160m`, terrain tiles to about `280m`, with a camera far plane of about `900m`. Debug UI can still tune these values at runtime.
 - Fixed-step engine loop, world object ownership, kinematic actors, reusable actor path-following state, simple blocking collision, and terrain grounding.
 - Scene kernel with generation-counted `SceneActorHandle`, `SceneComponentHandle`, and `SceneSystemHandle` values, stable-but-unserialized `SceneObjectId` metadata, metadata-only component attachment, scene-local transform hierarchy state, and a CPU-only lifecycle/tick scheduler.
-- Scene render bridge with generation-counted mesh, skinned mesh, light, and camera component handles, explicit backend sync to renderer handles, and camera `RenderView` construction. It is not wired into the sample App frame path yet.
+- Scene render bridge with generation-counted mesh, skinned mesh, light, and camera component handles, explicit backend sync to renderer handles, and camera `RenderView` construction. The release authored sample path syncs static authored content through this bridge.
+- Scene authored adapter that converts already-imported static authored scene CPU data into scene actors, hierarchy transforms, adapter-owned renderer meshes/materials/textures, and scene render bridge mesh/light components. Release authored mode uses this path; debug authored mode still uses `PartitionedAuthoredScene`, async authored loading, and authored caches for diagnostics and streaming validation.
 - Sim/orbit camera with free and player-follow modes.
 - Sparse grid spatial registry for gameplay/debug queries.
 - CPU debug picking against object bounds and loaded terrain.

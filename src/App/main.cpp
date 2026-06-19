@@ -24,6 +24,7 @@
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "Assets/Assimp/Importer.hpp"
 #include "Engine/ActorCommand.hpp"
 #include "Engine/ActorController.hpp"
 #include "Engine/ActorSelection.hpp"
@@ -33,6 +34,10 @@
 #include "Engine/AuthoredSceneAsync.hpp"
 #include "Engine/AsyncWorkQueue.hpp"
 #include "Engine/AssetCache.hpp"
+#include "Engine/Scene/AuthoredSceneAdapter.hpp"
+#include "Engine/Scene/RendererSceneRenderBackend.hpp"
+#include "Engine/Scene/Scene.hpp"
+#include "Engine/Scene/SceneRenderBridge.hpp"
 #include "Engine/Biome.hpp"
 #include "Engine/BlockingCollision.hpp"
 #include "Engine/ChunkStreamer.hpp"
@@ -621,7 +626,7 @@ namespace {
         Engine::AsyncWorkQueue authoredAsyncWork;
         const std::filesystem::path startupAuthoredPath = chooseStartupAuthoredScenePath(sceneSelection);
         SDL_Log("Authored startup scene: %s", startupAuthoredPath.generic_string().c_str());
-        AuthoredRuntime runtime = startAuthoredRuntime(startupAuthoredPath, authoredAsyncWork);
+        AuthoredRuntime runtime = startAuthoredRuntime(startupAuthoredPath, assetCache, authoredAsyncWork);
         AnimatedSampleRuntime animatedRuntime =
             startAnimatedSampleRuntime(sceneSelection.animatedModelPath, authoredAsyncWork);
 
@@ -740,7 +745,17 @@ namespace {
             }
             applyAnimatedDebugSettings(animatedRuntime, debugSettings);
             updateAnimatedSampleRuntime(animatedRuntime, dt);
-            if (runtime.usingStreaming) {
+            if (runtime.usingSceneAdapter && runtime.sceneRenderBridge) {
+                runtime.sceneRuntime.updateWorldTransforms();
+                runtime.sceneRenderBridge->sync(runtime.sceneRenderBackend);
+                const Engine::SceneRenderBridgeDiagnostics bridgeDiagnostics = runtime.sceneRenderBridge->diagnostics();
+                debugSettings.sceneStatus = runtime.status +
+                    " | scene actors " + std::to_string(runtime.sceneAdapter.diagnostics.createdActorCount) +
+                    " mesh components " + std::to_string(bridgeDiagnostics.meshComponentCount) +
+                    " live instances " + std::to_string(bridgeDiagnostics.liveMeshInstanceCount) +
+                    " lights " + std::to_string(bridgeDiagnostics.liveLightCount);
+                debugSettings.hasAuthoredSceneDiagnostics = false;
+            } else if (runtime.usingStreaming) {
                 runtime.streamingScene.updateStreaming(camera.position(), authoredStreamingWork);
                 authoredStreamingBudget.beginFrame({2.0f, true});
                 authoredStreamingWork.drain(authoredStreamingBudget);
@@ -763,7 +778,9 @@ namespace {
             populateAnimatedDebugSettings(debugSettings, animatedRuntime);
             debugSettings.sceneMode = runtime.usingFallback
                 ? "Authored fallback"
-                : (runtime.usingStreaming ? "Authored streaming" : "Authored loading");
+                : (runtime.usingSceneAdapter
+                    ? "Authored scene adapter"
+                    : (runtime.usingStreaming ? "Authored streaming" : "Authored loading"));
 
             Renderer::setAtmosphereSettings(atmosphere);
             if (BuildDebugToolsEnabled) {
@@ -823,7 +840,7 @@ namespace {
 
         authoredAsyncWork.shutdown();
         animatedRuntime.shutdown();
-        runtime.shutdown();
+        runtime.shutdown(assetCache);
         shutdownSharedRuntime(assetCache, debugUiEnabled, window);
         return 0;
     }

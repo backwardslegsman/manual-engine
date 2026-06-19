@@ -171,9 +171,14 @@
     struct AuthoredRuntime {
         Engine::AuthoredScene scene;
         Engine::PartitionedAuthoredScene streamingScene;
+        Engine::Scene sceneRuntime;
+        std::unique_ptr<Engine::SceneRenderBridge> sceneRenderBridge;
+        Engine::RendererSceneRenderBackend sceneRenderBackend;
+        Engine::SceneAuthoredAdapterResult sceneAdapter;
         AuthoredFallbackScene fallback;
         bool usingFallback = false;
         bool usingStreaming = false;
+        bool usingSceneAdapter = false;
         bool showingPlaceholder = false;
         bool frameSceneAfterCommit = false;
         enum class AsyncPhase {
@@ -199,8 +204,14 @@
         std::string status;
         Renderer::Aabb bounds{{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}};
 
-        void shutdown()
+        void shutdown(Engine::AssetCache& assetCache)
         {
+            if (sceneRenderBridge) {
+                sceneRenderBridge->releaseRendererResources(sceneRenderBackend);
+            }
+            Engine::releaseSceneAuthoredAdapterResources(sceneAdapter.resources, assetCache);
+            sceneRenderBridge.reset();
+            usingSceneAdapter = false;
             streamingScene.shutdown();
             scene.shutdown();
             fallback.shutdown();
@@ -674,6 +685,14 @@
         return {bounds.min, bounds.max};
     }
 
+    Renderer::Aabb importedBoundsOrFallback(const Assets::Assimp::ImportedSceneBounds& bounds)
+    {
+        if (!bounds.valid) {
+            return {{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}};
+        }
+        return {bounds.min, bounds.max};
+    }
+
     void frameCameraForBounds(Engine::OrbitCameraController& camera, const Renderer::Aabb& bounds)
     {
         const glm::vec3 center = (bounds.min + bounds.max) * 0.5f;
@@ -748,12 +767,73 @@
 
     AuthoredRuntime startAuthoredRuntime(
         const std::filesystem::path& path,
+        Engine::AssetCache& assetCache,
         Engine::AsyncWorkQueue& asyncWork)
     {
         AuthoredRuntime runtime;
         const std::filesystem::path resolvedPath = resolveAuthoredScenePath(path);
         if (std::filesystem::exists(resolvedPath)) {
             runtime.sourcePath = resolvedPath;
+            if constexpr (!BuildDebugToolsEnabled) {
+                const Assets::Assimp::ImportedScene importedScene = Assets::Assimp::importScene(resolvedPath);
+                if (!importedScene.success) {
+                    runtime.usingFallback = true;
+                    runtime.fallback.mesh = Renderer::createTexturedCubeMesh();
+                    runtime.fallback.instance = Renderer::createInstance(runtime.fallback.mesh);
+                    runtime.bounds = {{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}};
+                    runtime.status = "Failed to import authored scene for scene adapter: " + importedScene.error;
+                    SDL_Log("%s", runtime.status.c_str());
+                    return runtime;
+                }
+
+                runtime.sceneRenderBridge = std::make_unique<Engine::SceneRenderBridge>(runtime.sceneRuntime);
+                Engine::SceneAuthoredAdapterSettings adapterSettings;
+                adapterSettings.loadTextures = true;
+                adapterSettings.renderLayer = Renderer::RenderLayer::Props;
+                adapterSettings.maxDrawDistance = 0.0f;
+                adapterSettings.materialNamePrefix = "ReleaseAuthoredMaterial";
+                adapterSettings.textureDebugNamePrefix = "ReleaseAuthored";
+                runtime.sceneAdapter = Engine::adaptImportedSceneToScene(
+                    importedScene,
+                    resolvedPath,
+                    assetCache,
+                    runtime.sceneRuntime,
+                    *runtime.sceneRenderBridge,
+                    adapterSettings);
+                if (!runtime.sceneAdapter.success) {
+                    runtime.sceneRenderBridge.reset();
+                    Engine::releaseSceneAuthoredAdapterResources(runtime.sceneAdapter.resources, assetCache);
+                    runtime.usingFallback = true;
+                    runtime.fallback.mesh = Renderer::createTexturedCubeMesh();
+                    runtime.fallback.instance = Renderer::createInstance(runtime.fallback.mesh);
+                    runtime.bounds = {{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}};
+                    runtime.status = "Failed to adapt authored scene to scene runtime: " + runtime.sceneAdapter.message;
+                    SDL_Log("%s", runtime.status.c_str());
+                    return runtime;
+                }
+
+                runtime.sceneRuntime.updateWorldTransforms();
+                runtime.sceneRenderBridge->sync(runtime.sceneRenderBackend);
+                runtime.usingSceneAdapter = true;
+                runtime.bounds = importedBoundsOrFallback(importedScene.bounds);
+                runtime.frameSceneAfterCommit = true;
+                runtime.asyncPhase = AuthoredRuntime::AsyncPhase::Committed;
+                runtime.status = "Loaded authored scene through scene adapter: " + resolvedPath.generic_string();
+                SDL_Log("%s", runtime.status.c_str());
+                SDL_Log(
+                    "Scene authored adapter diagnostics: nodes %u meshes %u materials %u meshComponents %u lights %u warnings %zu",
+                    runtime.sceneAdapter.diagnostics.createdActorCount,
+                    runtime.sceneAdapter.diagnostics.createdRendererMeshCount,
+                    runtime.sceneAdapter.diagnostics.createdMaterialCount,
+                    runtime.sceneAdapter.diagnostics.createdMeshComponentCount,
+                    runtime.sceneAdapter.diagnostics.createdLightComponentCount,
+                    runtime.sceneAdapter.diagnostics.warnings.size());
+                for (const std::string& warning : runtime.sceneAdapter.diagnostics.warnings) {
+                    SDL_Log("Scene authored adapter warning: %s", warning.c_str());
+                }
+                return runtime;
+            }
+
             runtime.settings = defaultAuthoredSceneStreamingSettings();
             runtime.cacheManifest = Engine::AuthoredSceneCache::buildManifest(
                 runtime.settings.cache,
@@ -936,4 +1016,3 @@
             }
         }
     }
-

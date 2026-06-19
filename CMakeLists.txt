@@ -54,6 +54,7 @@ add_executable(manual_engine
     src/Engine/Picking.cpp
     src/Engine/ProceduralChunkContent.cpp
     src/Engine/Scene/RendererSceneRenderBackend.cpp
+    src/Engine/Scene/AuthoredSceneAdapter.cpp
     src/Engine/Scene/Scene.cpp
     src/Engine/Scene/SceneRenderBridge.cpp
     src/Engine/SpatialRegistry.cpp
@@ -206,6 +207,31 @@ target_link_libraries(manual_engine_scene_render_bridge_tests
 )
 
 add_test(NAME manual_engine_scene_render_bridge_tests COMMAND manual_engine_scene_render_bridge_tests)
+
+add_executable(manual_engine_authored_scene_adapter_tests
+    tests/scene/AuthoredSceneAdapterTestRunner.cpp
+    tests/authored_scene/RendererOwnershipStubs.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Engine/AssetCache.cpp
+    src/Engine/ImportedSceneResources.cpp
+    src/Engine/Scene/AuthoredSceneAdapter.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/Scene/SceneRenderBridge.cpp
+)
+
+target_include_directories(manual_engine_authored_scene_adapter_tests
+    PRIVATE
+        src
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+)
+
+target_link_libraries(manual_engine_authored_scene_adapter_tests
+    PRIVATE
+        assimp::assimp
+        glm::glm
+)
+
+add_test(NAME manual_engine_authored_scene_adapter_tests COMMAND manual_engine_authored_scene_adapter_tests)
 
 add_executable(manual_engine_authored_scene_tests
     tests/authored_scene/AuthoredSceneTestRunner.cpp

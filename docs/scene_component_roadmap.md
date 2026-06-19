@@ -142,14 +142,16 @@ Exit criteria:
 
 Goal: Adapt existing static authored scene loading into the scene runtime without losing streaming/cache/async behavior.
 
-- Map imported scene nodes to scene actors or transform components.
-- Map imported mesh nodes to `MeshComponent`s.
-- Map imported lights to `LightComponent`s.
-- Preserve material and texture mapping through existing renderer/asset policies.
-- Keep eager and partitioned authored scene loaders working during migration.
-- Add a bridge for sector streaming to create/destroy scene actors or component groups per loaded sector.
-- Preserve authored diagnostics, cache status, async status, and profile reports.
-- Add tests that compare old authored loader output with scene-adapted output for fixture assets.
+Detailed implementation plan: `docs/scene_runtime/phase_06_authored_scene_adapter.md`.
+
+- Add an Engine-owned adapter that consumes already-imported `Assets::Assimp::ImportedScene` CPU data and creates scene actors, hierarchy, render bridge mesh components, and render bridge light components.
+- Preserve imported local transforms and node parent/child relationships in `Engine::Scene`; compare scene-computed world matrices against imported fixture world transforms in tests.
+- Reuse existing imported-scene resource conversion helpers for vertex, material, texture, alpha, sampler, and fallback policy.
+- Create renderer static mesh and material handles as explicit adapter resources, while renderer instances/lights remain owned by `SceneRenderBridge`.
+- Keep eager `AuthoredScene`, `PartitionedAuthoredScene`, authored cache, async authored loading, and current App-authored runtime behavior unchanged.
+- Diagnose but skip skinned mesh, skin, joint, and animation records; animated adaptation remains Phase 7.
+- Defer sector streaming through scene actors, serialization, editor UI, physics, navigation geometry, and asset hot reload.
+- Add fixture tests for node mapping, hierarchy/world transform preservation, mesh/light component creation, resource release, bridge sync, invalid references, and unchanged legacy authored loader behavior.
 
 Exit criteria:
 

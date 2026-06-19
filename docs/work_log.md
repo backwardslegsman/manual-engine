@@ -874,3 +874,30 @@ Changed:
 
 Rationale:
 - Scene actors need an explicit renderer bridge boundary before authored-scene and animated-model adapters can move onto the scene runtime without making Renderer depend on scene storage.
+
+## 2026-06-19 - Authored Scene Adapter Phase 6 Plan
+
+Changed:
+- Added a dedicated Phase 6 authored scene adapter plan covering imported node-to-actor conversion, hierarchy preservation, static mesh and light render bridge components, resource ownership, diagnostics, and fixture tests.
+- Updated the scene/component roadmap milestone to keep existing eager/partitioned authored-scene loaders, cache, async flow, and App runtime paths unchanged during the adapter pass.
+
+Rationale:
+- Static authored scenes need a controlled path into scene actors/components before authored runtime ownership can migrate away from bespoke renderer instance management.
+
+## 2026-06-19 - Authored Scene Adapter Phase 6 Implementation
+
+Changed:
+- Added `Engine::adaptImportedSceneToScene` and release helpers for converting already-imported static authored scene CPU data into scene actors, hierarchy transforms, adapter-owned renderer resources, and scene render bridge mesh/light components.
+- Added isolated authored scene adapter tests covering node bindings, hierarchy/world transforms, resource/component creation, texture diagnostics, light components, bridge sync, invalid references, skipped skinned/animation data, and deterministic release.
+
+Rationale:
+- Static authored content now has a parallel scene-runtime adapter path without changing the existing authored scene, partitioned streaming, cache, async, animated model, or App runtime owners.
+
+## 2026-06-19 - Release Authored Sample Scene Adapter Path
+
+Changed:
+- Updated the release authored sample path to import static authored scene CPU data, adapt it into `Engine::Scene`, and sync renderer instances/lights through `SceneRenderBridge` and `RendererSceneRenderBackend`.
+- Kept debug authored mode on the existing async partitioned authored scene path for streaming diagnostics, cache validation, and tooling coverage.
+
+Rationale:
+- The release sample should exercise the new scene actor/component adapter path while preserving the mature debug authored runtime for inspection and regression coverage.
