@@ -71,6 +71,7 @@ add_executable(manual_engine
     src/Engine/TerrainDerivedCache.cpp
     src/Engine/TerrainDerivedCacheAsync.cpp
     src/Engine/TerrainImport.cpp
+    src/Engine/TerrainMaterialMetadata.cpp
     src/Engine/TerrainNavigationAdapter.cpp
     src/Engine/TerrainPhysicsColliderAdapter.cpp
     src/Engine/TerrainRenderLodAdapter.cpp
@@ -364,6 +365,29 @@ target_link_libraries(manual_engine_terrain_physics_collider_adapter_tests
 )
 
 add_test(NAME manual_engine_terrain_physics_collider_adapter_tests COMMAND manual_engine_terrain_physics_collider_adapter_tests)
+
+add_executable(manual_engine_terrain_material_metadata_tests
+    tests/terrain/TerrainMaterialMetadataTestRunner.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Engine/AssetRegistry.cpp
+    src/Engine/Biome.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainMaterialMetadata.cpp
+)
+
+target_include_directories(manual_engine_terrain_material_metadata_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_terrain_material_metadata_tests
+    PRIVATE
+        assimp::assimp
+        glm::glm
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_terrain_material_metadata_tests COMMAND manual_engine_terrain_material_metadata_tests)
 
 add_executable(manual_engine_asset_registry_tests
     tests/assets/AssetRegistryTestRunner.cpp

@@ -419,6 +419,8 @@ Exit criteria:
 
 ### Phase T7: Terrain Material Metadata
 
+Status: initial CPU-only implementation added. `Engine::TerrainMaterialMetadata` now defines in-memory terrain material sets, PBR layer texture metadata, deterministic height/slope/world-position rules, validation diagnostics, `AssetRegistry` texture dependency registration, and chunk coverage evaluation from authoritative CPU heights. YAML loading, mask sampling, cached material weights, shader blending, terrain material renderer resources, and App terrain rendering changes remain deferred.
+
 Deliverables:
 
 - Define `TerrainMaterialSet` and layer/rule metadata.

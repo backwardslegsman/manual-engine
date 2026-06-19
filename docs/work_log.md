@@ -1295,3 +1295,15 @@ Changed:
 Rationale:
 - Terrain physics needs an explicit CPU bridge from authoritative height chunks to scene physics without deriving gameplay collision from renderer LOD meshes.
 - Keeping App gameplay and `BlockingCollisionSystem` unchanged lets terrain collider work proceed without migrating the procedural world loop.
+
+## 2026-06-19 - T7 Terrain Material Metadata
+
+Changed:
+- Added `Engine::TerrainMaterialMetadata` for in-memory terrain material sets, PBR layer texture metadata, stable layer/rule IDs, validation, and CPU rule evaluation.
+- Added `AssetRegistry` dependency registration for terrain material texture references without renderer texture allocation or `AssetCache` involvement.
+- Added deterministic terrain chunk coverage evaluation from authoritative CPU heights, CPU-derived slope, height ranges, and world-position bands.
+- Added focused terrain material metadata tests covering validation, texture dependency deduplication, fallback/height/slope/world-position rules, falloff normalization, and invalid dataset handles.
+
+Rationale:
+- Terrain needs stable material metadata and diagnostic CPU rule evaluation before shader-layer blending or material resource creation can be designed safely.
+- Keeping T7 renderer-free prevents material rules from depending on render LOD normals or live renderer handles.
