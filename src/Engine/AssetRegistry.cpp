@@ -418,7 +418,10 @@ namespace Engine {
 
     AssetSourceFormat AssetRegistry::detectSourceFormat(const std::filesystem::path& path, AssetType type) const
     {
-        if (type == AssetType::Material || type == AssetType::Skeleton || type == AssetType::AnimationClip) {
+        if (type == AssetType::Material ||
+            type == AssetType::Skeleton ||
+            type == AssetType::AnimationClip ||
+            type == AssetType::TerrainChunk) {
             return AssetSourceFormat::Generated;
         }
 
@@ -428,6 +431,10 @@ namespace Engine {
         }
         if (extension == ".yaml" || extension == ".yml") {
             return AssetSourceFormat::Yaml;
+        }
+
+        if (type == AssetType::TerrainSource || type == AssetType::TerrainMaterialSet) {
+            return AssetSourceFormat::Generated;
         }
 
         switch (Assets::Assimp::detectSceneSourceFormat(path)) {
@@ -494,7 +501,7 @@ namespace Engine {
 
     void AssetRegistry::refreshDiagnostics()
     {
-        const uint32_t typeCount = static_cast<uint32_t>(AssetType::NavigationSource) + 1;
+        const uint32_t typeCount = static_cast<uint32_t>(AssetType::TerrainChunk) + 1;
         diagnostics_.liveAssetCountByType.assign(typeCount, 0);
         diagnostics_.totalRegisteredAssets = 0;
         diagnostics_.missingCount = 0;

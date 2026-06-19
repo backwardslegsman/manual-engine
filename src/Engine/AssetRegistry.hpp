@@ -30,6 +30,10 @@ namespace Engine {
         Skeleton,
         AnimationClip,
         NavigationSource,
+        Heightmap,
+        TerrainSource,
+        TerrainMaterialSet,
+        TerrainChunk,
     };
 
     enum class AssetSourceFormat {

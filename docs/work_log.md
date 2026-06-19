@@ -1217,3 +1217,45 @@ Changed:
 
 Rationale:
 - Heightmap terrain crosses assets, renderer LODs, navigation, physics, materials, caching, and future serialization, so it needs a dedicated roadmap before implementation starts.
+
+## 2026-06-19 - T0 Heightmap Terrain Preflight
+
+Changed:
+- Added `docs/terrain_runtime/t0_heightmap_preflight.md` to lock the coordinate convention, validation asset role, fixture policy, T1 import inputs, chunking expectations, and source-versus-derived cache boundary before heightmap import implementation planning.
+- Linked the T0 preflight from the terrain rework roadmap as the required preparation step before Phase T1.
+
+Rationale:
+- T1 heightmap import needs stable coordinate, chunk identity, fixture, and cache-boundary decisions before adding importer APIs or tests.
+
+## 2026-06-19 - T1 Heightmap Terrain Import
+
+Changed:
+- Added a CPU-only heightmap importer for normalized 8-bit and 16-bit source samples.
+- Added terrain heightmap import settings and chunk descriptor generation using the T0 north-up coordinate contract and world-size chunking.
+- Added terrain-specific asset registry types for heightmaps, terrain sources, terrain material sets, and terrain chunks.
+- Added focused heightmap import tests with generated tiny PNG fixtures.
+
+Rationale:
+- Heightmap terrain needs a renderer-independent source import and chunk descriptor layer before runtime terrain ownership, generated caches, renderer LODs, navigation data, physics colliders, or material rules are added.
+
+## 2026-06-19 - T2 Runtime Terrain Dataset
+
+Changed:
+- Added `Engine::TerrainDataset` as a renderer-independent owner for terrain source records and loaded CPU chunks.
+- Added generation-counted terrain source/chunk handles, imported and procedural chunk loading, shared height sampling/raycast/bounds/diagnostics queries, and generated-tile compatibility conversion.
+- Added focused dataset tests covering handle invalidation, imported/procedural query paths, invalid no-ops, compatibility sampling, and renderer-stubbed legacy `TerrainSystem` comparison.
+
+Rationale:
+- Heightmap and procedural terrain need a shared CPU runtime ownership layer before generated caches, renderer LOD adapters, navigation data, physics colliders, material rules, or serialization are added.
+
+## 2026-06-19 - T3 Terrain Derived Cache
+
+Changed:
+- Added `Engine::TerrainDerivedCache` for deterministic generated terrain chunk height payloads and renderer-independent LOD mesh payloads.
+- Added YAML manifest plus binary payload storage, hash/magic/count validation, stale/corrupt status reporting, stats, and async queue wrappers.
+- Added focused terrain cache tests for manifest identity, chunk and LOD round trips, stale/corrupt handling, async wrappers, and renderer-independent LOD payload generation.
+- Updated terrain contracts and roadmap docs to describe the derived CPU cache boundary.
+
+Rationale:
+- Heightmap terrain needs reusable generated CPU payloads before render LOD, navigation, physics, material-weight, and future serialization phases consume terrain chunks at scale.
+- Keeping cache records disposable and free of live renderer/navigation/physics handles preserves explicit runtime ownership.

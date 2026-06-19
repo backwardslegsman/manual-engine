@@ -21,6 +21,7 @@ enable_testing()
 add_executable(manual_engine
     src/App/main.cpp
     src/Assets/Assimp/Importer.cpp
+    src/Assets/HeightmapImporter.cpp
     src/Engine/ActorCommand.cpp
     src/Engine/ActorController.cpp
     src/Engine/ActorSelection.cpp
@@ -65,6 +66,11 @@ add_executable(manual_engine
     src/Engine/Scene/SceneRenderBridge.cpp
     src/Engine/SpatialRegistry.cpp
     src/Engine/Terrain.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainDatasetCompatibility.cpp
+    src/Engine/TerrainDerivedCache.cpp
+    src/Engine/TerrainDerivedCacheAsync.cpp
+    src/Engine/TerrainImport.cpp
     src/Engine/World.cpp
     src/Engine/WorldNavigationGraph.cpp
     src/Engine/WorldObjectOverrides.cpp
@@ -216,6 +222,70 @@ target_link_libraries(manual_engine_asset_import_tests
 )
 
 add_test(NAME manual_engine_asset_import_tests COMMAND manual_engine_asset_import_tests)
+
+add_executable(manual_engine_heightmap_import_tests
+    tests/assets/HeightmapImportTestRunner.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Assets/HeightmapImporter.cpp
+    src/Engine/AssetRegistry.cpp
+    src/Engine/TerrainImport.cpp
+)
+
+target_include_directories(manual_engine_heightmap_import_tests
+    PRIVATE
+        src
+        ${Stb_INCLUDE_DIR}
+)
+
+target_link_libraries(manual_engine_heightmap_import_tests
+    PRIVATE
+        assimp::assimp
+        glm::glm
+)
+
+add_test(NAME manual_engine_heightmap_import_tests COMMAND manual_engine_heightmap_import_tests)
+
+add_executable(manual_engine_terrain_dataset_tests
+    tests/terrain/TerrainDatasetTestRunner.cpp
+    tests/navigation/RendererStubs.cpp
+    src/Engine/Biome.cpp
+    src/Engine/Terrain.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainDatasetCompatibility.cpp
+)
+
+target_include_directories(manual_engine_terrain_dataset_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_terrain_dataset_tests
+    PRIVATE
+        glm::glm
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_terrain_dataset_tests COMMAND manual_engine_terrain_dataset_tests)
+
+add_executable(manual_engine_terrain_cache_tests
+    tests/terrain/TerrainDerivedCacheTestRunner.cpp
+    src/Engine/AsyncWorkQueue.cpp
+    src/Engine/TerrainDerivedCache.cpp
+    src/Engine/TerrainDerivedCacheAsync.cpp
+)
+
+target_include_directories(manual_engine_terrain_cache_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_terrain_cache_tests
+    PRIVATE
+        glm::glm
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_terrain_cache_tests COMMAND manual_engine_terrain_cache_tests)
 
 add_executable(manual_engine_asset_registry_tests
     tests/assets/AssetRegistryTestRunner.cpp

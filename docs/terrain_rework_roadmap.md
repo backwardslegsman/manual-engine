@@ -4,6 +4,8 @@ This roadmap defines a full terrain-system rework for ManualEngine. The target i
 
 The first implementation pass should focus on import, chunking, runtime ownership, derived-data cache identity, render LOD generation, navigation build data, physics collider generation hooks, and terrain material metadata. Runtime scene serialization, terrain editing, and durable chunk save/load are design constraints for this roadmap, but they are not part of the first pass.
 
+Before planning Phase T1, complete the docs-only preflight contract in `docs/terrain_runtime/t0_heightmap_preflight.md`. T0 locks the coordinate convention, fixture policy, real-heightmap validation role, import settings inputs, chunk identity expectations, and source-versus-derived asset boundary that T1 depends on.
+
 ## Goals
 
 - Treat heightmap import as the primary terrain source path.
@@ -303,7 +305,25 @@ Diagnostics should be plain Engine data. Dear ImGui presentation remains App/Ren
 
 ## Implementation Phases
 
+### Phase T0: Heightmap Terrain Preflight
+
+Detailed preflight contract: `docs/terrain_runtime/t0_heightmap_preflight.md`.
+
+Deliverables:
+
+- Document the default configurable north-up heightmap coordinate convention.
+- Record the real `assets/heightmaps` validation asset facts and opt-in role.
+- Lock the fixture policy for small deterministic CTest inputs.
+- Define the T1 import settings inputs and CPU-only importer boundary.
+- Clarify source chunk identity, future serialization constraints, and generated derived-asset cache boundaries.
+
+Exit criteria:
+
+- T1 can be planned without reopening coordinate, fixture, decode-boundary, and source-versus-derived identity decisions.
+
 ### Phase T1: Terrain Source And Heightmap Import Plan
+
+Status: initial CPU-only implementation added. `Assets::loadHeightmapImage` decodes 8-bit and 16-bit heightmap images into normalized CPU samples, and `Engine::importHeightmapTerrain` applies explicit import settings to produce world-size chunk descriptors. Terrain-specific asset registry types are present for heightmap, terrain source, terrain material set, and terrain chunk metadata. Runtime terrain ownership, derived cache files, renderer LOD commit, navigation build data, physics colliders, material rules, and serialization remain later phases.
 
 Deliverables:
 
@@ -320,6 +340,8 @@ Exit criteria:
 
 ### Phase T2: Runtime Terrain Dataset And Chunk Ownership
 
+Status: initial CPU-only implementation added. `Engine::TerrainDataset` owns renderer-independent terrain source and loaded chunk records with generation-counted runtime handles. Imported heightmap chunks and procedural chunks now share sampling, raycast, bounds, diagnostics, and generated-tile compatibility paths. Existing `TerrainSystem`, App chunk streaming, renderer LOD commits, navigation build data, physics colliders, generated cache files, material rules, and serialization remain unchanged.
+
 Deliverables:
 
 - Introduce source-owned runtime terrain chunk records with generation-counted handles.
@@ -333,6 +355,8 @@ Exit criteria:
 - Gameplay height queries do not depend on renderer terrain handles.
 
 ### Phase T3: Derived Asset Cache
+
+Status: initial CPU-only implementation added. `Engine::TerrainDerivedCache` stores imported terrain chunk height payloads and renderer-independent LOD mesh payloads under deterministic manifest identity. Cache records use YAML manifests plus binary payload files, validate payload hashes/magic/counts, expose synchronous worker-safe helpers and `AsyncWorkQueue` wrappers, and keep live renderer, navigation, physics, App streaming, material weights, and serialization outside the cache.
 
 Deliverables:
 
