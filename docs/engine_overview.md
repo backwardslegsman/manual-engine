@@ -69,6 +69,8 @@ Keep this document current whenever subsystem ownership, data flow, or save-faci
 
 ## Save-Facing Contracts
 
+Detailed scene binary and durable identity conventions live in `docs/scene_runtime/serialization_conventions.md`.
+
 - `WorldObjectHandle` is transient and must not be serialized.
 - `ObjectId` is the save/persistence key.
 - `SceneActorHandle` and `SceneComponentHandle` are transient scene runtime handles and must not be serialized; `SceneObjectId` is the stable actor identity used by the core scene binary serialization path.

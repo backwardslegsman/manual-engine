@@ -6,6 +6,8 @@ The first implementation pass now covers import, chunking, runtime ownership, de
 
 Before planning Phase T1, complete the docs-only preflight contract in `docs/terrain_runtime/t0_heightmap_preflight.md`. T0 locks the coordinate convention, fixture policy, real-heightmap validation role, import settings inputs, chunk identity expectations, and source-versus-derived asset boundary that T1 depends on.
 
+Scene-level serialization conventions are documented in `docs/scene_runtime/serialization_conventions.md`. Future terrain chunk file work should keep using `TerrainSerializationPrep` durable identities and should follow those runtime-handle exclusion, deterministic output, and validation-before-mutation rules.
+
 ## Goals
 
 - Treat heightmap import as the primary terrain source path.

@@ -23,6 +23,7 @@ The first target should be glTF/GLB skeletal animation because its skinning and 
 - Make unsupported skeletal features explicit in diagnostics.
 - Keep renderer resource creation and destruction on the main/render thread.
 - Keep animation evaluation deterministic and testable before adding blending, state machines, or editor tools.
+- Future animated-scene serialization should follow `docs/scene_runtime/serialization_conventions.md`: persist asset identity, skeleton/clip binding descriptors, and animator settings, not renderer handles, cached texture acquisitions, sampled pose buffers, or live adapter records.
 - Do not require large licensed assets in the repository. Optional validation assets should remain ignored/local.
 - Do not run heavy optional asset tests by default. Use `MANUAL_ENGINE_RUN_HEAVY_ASSET_TESTS=1` only for changes where Sponza/KayKit-scale validation meaningfully exercises the code under review.
 

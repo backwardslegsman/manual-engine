@@ -1,6 +1,6 @@
 # T9 Terrain Serialization Preparation
 
-Phase T9 freezes the terrain identity and payload boundary needed for future chunked serialize/deserialize. It does not implement file I/O, scene/world serialization, terrain editing, App streaming changes, or automatic cache migration.
+Phase T9 freezes the terrain identity and payload boundary needed for future chunked serialize/deserialize. It does not implement file I/O, scene/world serialization, terrain editing, App streaming changes, or automatic cache migration. Scene-level serialization conventions live in `docs/scene_runtime/serialization_conventions.md`; terrain chunk files must follow those runtime-handle exclusion and durable-identity rules when a terrain file format is added.
 
 ## Durable Identity
 
@@ -29,7 +29,7 @@ Future serialized terrain chunk files identify chunks by `TerrainChunkStableIden
 - `identityHash`: deterministic hash of the durable identity and schema version;
 - `payloadFileName`: deterministic file name derived from source ID, chunk coordinate, and identity hash.
 
-This metadata is plain Engine data. T9 does not define a YAML or binary on-disk layout yet; that will happen in the serialization implementation phase.
+This metadata is plain Engine data. T9 does not define a YAML or binary on-disk layout yet; that will happen in a terrain chunk serialization phase. Scene binary files may reference this metadata, but they should not inline live terrain runtime handles or derived renderer/navigation/physics resources.
 
 ## Payload Boundary
 

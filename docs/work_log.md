@@ -1425,3 +1425,21 @@ Changed:
 
 Rationale:
 - Scene persistence now has a tested binary foundation and core actor/component roundtrip that is streaming-ready by layout while leaving live subsystem reconstruction for later explicit phases.
+
+## 2026-06-19 - Scene Serialization Conventions Documentation
+
+Changed:
+- Added `docs/scene_runtime/serialization_conventions.md` with binary container rules, durable identity choices, runtime-handle exclusions, deterministic output expectations, validation-before-mutation rules, reflection schema guidance, and subsystem extension hints.
+- Linked the conventions from the scene runtime index, scene component roadmap, system contracts, engine overview, terrain serialization prep, terrain rework roadmap, authored scene roadmap, and animation roadmap.
+
+Rationale:
+- Future serialization work needs one concise checklist so render, physics, navigation, terrain, authored, animated, scripting, and editor records extend the binary scene format without leaking transient runtime handles or live subsystem ownership.
+
+## 2026-06-19 - Phase 14 Native Behavior Hooks Roadmap Expansion
+
+Changed:
+- Expanded Phase 14 in `docs/scene_component_roadmap.md` into a full native behavior hook plan covering behavior type IDs, runtime handles, descriptors, hook contexts, scheduler integration, actor/component bindings, reflection/opaque access, diagnostics, serialization boundaries, implementation subphases, and tests.
+- Clarified that native hooks are synchronous scene-scheduler callbacks and must mutate runtime state only through public/reflection APIs.
+
+Rationale:
+- Native C++ gameplay behavior needs a constrained hook layer before Lua or broader App gameplay migration can safely build on scene actors and components.

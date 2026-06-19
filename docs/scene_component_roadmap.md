@@ -719,6 +719,8 @@ Goal: Persist scene data without serializing transient runtime handles.
 
 Status: initial implementation added. Phase 13 now provides a CPU-only custom binary scene container with a fixed header, chunk directory, 64-bit checksums, header-only inspection, whole-file write/read, in-memory snapshots, validation, and restore for core `Engine::Scene` actors, local transforms, hierarchy, and metadata-only scene components. Render bridge resources, physics bodies/colliders, character movement records, navigation tiles, terrain runtime chunks, authored/animated adapter resources, App save state, async streaming, compression, and migration hooks remain deferred.
 
+Detailed conventions: `docs/scene_runtime/serialization_conventions.md`. Future serialization work should update that document when it adds durable identity, chunk types, migration behavior, or subsystem record rules.
+
 Scope:
 
 - Add scene serialization under `src/Engine` as CPU-only runtime infrastructure. The initial implementation is `Engine::SceneSerialization` and does not add editor UI, Lua/native hook integration, network replication, compressed archives, encryption, hot reload, async streaming jobs, App save migration, or automatic procedural `World` conversion.
@@ -842,13 +844,151 @@ Exit criteria:
 
 Goal: Let C++ gameplay code attach behavior to scenes, actors, and components without bypassing scene contracts.
 
-- Define scene hooks: on load, start, tick phases, stop, unload.
-- Define actor hooks: on create, start, tick, destroy.
-- Define component hooks: on enable, disable, tick, property changed, destroy.
-- Keep hook execution ordered by the tick scheduler.
-- Restrict hook access through opaque scene/system APIs.
-- Add diagnostics for hook errors, order, timing, and disabled hooks.
-- Add tests for hook ordering, destruction during callbacks, and failed hook isolation.
+Status: planned. Phase 14 should add a native C++ behavior hook layer on top of the scene scheduler, reflection, opaque handles, and serialization conventions. It should let engine/game modules register behavior callbacks without direct access to subsystem storage and without turning App composition into a gameplay framework.
+
+Scope:
+
+- Add an Engine-owned native behavior hook runtime under `src/Engine`, likely `SceneBehaviorHooks.hpp/.cpp`.
+- Keep hooks CPU-only and scene-owned. Do not add Lua, editor UI, hot reload, dynamic plugin loading, async task execution, network replication, or App gameplay migration in this phase.
+- Register hooks through explicit descriptors and generation-counted `SceneBehaviorHandle` values. Runtime hook handles are transient and must not be serialized.
+- Bind hooks to durable scene identity where needed through `SceneObjectId`, `SceneComponentTypeId`, and stable behavior type IDs. Follow `docs/scene_runtime/serialization_conventions.md` for any save-facing metadata.
+- Route hook reads/writes through `SceneReflection`, `OpaqueHandle`, and approved public subsystem APIs. Hooks must not receive raw storage pointers, renderer handles, Jolt IDs, Detour refs, bgfx state, or App objects.
+- Keep existing `World`, `ActorController`, `BlockingCollisionSystem`, authored/animated adapters, renderer bridge, navigation, terrain, physics, character movement, and App sample paths behavior-compatible.
+
+Behavior identity and descriptors:
+
+- Add `SceneBehaviorTypeId` as a stable caller-supplied behavior type identifier.
+- Add `SceneBehaviorHandle` as a transient generation-counted registration/instance handle.
+- Add `SceneBehaviorDescriptor`:
+  - stable behavior type ID;
+  - debug name;
+  - target kind: scene, actor, component, system, or custom opaque target;
+  - optional required reflected object/property descriptors;
+  - ordered tick phases;
+  - enabled flag;
+  - deterministic priority/order field;
+  - lifecycle callback set;
+  - tick callback;
+  - optional property-changed callback.
+- Add `SceneBehaviorContext`:
+  - `Scene&`;
+  - `ReflectionRegistry&`;
+  - `SceneReflectionContext&` or a narrow wrapper over it;
+  - current lifecycle/tick phase;
+  - delta seconds, frame index, fixed step index, paused flag where applicable;
+  - target `OpaqueHandle`;
+  - diagnostics sink.
+- Keep callback signatures narrow and value/status based. Callbacks should return a `SceneBehaviorStatus` rather than throwing across the scheduler boundary.
+
+Hook categories:
+
+- Scene hooks:
+  - load, start, stop, unload;
+  - tick callbacks for selected `SceneTickPhase` values;
+  - optional scene-level property change notifications.
+- Actor hooks:
+  - actor created or bound;
+  - actor started/activated when scene starts;
+  - actor tick in selected phases;
+  - actor pending-destroy and destroyed/flush cleanup;
+  - reflected actor property changed.
+- Component hooks:
+  - component attached;
+  - component enabled/disabled if the owning component system has an enable concept;
+  - component descriptor/property changed;
+  - component tick in selected phases;
+  - component detached or owner destroyed.
+- System hooks:
+  - optional bridge callbacks for existing scene services such as render bridge, physics, character movement, navigation, and terrain adapters only after those systems expose approved opaque/reflection surfaces.
+- Do not add hooks for arbitrary procedural `World` objects in Phase 14. World migration can happen after scene behavior proves the access model.
+
+Scheduler and ordering:
+
+- Behavior registration is allowed only while `Scene` is `Unloaded` or `Loaded`, matching normal scene system registration rules.
+- Hook runtime should register one or more scene scheduler systems for the phases it needs. It should not create a parallel frame loop.
+- Lifecycle callbacks run in deterministic registration order for load/start and reverse order for stop/unload where cleanup ordering matters.
+- Tick callbacks run by phase, priority, then registration order.
+- Disabled behaviors remain registered but skip lifecycle/tick/property callbacks and increment skipped diagnostics.
+- Paused scenes follow existing scheduler pause rules. Fixed-phase behavior hooks do not run when fixed phases are skipped.
+- Hooks may destroy actors/components through public APIs. The runtime must snapshot matching targets before callback iteration so mutation cannot invalidate iteration.
+- Hook execution is synchronous on the main thread. Worker jobs may be requested only through future explicit APIs that return plain data; Phase 14 should not add those APIs.
+
+Access and safety rules:
+
+- Hooks receive only context, opaque handles, reflected values, and public Engine services explicitly placed in `SceneReflectionContext`.
+- Hooks must validate target handles through opaque conversion before mutation.
+- Reflected writes must use existing setter paths, preserving transform hierarchy, render bridge descriptor, physics, character, asset, terrain, and navigation invariants.
+- Runtime exceptions, if any occur inside user-provided callbacks, should be caught at the hook boundary and converted to diagnostics/status. The rest of the phase should continue unless the hook is configured as required and fail-fast.
+- A hook can disable itself or request deferred destruction, but direct unregister during its own callback should be staged until after current dispatch.
+- Hook callbacks should not allocate renderer resources, import assets, build nav tiles, create terrain colliders, or perform file I/O unless a later phase adds explicit APIs and budgets for that work.
+
+Diagnostics:
+
+- Add `SceneBehaviorDiagnostics`:
+  - registered/enabled/disabled counts;
+  - callbacks run/skipped/failed by lifecycle and tick phase;
+  - last status and message;
+  - elapsed microseconds by phase and callback;
+  - invalid target count;
+  - deferred unregister/destruction count;
+  - mutation-during-dispatch count;
+  - warnings vector.
+- Add renderer-independent debug records for hook order, target identity, failure messages, and slow callbacks. Rendering those records is Phase 16/debug UI work.
+- Diagnostics must be plain Engine data and must not affect gameplay behavior unless a hook explicitly requests disabling itself after failure.
+
+Serialization relationship:
+
+- Runtime `SceneBehaviorHandle` values are never serialized.
+- Stable behavior type IDs and actor/component binding descriptors may be serialized in a later pass, but Phase 14 should not extend the binary format unless a minimal metadata record is required for tests.
+- If behavior bindings become serializable, they must store `SceneObjectId`, `SceneComponentTypeId`, `SceneBehaviorTypeId`, and reflected property values only. `OpaqueHandle`, function pointers, lambdas, module pointers, scheduler handles, and captured runtime objects are invalid serialized payloads.
+- Native hook callback implementations are code, not data. Serialized scenes may reference behavior type IDs only if the runtime has explicitly registered a matching native factory before load/apply.
+
+Implementation phases inside Phase 14:
+
+1. Hook registry and handles:
+   - Add behavior type IDs, handles, descriptors, statuses, diagnostics, and deterministic storage.
+   - Add register/unregister/enable/contains/query APIs.
+2. Scheduler integration:
+   - Register scene systems for requested lifecycle and tick phases.
+   - Dispatch callbacks in deterministic order with target snapshots.
+   - Add paused/disabled/skipped accounting.
+3. Opaque/reflection access:
+   - Provide hook contexts backed by `SceneReflectionContext`.
+   - Add tests that hook mutation routes through reflected setters and public subsystem APIs.
+4. Actor/component target binding:
+   - Add scene actor and metadata-component binding helpers.
+   - Add owner-destroy and component-detach cleanup without stale handle reuse.
+5. Error isolation and diagnostics:
+   - Convert callback failures to statuses/diagnostics.
+   - Support self-disable or deferred unregister after failure.
+6. Serialization preparation:
+   - Document stable behavior type ID and binding conventions.
+   - Defer binary behavior binding chunks until a concrete behavior persistence use case exists.
+
+Test plan:
+
+- Add `manual_engine_scene_behavior_hooks_tests` as a CPU-only target independent from App, Renderer/bgfx, ImGui, Lua, authored/animated loaders, optional sample assets, and file serialization I/O.
+- Required tests:
+  - behavior handle lifecycle and stale invalidation;
+  - registration/unregistration rejected while scene is started;
+  - scene lifecycle callbacks run load/start in registration order and stop/unload in reverse order;
+  - tick callbacks run by phase, priority, then registration order;
+  - disabled hooks skip callbacks and update diagnostics;
+  - paused scenes skip fixed-phase hooks through existing scheduler semantics;
+  - actor-bound hooks receive valid opaque actor handles and reject stale/default/wrong-kind handles;
+  - component-bound hooks receive owner/type metadata and clean up on detach or owner destroy/flush;
+  - hook writes to local transform through reflection update scene hierarchy/world matrices;
+  - hook mutation during callback, including actor destroy and deferred unregister, does not corrupt iteration;
+  - callback failure is isolated, reported, and optionally disables the behavior;
+  - diagnostics report callback counts, skipped counts, failed counts, invalid targets, and timing fields deterministically;
+  - no runtime hook handle, opaque handle, function pointer, or captured callback object is accepted as serialized payload data.
+
+Exit criteria:
+
+- Native gameplay behavior can be written against stable runtime APIs without app-local wiring.
+- Hook execution is ordered by the existing scene scheduler and can mutate scene state only through approved public/reflection APIs.
+- Failures and invalid targets are diagnosable without crashing unrelated hooks.
+- Runtime hook identity is clearly separated from future serialized behavior binding identity.
 
 Exit criteria:
 

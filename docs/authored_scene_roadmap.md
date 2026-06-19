@@ -17,6 +17,7 @@ This roadmap prepares ManualEngine to load, render, and eventually stream comple
 - Do not make `src/App/main.cpp` the scene loader. App may choose which scene to load, but reusable import, resource creation, and lifetime rules belong under `src/Assets`, `src/Engine`, and `src/Renderer`.
 - Importers produce CPU-side scene data. Renderer creates GPU resources from that data.
 - Keep authored scene object identity separate from save-facing procedural `ObjectId` until persistence requirements are concrete.
+- Future authored-scene serialization should follow `docs/scene_runtime/serialization_conventions.md`: persist imported scene asset identity and durable node/binding descriptors, not renderer handles, cache acquisitions, or live adapter resources.
 - Keep scene loading failure explicit. Missing textures/material features should report diagnostics and use intentional fallbacks.
 - Support large scenes through budgets, worker-safe decode stages, and explicit resource ownership before adding automatic streaming.
 - Keep Sponza-specific compatibility useful as validation, but avoid hardcoding Sponza paths or material names into renderer systems.
