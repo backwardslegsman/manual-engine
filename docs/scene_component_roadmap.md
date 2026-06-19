@@ -38,6 +38,7 @@ Goal: Introduce a central runtime container without replacing existing systems i
 
 - Add `SceneHandle`, `ActorHandle`, `ComponentHandle`, and generation-counted validity.
 - Add stable `SceneObjectId` or equivalent serialized identity separate from transient handles.
+- Follow the handle and identity rules in `docs/system_contracts.md` before adding storage or serialization-facing APIs.
 - Add `Scene` ownership for actors and component storage.
 - Add actor lifecycle states: created, active, pending destroy, destroyed.
 - Add component lifecycle states and explicit owner actor relationship.

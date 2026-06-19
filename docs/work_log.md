@@ -760,3 +760,20 @@ Changed:
 Rationale:
 - The static authored scene and animated model paths should share the same import-boundary rule instead of duplicating skeletal/animation checks in multiple runtime owners.
 - Diagnostics should describe preserved imported data accurately and reserve “unsupported” wording for actual unsupported behavior.
+## 2026-06-18 - Scene Runtime Pre-Contracts
+
+Changed:
+- Added future scene runtime identity rules to `docs/system_contracts.md`.
+- Added the focused Phase 1 scene-kernel plan under `docs/scene_runtime`.
+- Linked the scene-component roadmap's first phase to the new handle and identity contract.
+
+Rationale:
+- Scene/component implementation needs clear runtime handle, stable ID, asset handle, renderer handle, and future physics/navigation handle boundaries before code is introduced.
+## 2026-06-18 - Imported Scene Resource Mapping Helper
+
+Changed:
+- Added a shared Engine helper for imported-scene vertex conversion, texture descriptor creation, material descriptor creation, and all-material texture acquisition.
+- Updated authored scene and animated model runtime loading to consume the shared helper instead of maintaining duplicate mapping code.
+
+Rationale:
+- Static authored scenes and animated models share material, texture, and vertex conversion policy; keeping that policy in one Engine helper reduces drift before scene/component integration begins.
