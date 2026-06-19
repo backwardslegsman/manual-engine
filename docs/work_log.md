@@ -1351,3 +1351,33 @@ Changed:
 
 Rationale:
 - Character movement and serialization planning need to know that terrain integration is explicit and adapter-driven, not automatic side effects of terrain rendering or legacy `TerrainSystem` ownership.
+
+## 2026-06-19 - Phase 10.5 Scene Terrain Alignment Tests
+
+Changed:
+- Added `manual_engine_scene_terrain_alignment_tests` to prove terrain dataset chunks explicitly compose with `TerrainNavigationAdapter`, `SceneNavigationService`, `TerrainPhysicsColliderAdapter`, `ScenePhysicsWorld`, and `TerrainSerializationPrep`.
+- Added coverage that terrain dataset/request creation alone does not create nav tiles, scene physics bodies, renderer resources, or serialized chunk files.
+- Updated scene roadmap and system contracts to mark the terrain alignment checkpoint implemented and clarify adapter-only terrain handoff rules.
+
+Rationale:
+- Character movement can now be planned against tested scene navigation and scene physics terrain handoffs without assuming automatic terrain side effects or legacy `TerrainSystem` internals.
+
+## 2026-06-19 - Phase 11 Character Movement Roadmap Expansion
+
+Changed:
+- Expanded the scene component roadmap's Phase 11 section into a full character movement implementation plan.
+- Documented the planned scene character movement API shape, kinematic capsule physics behavior, path-following integration, terrain alignment boundaries, and required headless tests.
+- Clarified that Phase 11 should not replace procedural `ActorController`, `BlockingCollisionSystem`, App command handling, or automatic terrain/nav generation.
+
+Rationale:
+- Character movement is the first gameplay system that depends on scene physics, scene navigation, and explicit terrain handoffs, so its roadmap needs concrete ownership and test boundaries before implementation.
+
+## 2026-06-19 - Phase 11 Scene Character Movement
+
+Changed:
+- Added `Engine::SceneCharacterMovementSystem` with generation-counted character handles, kinematic capsule physics ownership, fixed-step movement, grounding, collision sweeps, step probes, path following, diagnostics, and debug records.
+- Added `manual_engine_scene_character_movement_tests` covering lifecycle, invalid descriptors, physics ownership, flat and terrain grounding, blocker movement, path following, scheduler behavior, and diagnostics.
+- Updated scene roadmap and system contracts to document the kinematic-only character movement boundary.
+
+Rationale:
+- Scene gameplay now has a headless character controller built on the scene physics and navigation services without migrating App commands or procedural actor movement.

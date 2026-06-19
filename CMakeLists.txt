@@ -59,6 +59,7 @@ add_executable(manual_engine
     src/Engine/Picking.cpp
     src/Engine/ProceduralChunkContent.cpp
     src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/SceneCharacterMovement.cpp
     src/Engine/Scene/RendererSceneRenderBackend.cpp
     src/Engine/Scene/AnimatedSceneAdapter.cpp
     src/Engine/Scene/AuthoredSceneAdapter.cpp
@@ -516,6 +517,70 @@ target_link_libraries(manual_engine_scene_physics_tests
 )
 
 add_test(NAME manual_engine_scene_physics_tests COMMAND manual_engine_scene_physics_tests)
+
+add_executable(manual_engine_scene_terrain_alignment_tests
+    tests/scene/SceneTerrainAlignmentTestRunner.cpp
+    tests/navigation/RendererStubs.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationRuntime.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/Terrain.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainNavigationAdapter.cpp
+    src/Engine/TerrainPhysicsColliderAdapter.cpp
+    src/Engine/TerrainSerializationPrep.cpp
+)
+
+target_include_directories(manual_engine_scene_terrain_alignment_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_scene_terrain_alignment_tests
+    PRIVATE
+        glm::glm
+        Jolt::Jolt
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_scene_terrain_alignment_tests COMMAND manual_engine_scene_terrain_alignment_tests)
+
+add_executable(manual_engine_scene_character_movement_tests
+    tests/scene/SceneCharacterMovementTestRunner.cpp
+    tests/navigation/RendererStubs.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationRuntime.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/SceneCharacterMovement.cpp
+    src/Engine/Terrain.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainNavigationAdapter.cpp
+    src/Engine/TerrainPhysicsColliderAdapter.cpp
+)
+
+target_include_directories(manual_engine_scene_character_movement_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_scene_character_movement_tests
+    PRIVATE
+        glm::glm
+        Jolt::Jolt
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_scene_character_movement_tests COMMAND manual_engine_scene_character_movement_tests)
 
 add_executable(manual_engine_authored_scene_adapter_tests
     tests/scene/AuthoredSceneAdapterTestRunner.cpp

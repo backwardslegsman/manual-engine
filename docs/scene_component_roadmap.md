@@ -504,7 +504,7 @@ Exit criteria:
 
 Goal: Make the scene roadmap aware of the completed terrain rework foundation before character movement, reflection, and serialization build on it.
 
-Status: documentation checkpoint added. The terrain roadmap now provides CPU heightmap import, `TerrainDataset`, derived CPU cache records, render LOD adapter, navigation build-data adapter, scene-physics collider adapter, terrain material metadata/rendering, and serialization prep metadata. These are explicit adapters beside the scene runtime; they are not scene components yet and do not automatically migrate App terrain ownership.
+Status: implementation checkpoint added. The terrain roadmap now provides CPU heightmap import, `TerrainDataset`, derived CPU cache records, render LOD adapter, navigation build-data adapter, scene-physics collider adapter, terrain material metadata/rendering, and serialization prep metadata. `manual_engine_scene_terrain_alignment_tests` verifies that a tiny terrain dataset chunk can explicitly feed `SceneNavigationService`, `ScenePhysicsWorld`, and `TerrainSerializationPrep` without App, Renderer/bgfx, scripting, automatic terrain side effects, or runtime-handle serialization. These are explicit adapters beside the scene runtime; they are not scene components yet and do not automatically migrate App terrain ownership.
 
 Scope:
 
@@ -518,8 +518,7 @@ Scope:
 Cleanup and retroactive work before Milestone 11:
 
 - Audit character movement assumptions so grounding and floor sweeps can hit terrain through `ScenePhysicsWorld` only when a caller explicitly creates terrain collider bindings.
-- Add composition tests, if character movement starts depending on terrain, that create a tiny `TerrainDataset` chunk, build a `TerrainPhysicsColliderAdapter` payload, create scene physics terrain, and verify capsule grounding without linking Renderer/App.
-- Add navigation composition tests, if path-following starts depending on terrain, that build `NavigationTerrainBuildData` through `TerrainNavigationAdapter` and query it through `SceneNavigationService`.
+- Keep the terrain alignment composition tests passing as character movement starts depending on terrain. They create a tiny `TerrainDataset` chunk, build `TerrainPhysicsColliderAdapter` and `TerrainNavigationAdapter` outputs, and verify scene physics/navigation handoff without linking App or bgfx.
 - Keep terrain material rendering out of character movement and physics decisions; gameplay material classification should use CPU material metadata or future material-weight payloads, not shader results.
 
 Exit criteria:
@@ -531,17 +530,73 @@ Exit criteria:
 
 Goal: Build a reusable character movement component on top of physics and navigation.
 
-- Add `CharacterMovementComponent` with capsule dimensions, max speed, acceleration, gravity, slope limit, and step height.
-- Add grounded detection and floor result diagnostics.
-- Add collision-constrained movement with slide response.
-- Add path-following input that consumes navigation waypoints.
-- Add movement modes: walking, falling, disabled.
-- Add transform sync to scene hierarchy.
-- Add tests for grounding, slope rejection, step behavior, wall slide, path following, and paused movement.
+Status: initial implementation added. `Engine::SceneCharacterMovementSystem` now owns generation-counted kinematic capsule character records, creates one owned `ScenePhysicsWorld` body/collider per character, performs fixed-step grounding and collision-constrained movement, and can consume `SceneNavigationService` paths. Terrain grounding/pathing is covered through explicit `TerrainPhysicsColliderAdapter` and `TerrainNavigationAdapter` composition tests. Procedural `ActorController`, `BlockingCollisionSystem`, App input/commands, renderer behavior, scripting, serialization, and automatic terrain/nav generation remain unchanged.
+
+### Scope And Boundaries
+
+- Add a scene-owned character movement system under `src/Engine`, composed beside `Scene`, `ScenePhysicsWorld`, and optional `SceneNavigationService`.
+- Use `SceneActorHandle` as the owner identity and generation-counted character handles for movement records.
+- Treat character bodies as kinematic scene physics bodies with capsule colliders. Do not use dynamic rigid bodies for the first character controller.
+- Require callers to create terrain/static colliders and navigation tiles explicitly before movement uses them. No movement API may build terrain colliders, navmesh tiles, renderer resources, or chunk streaming work as a fallback.
+- Preserve existing procedural `World`, `ActorController`, `BlockingCollisionSystem`, actor commands, App input, authored scene samples, and animated sample behavior.
+- Defer animation root motion, network prediction, crouch/jump, moving platforms, ladders, swimming, vehicles, avoidance/crowd simulation, scripting, serialization, debug UI, and App gameplay migration.
+
+### Public API Shape
+
+- Add generation-counted `SceneCharacterHandle` with `isValid`, equality, and stale-handle behavior matching other Engine runtime handles.
+- Add descriptors and state records:
+  - `SceneCharacterDescriptor`: owner actor, radius, height, max speed, acceleration, braking, gravity, slope limit, step height, snap distance, physics layer/filter, enabled flag, and debug name.
+  - `SceneCharacterMoveInput`: desired world-space direction, desired speed scale, optional face direction, jump flag reserved but ignored in Phase 11.
+  - `SceneCharacterPathRequest`: optional path-follow target, agent config/filter, waypoint acceptance radius, repath interval, and allow-partial flag.
+  - `SceneCharacterState`: movement mode, grounded flag, floor normal, floor distance, velocity, requested path, active waypoint index, last status, and diagnostics.
+  - `SceneCharacterMovementDiagnostics`: character counts, enabled/disabled counts, grounded/falling counts, invalid owner cleanup, failed sweep counts, path query counts, elapsed update microseconds, and warnings.
+- Add `SceneCharacterMovementSystem` APIs:
+  - `createCharacter`, `destroyCharacter`, `contains`, `characterForActor`, `descriptor`, `state`, `setEnabled`, and `setMoveInput`.
+  - `requestPathTo`, `clearPath`, `setNavigationService`, and `updateFixed(deltaSeconds)`.
+  - `registerMovementSystem` / `unregisterMovementSystem` for `FixedPostPhysics` or a later fixed phase after physics writeback.
+  - `debugRequests`, `clearDebugRequests`, and `diagnostics`.
+
+### Movement Behavior
+
+- On creation, the system creates or reuses an explicit kinematic `ScenePhysicsWorld` body for the owner actor and attaches one capsule collider. If body creation fails, character creation returns an invalid handle and records diagnostics.
+- `updateFixed` reads move input, path-following state, and physics queries, then writes the character actor transform through scene APIs or `ScenePhysicsWorld::setKinematicTarget`.
+- Grounding uses a downward capsule sweep or ray/closest-point fallback through `ScenePhysicsWorld`; walkable floor requires floor normal slope at or below the character slope limit.
+- Horizontal movement uses acceleration toward desired velocity, braking when input is absent, and collision-constrained capsule sweeps with slide response along blocking surfaces.
+- Step handling attempts a bounded up-forward-down probe when horizontal sweep hits a low obstacle; it succeeds only within `stepHeight` and if the landing surface is walkable.
+- Falling applies gravity while ungrounded and transitions back to walking when a valid floor is found within snap distance.
+- Path following consumes `SceneNavigationService` paths as waypoint lists; the movement system requests paths only through the provided service and never triggers tile builds. Missing nav data leaves the character idle or in manual movement mode with a diagnostic status.
+- Paused scenes follow scheduler behavior: if fixed ticks do not run, movement does not update. Direct manual `updateFixed` calls with invalid or non-positive delta are clean no-ops with diagnostics.
+
+### Terrain, Navigation, And Physics Composition
+
+- Terrain participation is explicit:
+  - terrain collision comes from `TerrainPhysicsColliderAdapter` creating static scene physics bodies before movement updates;
+  - terrain pathing comes from `TerrainNavigationAdapter` plus `NavigationSystem` tile insertion before path requests;
+  - terrain material rendering and shader-layer rules do not affect character movement.
+- Character movement should work equally on simple box/static mesh colliders and terrain colliders because it only talks to `ScenePhysicsWorld`.
+- Path following should work equally on terrain-generated nav tiles and scene-geometry nav tiles because it only talks to `SceneNavigationService`.
+
+### Testing Plan
+
+- Add `manual_engine_scene_character_movement_tests` with `Scene.cpp`, `ScenePhysics.cpp`, `NavigationRuntime.cpp`, terrain alignment sources only where a terrain-specific case needs them, and renderer stubs only if navigation AABB types require them.
+- Required headless tests:
+  - handle lifecycle, stale invalidation, owner destroy/flush cleanup, disabled character no-op, and shutdown idempotence;
+  - character creation creates a kinematic capsule body and rejects invalid/stale/parented or malformed descriptors cleanly;
+  - grounded detection on a flat static floor and on a terrain collider created through `TerrainPhysicsColliderAdapter`;
+  - slope rejection on a steep surface and floor diagnostics for walkable versus unwalkable normals;
+  - acceleration, braking, max speed clamping, and falling under gravity;
+  - wall collision with slide response and no tunneling through thin static blockers;
+  - step-up success for obstacles within `stepHeight` and failure above `stepHeight`;
+  - path request through `SceneNavigationService`, waypoint advancement, missing-tile failure, and manual clear;
+  - scheduler ordering after physics fixed phases and paused-scene behavior;
+  - diagnostics/debug request counts update deterministically;
+  - no App, Renderer/bgfx, scripting, serialization, or procedural `ActorController` dependency.
 
 Exit criteria:
 
-- A scene actor can move with a capsule through static colliders and follow a nav path.
+- A scene actor can own one kinematic capsule character movement record, move through static scene physics colliders, ground on explicit terrain colliders, and follow a nav path supplied by `SceneNavigationService`.
+- Character movement performs no hidden terrain, navigation, renderer, App, serialization, or chunk-streaming work.
+- Existing procedural movement and full CTest behavior remain unchanged.
 
 ## 12. Reflection And Opaque APIs Roadmap
 
