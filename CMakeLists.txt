@@ -47,6 +47,8 @@ add_executable(manual_engine
     src/Engine/NavigationCache.cpp
     src/Engine/NavigationCacheAsync.cpp
     src/Engine/NavigationProfile.cpp
+    src/Engine/NavigationRuntime.cpp
+    src/Engine/NavigationSceneGeometry.cpp
     src/Engine/ObjectArchetype.cpp
     src/Engine/ObjectId.cpp
     src/Engine/Navigation.cpp
@@ -137,6 +139,63 @@ target_link_libraries(manual_engine_navigation_tests
 
 add_test(NAME manual_engine_navigation_tests COMMAND manual_engine_navigation_tests)
 
+add_executable(manual_engine_navigation_runtime_tests
+    tests/navigation/NavigationRuntimeTestRunner.cpp
+    tests/navigation/RendererStubs.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationRuntime.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/Terrain.cpp
+)
+
+target_include_directories(manual_engine_navigation_runtime_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_navigation_runtime_tests
+    PRIVATE
+        glm::glm
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_navigation_runtime_tests COMMAND manual_engine_navigation_runtime_tests)
+
+add_executable(manual_engine_navigation_scene_geometry_tests
+    tests/navigation/NavigationSceneGeometryTestRunner.cpp
+    tests/authored_scene/RendererOwnershipStubs.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Engine/AssetCache.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/ImportedSceneResources.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationRuntime.cpp
+    src/Engine/NavigationSceneGeometry.cpp
+    src/Engine/Scene/AuthoredSceneAdapter.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/Scene/SceneRenderBridge.cpp
+)
+
+target_include_directories(manual_engine_navigation_scene_geometry_tests
+    PRIVATE
+        src
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+)
+
+target_link_libraries(manual_engine_navigation_scene_geometry_tests
+    PRIVATE
+        assimp::assimp
+        glm::glm
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+)
+
+add_test(NAME manual_engine_navigation_scene_geometry_tests COMMAND manual_engine_navigation_scene_geometry_tests)
+
 add_executable(manual_engine_asset_import_tests
     tests/assets/AssetImportTestRunner.cpp
     src/Assets/Assimp/Importer.cpp
@@ -216,6 +275,7 @@ add_executable(manual_engine_authored_scene_adapter_tests
     src/Assets/Assimp/Importer.cpp
     src/Engine/AssetCache.cpp
     src/Engine/ImportedSceneResources.cpp
+    src/Engine/NavigationSceneGeometry.cpp
     src/Engine/Scene/AuthoredSceneAdapter.cpp
     src/Engine/Scene/Scene.cpp
     src/Engine/Scene/SceneRenderBridge.cpp

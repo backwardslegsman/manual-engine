@@ -80,6 +80,48 @@ namespace {
         }
     }
 
+    bool validImportedBounds(const Assets::Assimp::ImportedSceneBounds& bounds)
+    {
+        return bounds.valid &&
+            isFinite(bounds.min) &&
+            isFinite(bounds.max) &&
+            bounds.min.x <= bounds.max.x &&
+            bounds.min.y <= bounds.max.y &&
+            bounds.min.z <= bounds.max.z;
+    }
+
+    Engine::SceneNavigationSourceDescriptor navigationSourceDescriptor(
+        const Assets::Assimp::ImportedSceneMesh& importedMesh,
+        Engine::SceneActorHandle actor,
+        uint32_t meshIndex)
+    {
+        Engine::SceneNavigationSourceDescriptor descriptor;
+        descriptor.actor = actor;
+        descriptor.type = Engine::SceneNavigationSourceType::StaticMesh;
+        descriptor.role = Engine::SceneNavigationSourceRole::Walkable;
+        descriptor.enabled = true;
+        descriptor.debugName = importedMesh.name.empty()
+            ? "AuthoredSceneMesh." + std::to_string(meshIndex)
+            : importedMesh.name;
+        if (validImportedBounds(importedMesh.bounds)) {
+            descriptor.localBounds = Renderer::Aabb{importedMesh.bounds.min, importedMesh.bounds.max};
+        }
+
+        for (const Assets::Assimp::ImportedScenePrimitive& primitive : importedMesh.primitives) {
+            const uint32_t baseVertex = static_cast<uint32_t>(descriptor.vertices.size());
+            descriptor.vertices.reserve(descriptor.vertices.size() + primitive.vertices.size());
+            for (const Assets::Assimp::ImportedSceneVertex& vertex : primitive.vertices) {
+                descriptor.vertices.push_back(vertex.position);
+            }
+            descriptor.indices.reserve(descriptor.indices.size() + primitive.indices.size());
+            for (uint32_t index : primitive.indices) {
+                descriptor.indices.push_back(baseVertex + index);
+            }
+        }
+
+        return descriptor;
+    }
+
     Renderer::MaterialDescriptor fallbackMaterialDescriptor(const Engine::SceneAuthoredAdapterSettings& settings)
     {
         Renderer::MaterialDescriptor descriptor;
@@ -263,10 +305,30 @@ namespace Engine {
         for (uint32_t nodeIndex = 0; nodeIndex < importedScene.nodes.size(); ++nodeIndex) {
             SceneAuthoredNodeBinding& binding = result.nodes[nodeIndex];
             for (uint32_t meshIndex : importedScene.nodes[nodeIndex].meshIndices) {
-                if (meshIndex >= result.resources.staticMeshes.size() || !rendererHandleValid(result.resources.staticMeshes[meshIndex])) {
+                if (meshIndex >= importedScene.meshes.size()) {
                     ++result.diagnostics.invalidMeshReferenceCount;
                     result.diagnostics.warnings.push_back(
                         "Imported scene node " + std::to_string(nodeIndex) + " references invalid mesh " + std::to_string(meshIndex));
+                    continue;
+                }
+
+                if (settings.registerNavigationSources && settings.navigationGeometry) {
+                    SceneNavigationSourceHandle source = settings.navigationGeometry->registerSource(
+                        navigationSourceDescriptor(importedScene.meshes[meshIndex], binding.actor, meshIndex));
+                    if (isValid(source)) {
+                        binding.navigationSources.push_back(source);
+                        ++result.diagnostics.createdNavigationSourceCount;
+                    } else {
+                        ++result.diagnostics.invalidNavigationSourceCount;
+                        result.diagnostics.warnings.push_back(
+                            "Failed to register navigation source for imported scene node " + std::to_string(nodeIndex));
+                    }
+                }
+
+                if (meshIndex >= result.resources.staticMeshes.size() || !rendererHandleValid(result.resources.staticMeshes[meshIndex])) {
+                    ++result.diagnostics.invalidMeshReferenceCount;
+                    result.diagnostics.warnings.push_back(
+                        "Imported scene node " + std::to_string(nodeIndex) + " references invalid renderer mesh " + std::to_string(meshIndex));
                     continue;
                 }
 

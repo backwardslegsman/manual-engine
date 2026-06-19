@@ -1139,3 +1139,41 @@ Changed:
 
 Rationale:
 - The animated-only mode was only needed to isolate skinned visibility; with animation rendering fixed, release should again show the authored Sponza sample plus the animated mesh.
+
+## 2026-06-19 - Expanded Navigation Runtime API Roadmap
+
+Changed:
+- Expanded Milestone 8 in `docs/scene_component_roadmap.md` into a full Navigation Runtime API plan.
+- Covered scene-friendly query APIs, agent/filter data, service ownership, compatibility with existing chunk navigation, diagnostics/debug requests, threading rules, tests, and deferred work.
+
+Rationale:
+- Navigation needs a stable public query surface before scene geometry, physics, character movement, scripting, or serialization start depending on it.
+
+## 2026-06-19 - Navigation Runtime API Facade
+
+Changed:
+- Added `Engine::SceneNavigationService` as a scene-friendly facade over existing loaded-tile navigation queries.
+- Added runtime query result, agent/filter, diagnostics, and debug request records for projection, local paths, reachability, conservative raycasts, and scene actor path starts.
+- Added focused navigation runtime tests and documented the facade ownership contract.
+
+Rationale:
+- Scene, behavior, and future movement systems need a stable query API that does not expose Detour types or trigger synchronous tile generation.
+
+## 2026-06-19 - Expanded Navigation Scene Geometry Roadmap
+
+Changed:
+- Expanded Milestone 9 in `docs/scene_component_roadmap.md` into a full Navigation Scene Geometry plan.
+- Covered CPU scene nav source ownership, build snapshot flow, dirty tracking, diagnostics, tests, deferred work, and exit criteria.
+
+Rationale:
+- Scene-managed static and authored geometry needs a deterministic navigation build-input contract before navmesh generation can move beyond procedural terrain chunks.
+
+## 2026-06-19 - Navigation Scene Geometry Registry
+
+Changed:
+- Added `Engine::SceneNavigationGeometryRegistry` for CPU-only static scene navigation sources, deterministic build snapshots, dirty chunk reporting, diagnostics, and debug request records.
+- Added opt-in authored scene adapter navigation source registration from imported CPU mesh primitives.
+- Added focused navigation scene geometry tests and documented the new ownership contract.
+
+Rationale:
+- Scene-authored static geometry needs a renderer-independent path into existing navigation tile build inputs before App streaming or automatic rebuild orchestration can consume it.

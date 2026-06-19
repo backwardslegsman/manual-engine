@@ -7,6 +7,7 @@
 
 #include "Assets/Assimp/Importer.hpp"
 #include "Engine/AssetCache.hpp"
+#include "Engine/NavigationSceneGeometry.hpp"
 #include "Engine/Scene/SceneRenderBridge.hpp"
 #include "Renderer/Scene.hpp"
 
@@ -16,6 +17,7 @@ namespace Engine {
         SceneActorHandle actor;
         std::vector<SceneMeshComponentHandle> meshComponents;
         std::vector<SceneLightComponentHandle> lightComponents;
+        std::vector<SceneNavigationSourceHandle> navigationSources;
     };
 
     struct SceneAuthoredResourceBinding {
@@ -30,6 +32,8 @@ namespace Engine {
         float maxDrawDistance = 0.0f;
         std::string materialNamePrefix = "SceneAuthoredMaterial";
         std::string textureDebugNamePrefix = "SceneAuthored";
+        SceneNavigationGeometryRegistry* navigationGeometry = nullptr;
+        bool registerNavigationSources = false;
     };
 
     struct SceneAuthoredAdapterDiagnostics {
@@ -43,6 +47,7 @@ namespace Engine {
         uint32_t createdMaterialCount = 0;
         uint32_t createdMeshComponentCount = 0;
         uint32_t createdLightComponentCount = 0;
+        uint32_t createdNavigationSourceCount = 0;
         uint32_t textureLoadSuccessCount = 0;
         uint32_t textureLoadFailureCount = 0;
         uint32_t textureFallbackCount = 0;
@@ -56,6 +61,7 @@ namespace Engine {
         uint32_t invalidNodeReferenceCount = 0;
         uint32_t invalidMeshReferenceCount = 0;
         uint32_t invalidMaterialReferenceCount = 0;
+        uint32_t invalidNavigationSourceCount = 0;
         std::vector<std::string> warnings;
     };
 

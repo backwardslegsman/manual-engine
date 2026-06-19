@@ -181,36 +181,189 @@ Exit criteria:
 
 ## 8. Navigation Runtime API Roadmap
 
-Goal: Expose current navigation functionality behind scene-friendly public APIs.
+Goal: Expose the existing navigation query surface through stable scene-friendly Engine APIs while preserving the current procedural chunk navigation implementation.
 
-- Keep Recast/Detour private to `Navigation.cpp`.
-- Add scene-facing path query, nearest-point projection, ray/segment projection, and reachability APIs.
-- Define agent configs as data records or assets.
-- Add per-scene navigation service ownership.
-- Add debug draw requests for navmesh, portals, paths, and failed queries.
-- Preserve existing chunk navigation cache and async tile build behavior.
-- Add tests for local pathfinding, projection, invalid queries, and diagnostics.
+Scope:
+
+- Add a runtime API layer for navigation queries, agent settings, query filters, path handles/results, debug requests, and diagnostics.
+- Keep Recast/Detour private to `Navigation.cpp` and existing navigation implementation files; public callers should not include Detour headers or consume Detour refs.
+- Keep Phase 8 query-only for scene integration. Do not build navmesh from scene render components yet; that is Phase 9.
+- Preserve current `NavigationSystem`, `NavigationConnectivitySystem`, `WorldNavigationGraph`, `NavigationCache`, actor command pathing, chunk streaming, async tile builds, and debug UI behavior.
+- Keep existing procedural world and actor navigation paths operational through adapters or compatibility calls while the new API is introduced.
+
+Public API Shape:
+
+- Add scene-friendly navigation identity types under `src/Engine`, likely in a narrow `NavigationRuntime.hpp` / `.cpp` pair:
+  - `NavigationWorldHandle` or service-owned runtime handle if more than one navigation context is needed.
+  - `NavigationAgentTypeId` for stable agent profile selection.
+  - `NavigationQueryId` for optional diagnostics correlation, not required for synchronous use.
+  - `NavigationPathHandle` only if cached path ownership is introduced; otherwise return value paths are preferred for Phase 8.
+  - `NavigationQueryStatus::{Success, InvalidInput, NoNavigationData, NoTile, NoNearestPoly, NoPath, PartialPath, UnsupportedAgent, Cancelled}`.
+  - `NavigationProjectionResult`, `NavigationPathResult`, `NavigationReachabilityResult`, and `NavigationRaycastResult`.
+- Define `NavigationAgentConfig` as plain data:
+  - radius, height, max step height, max slope, max climb, query extents, max path nodes, and optional profile ID.
+  - default values should match the current active player navigation profile.
+  - Treat configs as runtime data in Phase 8; asset registry-backed agent config assets can come later.
+- Define `NavigationQueryFilter` as plain data:
+  - area mask, include/exclude flags, max search radius, allow partial path, require loaded tiles, and optional cost overrides.
+  - Keep unsupported filter fields ignored with diagnostics rather than exposing Detour filter internals.
+- Define query API methods:
+  - `projectPoint(position, agent, filter)`.
+  - `findPath(start, goal, agent, filter)`.
+  - `findPathFromActor(scene, actor, goal, agent, filter)` as a convenience that reads scene world transform only through public `Scene` APIs.
+  - `raycast(start, end, agent, filter)` or `segmentCast` for navmesh line-of-sight.
+  - `reachable(start, goal, agent, filter)` as a cheap status/result wrapper over projection/path tests.
+  - `pathLength(path)` and `samplePath(path, distance)` helpers if paths are returned as value objects.
+- Keep APIs synchronous and CPU-only in this phase. Async tile build/cache work remains owned by the existing chunk/navigation systems.
+
+Service Ownership:
+
+- Introduce an Engine-owned navigation runtime facade that can be composed beside `Scene`, for example `SceneNavigationService`.
+- The facade should not own Recast tile generation in Phase 8. It should wrap or reference the existing live `NavigationSystem` and optional `NavigationConnectivitySystem`/`WorldNavigationGraph` where needed.
+- Scene integration should use explicit wiring:
+  - App or future composition code creates the service with references to the live navigation systems.
+  - Scene actors can request paths through the service using `SceneActorHandle` plus public scene transform queries.
+  - The service may register a scene scheduler system only for diagnostics/debug-request flushing, not hidden tile generation.
+- Do not make `Scene` directly own navigation storage yet. Per-scene ownership can become real when Phase 9 scene geometry supplies nav input and scene lifetime controls navmesh lifetime.
+
+Compatibility Layer:
+
+- Keep existing actor move-command flow intact:
+  - Direct local Detour path attempts still work.
+  - Hierarchical route fallback still uses `WorldNavigationGraph`.
+  - Chunk transition portal behavior remains unchanged.
+- Add compatibility adapters so current actor/navigation command code can migrate call sites incrementally:
+  - Convert current local path request inputs to `NavigationAgentConfig` and `NavigationQueryFilter`.
+  - Convert existing path status/failure reasons to the new `NavigationQueryStatus`.
+  - Preserve current waypoint formats until character movement is migrated.
+- Existing debug UI may display new diagnostics but should not be required for API use.
+
+Diagnostics And Debug Requests:
+
+- Add plain Engine diagnostics for:
+  - query counts by type and status;
+  - last path/projection/raycast failure reason;
+  - nearest-poly search extents;
+  - path node count, length, partial/final status;
+  - source tile/chunk availability;
+  - agent profile/config used;
+  - elapsed microseconds for query calls;
+  - rejected invalid scene actor handles or stale inputs.
+- Add debug request records that are independent of Renderer and ImGui:
+  - draw navmesh polygons/edges for currently loaded tiles;
+  - draw requested path corridor and sampled waypoints;
+  - draw projection source/result points and failed search extents;
+  - draw raycast hit or blocked segment;
+  - draw portal links and coarse route segments when the service uses connectivity/graph data.
+- The renderer/App debug layer may translate these requests to existing debug primitives later; Phase 8 should define the data and caps, not require new rendering behavior.
+
+Main-Thread And Async Rules:
+
+- Query APIs read live navigation data and should run on the main thread unless the existing systems explicitly provide immutable snapshots.
+- Worker jobs may continue producing Detour tile bytes from immutable terrain/chunk inputs, but Phase 8 APIs must not trigger synchronous tile builds as a fallback.
+- Missing tiles are normal outcomes and should return `NoTile`/`NoNavigationData` plus diagnostics, not block on generation.
+- Debug request buffers should be frame-scoped or explicitly cleared by the owner to avoid unbounded growth.
+
+Testing Plan:
+
+- Add CPU-focused tests that use small deterministic navigation fixtures or existing test nav tile setup:
+  - project valid points onto loaded nav data;
+  - return `NoTile` or `NoNearestPoly` for missing/unreachable points;
+  - find a local path and preserve deterministic waypoint order;
+  - report partial or no path for blocked/disconnected areas;
+  - validate reachability wrappers;
+  - validate ray/segment projection success and blocked cases;
+  - reject invalid agent configs, stale scene actors, invalid filters, and NaN inputs without mutation;
+  - verify diagnostics counts/statuses and debug request records;
+  - confirm no public header exposes Recast/Detour types;
+  - confirm existing actor navigation and graph tests still pass.
+- Keep tests independent from Renderer, App, Physics, scripting, and scene render bridge unless a specific scene transform convenience API is under test.
+
+Deferred:
+
+- Scene static mesh/terrain nav-source gathering and navmesh rebuilds from scene geometry.
+- Navigation components, agent components, and path-following character movement.
+- Asset registry-backed navigation profiles.
+- Serialization of navigation agent settings or runtime paths.
+- Editor/debug UI controls beyond data exposure.
+- Off-main-thread query snapshots.
+- Dynamic obstacle avoidance, crowd simulation, steering, and locomotion.
 
 Exit criteria:
 
-- Gameplay code can request navigation without depending on procedural chunk internals.
-- Existing procedural path following remains compatible.
+- Gameplay or scene systems can request projection, local paths, reachability, and raycasts without depending on procedural chunk internals or Detour types.
+- Query failures are explicit, diagnosable, and do not force synchronous tile builds.
+- Existing procedural actor path following, chunk navigation cache, async tile build, connectivity, and graph behavior remain compatible.
 
 ## 9. Navigation Scene Geometry Roadmap
 
-Goal: Feed navigation generation from scene static geometry and terrain.
+Goal: Feed navigation generation from scene-owned static geometry and terrain without making navigation depend on renderer internals, authored-scene runtime caches, physics, or App composition code.
 
-- Define a nav-source interface for static mesh components, terrain, and optional collider geometry.
-- Gather world-space triangles from loaded scene geometry under explicit build settings.
-- Add dirty tracking for transform/mesh/collider changes that affect nav input.
-- Support full rebuild first, then incremental region/tile updates.
-- Preserve worker-safe Recast build inputs and main-thread navmesh commit rules.
-- Add diagnostics for source triangle counts, ignored components, build timing, tile counts, and cache status.
-- Add tests with small static scene geometry and transformed meshes.
+Status: core source registry implemented. `Engine::SceneNavigationGeometryRegistry` can register CPU scene navigation sources, snapshot enabled static geometry plus optional terrain input into `NavigationTerrainBuildData`, track dirty chunks, and receive opt-in authored scene adapter registrations. Automatic App streaming/rebuild integration, dynamic obstacles, physics collider extraction, off-mesh links, serialized source identity, and editor/debug UI remain deferred.
+
+Scope:
+
+- Add a CPU-only scene navigation geometry layer that can produce immutable Recast build inputs from loaded scene data.
+- Support static mesh geometry, existing terrain navigation build data, and an extension point for future collider/nav-volume sources.
+- Keep `NavigationSystem` tile lifetime, async build worker rules, cache behavior, connectivity, graph routing, and runtime query APIs unchanged.
+- Do not inspect renderer GPU handles, renderer instance state, `AssetCache` internals, physics colliders, scripting objects, serialized scene files, or editor/debug UI in this milestone.
+- Build full regions or full tiles first; add incremental dirty-tile rebuilds only after the source contract is deterministic and tested.
+
+Source ownership and API shape:
+
+- Add an engine-owned scene navigation source API, such as `SceneNavigationGeometrySource` records managed by a small `SceneNavigationGeometryRegistry`.
+- Store source records as CPU metadata: source ID, optional owning `SceneActorHandle`, source type, enabled flag, bounds, triangle vertices/indices, area/material hints, blocker/walkable role, and a transform snapshot.
+- Treat scene actor handles as transient ownership links only. Durable serialized navigation source identity is deferred to the serialization milestone.
+- Let authored/static scene adapters register CPU mesh geometry while they still have imported vertex/index data available. Do not reverse-engineer geometry from `Renderer::StaticMeshHandle`.
+- Let terrain contribute through the existing `TerrainSystem::navigationBuildData` path, then normalize terrain and scene mesh inputs into one deterministic build snapshot.
+- Keep Recast/Detour types private to navigation implementation files; public scene geometry headers expose only engine structs, GLM values, and plain containers.
+
+Build flow:
+
+- Query the registry for enabled sources whose world-space bounds intersect a requested chunk, tile, or region bounds.
+- Refresh actor-owned source transforms from `Scene::worldMatrix` before snapshotting, rejecting stale, pending-destroy, invalid, or non-finite actors.
+- Transform static mesh vertices into world space and append them in deterministic source order.
+- Merge walkable triangles and blocker triangles into a worker-safe build input compatible with `NavigationTerrainBuildData` or a narrow successor struct.
+- Submit immutable build snapshots to the existing navigation worker flow; completed navmesh data is committed on the main thread through existing `NavigationSystem` ownership rules.
+- Preserve the procedural terrain path as a first-class contributor so existing chunk navigation tests and App movement behavior remain compatible.
+
+Dirty tracking:
+
+- Track source changes that affect navigation input: actor transform changes, source enable/disable, geometry replacement, bounds changes, area-role changes, and source destruction.
+- Mark intersecting tiles or regions dirty without synchronously rebuilding them.
+- Coalesce dirty regions by frame or explicit rebuild request so repeated transform updates do not spam tile jobs.
+- Start with explicit full rebuild and explicit rebuild-region APIs; add automatic incremental rebuild scheduling only after the dirty-region accounting is proven.
+- Removing a source invalidates affected generated input and diagnostics immediately, but live navmesh replacement still follows the normal async build and main-thread commit path.
+
+Diagnostics and debug records:
+
+- Report source counts by type and role, included/ignored triangle counts, invalid index counts, non-finite vertex counts, transformed bounds, dirty tile counts, build snapshot timing, worker build timing, cache hit/miss counts, and last warnings.
+- Record why sources are ignored: disabled, missing geometry, invalid actor, non-finite transform, invalid indices, out of build bounds, or unsupported source type.
+- Add renderer-independent debug request records for source bounds, included triangles, ignored sources, blocker triangles, dirty tiles, and generated tile bounds.
+- Keep these debug records independent from ImGui and Renderer; visualization wiring belongs in later debug/app composition work.
+
+Testing plan:
+
+- Add CPU-only tests where a small scene static mesh generates deterministic nav build input and a usable local nav tile.
+- Verify actor transforms, parent hierarchy transforms, non-uniform scale, and rotation affect gathered world-space geometry correctly.
+- Verify disabled sources, invalid actors, stale handles, malformed indices, empty geometry, and non-finite vertices are rejected without mutation.
+- Verify blocker geometry changes path results or produces blocked/partial status through the existing runtime query facade.
+- Verify terrain and scene static mesh sources merge in deterministic order.
+- Verify dirty tracking marks the expected tiles after transform, geometry, enable/disable, and source removal changes.
+- Verify source gathering and tests do not link Renderer, App, Physics, scripting, or bgfx.
+- Keep existing `manual_engine_navigation_tests`, `manual_engine_navigation_runtime_tests`, authored scene tests, and scene render bridge tests passing.
+
+Deferred work:
+
+- Dynamic obstacle carving, DetourTileCache obstacle updates, off-mesh links, jump links, climb links, crowd simulation, and multi-agent tile variants.
+- Physics collider extraction, nav modifiers from scripts, editor-authored nav volumes, serialized navigation source IDs, streamed scene sector ownership, and asset-registry-driven mesh resolution.
+- App migration from procedural chunk-only builds to scene-authored builds.
 
 Exit criteria:
 
-- A scene with static meshes can generate usable navmesh input without procedural-specific code.
+- A scene with static mesh sources can generate worker-safe navigation build input and produce usable local navmesh tiles through the existing `NavigationSystem`.
+- Terrain and scene geometry can contribute to the same build snapshot without procedural-specific code leaking into scene APIs.
+- Navigation scene geometry APIs do not expose renderer GPU resources, Recast/Detour types, physics internals, scripting state, or serialization assumptions.
 
 ## 10. Physics Integration Roadmap
 
