@@ -844,11 +844,11 @@ Exit criteria:
 
 Goal: Let C++ gameplay code attach behavior to scenes, actors, and components without bypassing scene contracts.
 
-Status: planned. Phase 14 should add a native C++ behavior hook layer on top of the scene scheduler, reflection, opaque handles, and serialization conventions. It should let engine/game modules register behavior callbacks without direct access to subsystem storage and without turning App composition into a gameplay framework.
+Status: initial implementation added. `Engine::SceneBehaviorHooks` now provides a CPU-only native C++ behavior hook runtime on top of the scene scheduler, reflection, opaque handles, and serialization conventions. Engine/game modules can register explicit scene/actor/component-targeted callbacks without direct access to subsystem storage or App-local wiring. Phase 14 does not add Lua, editor UI, hot reload, dynamic plugins, App gameplay migration, serialization payloads, or automatic procedural `World` hooks.
 
 Scope:
 
-- Add an Engine-owned native behavior hook runtime under `src/Engine`, likely `SceneBehaviorHooks.hpp/.cpp`.
+- Added an Engine-owned native behavior hook runtime under `src/Engine/SceneBehaviorHooks.hpp/.cpp`.
 - Keep hooks CPU-only and scene-owned. Do not add Lua, editor UI, hot reload, dynamic plugin loading, async task execution, network replication, or App gameplay migration in this phase.
 - Register hooks through explicit descriptors and generation-counted `SceneBehaviorHandle` values. Runtime hook handles are transient and must not be serialized.
 - Bind hooks to durable scene identity where needed through `SceneObjectId`, `SceneComponentTypeId`, and stable behavior type IDs. Follow `docs/scene_runtime/serialization_conventions.md` for any save-facing metadata.
@@ -857,9 +857,9 @@ Scope:
 
 Behavior identity and descriptors:
 
-- Add `SceneBehaviorTypeId` as a stable caller-supplied behavior type identifier.
-- Add `SceneBehaviorHandle` as a transient generation-counted registration/instance handle.
-- Add `SceneBehaviorDescriptor`:
+- Added `SceneBehaviorTypeId` as a stable caller-supplied behavior type identifier.
+- Added `SceneBehaviorHandle` as a transient generation-counted registration/instance handle.
+- Added `SceneBehaviorDescriptor`:
   - stable behavior type ID;
   - debug name;
   - target kind: scene, actor, component, system, or custom opaque target;
@@ -870,7 +870,7 @@ Behavior identity and descriptors:
   - lifecycle callback set;
   - tick callback;
   - optional property-changed callback.
-- Add `SceneBehaviorContext`:
+- Added `SceneBehaviorContext`:
   - `Scene&`;
   - `ReflectionRegistry&`;
   - `SceneReflectionContext&` or a narrow wrapper over it;
@@ -924,7 +924,7 @@ Access and safety rules:
 
 Diagnostics:
 
-- Add `SceneBehaviorDiagnostics`:
+- Added `SceneBehaviorDiagnostics`:
   - registered/enabled/disabled counts;
   - callbacks run/skipped/failed by lifecycle and tick phase;
   - last status and message;
@@ -945,29 +945,29 @@ Serialization relationship:
 
 Implementation phases inside Phase 14:
 
-1. Hook registry and handles:
+1. Hook registry and handles: implemented.
    - Add behavior type IDs, handles, descriptors, statuses, diagnostics, and deterministic storage.
    - Add register/unregister/enable/contains/query APIs.
-2. Scheduler integration:
+2. Scheduler integration: implemented.
    - Register scene systems for requested lifecycle and tick phases.
    - Dispatch callbacks in deterministic order with target snapshots.
    - Add paused/disabled/skipped accounting.
-3. Opaque/reflection access:
+3. Opaque/reflection access: implemented.
    - Provide hook contexts backed by `SceneReflectionContext`.
    - Add tests that hook mutation routes through reflected setters and public subsystem APIs.
-4. Actor/component target binding:
+4. Actor/component target binding: implemented as explicit opaque target binding. Automatic actor/component event interception remains deferred.
    - Add scene actor and metadata-component binding helpers.
    - Add owner-destroy and component-detach cleanup without stale handle reuse.
-5. Error isolation and diagnostics:
+5. Error isolation and diagnostics: implemented.
    - Convert callback failures to statuses/diagnostics.
    - Support self-disable or deferred unregister after failure.
-6. Serialization preparation:
+6. Serialization preparation: implemented as documentation-only conventions. Binary behavior binding chunks remain deferred.
    - Document stable behavior type ID and binding conventions.
    - Defer binary behavior binding chunks until a concrete behavior persistence use case exists.
 
 Test plan:
 
-- Add `manual_engine_scene_behavior_hooks_tests` as a CPU-only target independent from App, Renderer/bgfx, ImGui, Lua, authored/animated loaders, optional sample assets, and file serialization I/O.
+- Added `manual_engine_scene_behavior_hooks_tests` as a CPU-only target independent from App, Renderer/bgfx implementation, ImGui, Lua, authored/animated loaders, optional sample assets, and file serialization I/O.
 - Required tests:
   - behavior handle lifecycle and stale invalidation;
   - registration/unregistration rejected while scene is started;
@@ -989,10 +989,6 @@ Exit criteria:
 - Hook execution is ordered by the existing scene scheduler and can mutate scene state only through approved public/reflection APIs.
 - Failures and invalid targets are diagnosable without crashing unrelated hooks.
 - Runtime hook identity is clearly separated from future serialized behavior binding identity.
-
-Exit criteria:
-
-- Native gameplay behavior can be written against stable runtime APIs without app-local wiring.
 
 ## 15. Lua Scripting Roadmap
 

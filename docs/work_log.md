@@ -1443,3 +1443,15 @@ Changed:
 
 Rationale:
 - Native C++ gameplay behavior needs a constrained hook layer before Lua or broader App gameplay migration can safely build on scene actors and components.
+
+## 2026-06-19 - Phase 14 Native Behavior Hooks
+
+Changed:
+- Added `Engine::SceneBehaviorHooks` with stable behavior type IDs, generation-counted runtime behavior handles, explicit scene/actor/component opaque target bindings, lifecycle/tick/property callbacks, reflected get/set helpers, diagnostics, and debug records.
+- Integrated native behavior dispatch through one scene scheduler system so lifecycle and tick callbacks follow existing scene ordering, pause behavior, and mutation-safe handle snapshots.
+- Added target validation, callback failure isolation, optional disable-on-failure, explicit property-change notification helpers, and deferred unregister behavior.
+- Added `manual_engine_scene_behavior_hooks_tests` covering handle invalidation, scheduler ordering, disabled/paused behavior, actor/component target validation, reflection writes, property notifications, mutation during callbacks, failure diagnostics, and runtime-handle serialization boundaries.
+- Updated system contracts, engine overview, and the scene roadmap to document the native behavior hook boundary.
+
+Rationale:
+- Scene gameplay now has a native C++ callback layer that can drive behavior through scheduler/reflection contracts before Lua or broader App gameplay migration is introduced.

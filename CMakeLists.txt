@@ -60,6 +60,7 @@ add_executable(manual_engine
     src/Engine/ProceduralChunkContent.cpp
     src/Engine/Physics/ScenePhysics.cpp
     src/Engine/Reflection.cpp
+    src/Engine/SceneBehaviorHooks.cpp
     src/Engine/SceneCharacterMovement.cpp
     src/Engine/SceneReflection.cpp
     src/Engine/Scene/RendererSceneRenderBackend.cpp
@@ -557,6 +558,44 @@ target_link_libraries(manual_engine_scene_reflection_tests
 )
 
 add_test(NAME manual_engine_scene_reflection_tests COMMAND manual_engine_scene_reflection_tests)
+
+add_executable(manual_engine_scene_behavior_hooks_tests
+    tests/scene/SceneBehaviorHooksTestRunner.cpp
+    tests/navigation/RendererStubs.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Engine/AssetRegistry.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationRuntime.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Reflection.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/Scene/SceneRenderBridge.cpp
+    src/Engine/SceneBehaviorHooks.cpp
+    src/Engine/SceneCharacterMovement.cpp
+    src/Engine/Terrain.cpp
+    src/Engine/SceneReflection.cpp
+    src/Engine/TerrainDataset.cpp
+)
+
+target_include_directories(manual_engine_scene_behavior_hooks_tests
+    PRIVATE
+        src
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+)
+
+target_link_libraries(manual_engine_scene_behavior_hooks_tests
+    PRIVATE
+        glm::glm
+        assimp::assimp
+        Jolt::Jolt
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_scene_behavior_hooks_tests COMMAND manual_engine_scene_behavior_hooks_tests)
 
 add_executable(manual_engine_scene_serialization_tests
     tests/scene/SceneSerializationTestRunner.cpp
