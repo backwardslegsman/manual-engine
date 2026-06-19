@@ -1079,8 +1079,6 @@ namespace Assets::Assimp {
                     "FBX embedded textures are recorded as diagnostics but are not extracted by the runtime texture loader.");
             }
         }
-        result.diagnostics.unsupportedAnimationCount = scene->mNumAnimations;
-
         std::unordered_set<uint32_t> usedMaterialIndices;
         std::vector<uint32_t> materialIndexRemap(scene->mNumMaterials, 0);
         for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; ++meshIndex) {
@@ -1144,10 +1142,6 @@ namespace Assets::Assimp {
                 continue;
             }
 
-            if (aiMesh->HasBones()) {
-                ++result.diagnostics.unsupportedSkinnedMeshCount;
-            }
-
             ImportedSceneMesh mesh;
             mesh.name = aiMesh->mName.C_Str();
             mesh.bounds = emptyBounds();
@@ -1195,9 +1189,9 @@ namespace Assets::Assimp {
                 result.diagnostics.warnings.push_back("One or more FBX animation channels target nodes that Assimp did not expose in the scene graph.");
             }
         }
-        if (!result.skins.empty() || !result.animations.empty()) {
+        if (containsSkeletalOrAnimationData(result)) {
             result.diagnostics.warnings.push_back(
-                "Imported skeletal or animation data is CPU-only in this phase and requires the future animated model runtime.");
+                "Imported skeletal or animation data is CPU-only for the static authored scene path; use the animated model runtime to load it.");
         }
 
         result.lights.reserve(scene->mNumLights);
@@ -1243,5 +1237,10 @@ namespace Assets::Assimp {
         }
 
         return result;
+    }
+
+    bool containsSkeletalOrAnimationData(const ImportedScene& scene)
+    {
+        return !scene.skins.empty() || !scene.joints.empty() || !scene.animations.empty();
     }
 }

@@ -16,10 +16,6 @@ namespace {
         return std::chrono::duration<float, std::milli>(end - start).count();
     }
 
-    bool requiresAnimatedRuntime(const Assets::Assimp::ImportedScene& imported)
-    {
-        return !imported.skins.empty() || !imported.joints.empty() || !imported.animations.empty();
-    }
 }
 
 namespace Engine {
@@ -102,7 +98,7 @@ namespace Engine {
                     result.message = result.payload.scene.error;
                     return result;
                 }
-                if (!requiresAnimatedRuntime(result.payload.scene)) {
+                if (!Assets::Assimp::containsSkeletalOrAnimationData(result.payload.scene)) {
                     result.message = "Imported asset is not an animated model.";
                     return result;
                 }

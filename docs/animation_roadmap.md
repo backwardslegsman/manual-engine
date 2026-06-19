@@ -26,19 +26,24 @@ The first target should be glTF/GLB skeletal animation because its skinning and 
 - Do not require large licensed assets in the repository. Optional validation assets should remain ignored/local.
 - Do not run heavy optional asset tests by default. Use `MANUAL_ENGINE_RUN_HEAVY_ASSET_TESTS=1` only for changes where Sponza/KayKit-scale validation meaningfully exercises the code under review.
 
-## Current Gap Snapshot
+## Current State Snapshot
 
-The authored scene importer currently recognizes skinned or animated content as unsupported static-scene data. It can diagnose bones and animations, but it does not preserve a full skeleton, skin binding, vertex joint weights, or animation clips for runtime playback.
+The Assimp authored importer now preserves static, skeletal, skin, vertex influence, and animation clip data in CPU-side records. Static authored scene loaders deliberately reject skeletal or animated payloads at the runtime boundary, while `Engine::AnimatedModel` owns the animated path.
 
-Current gaps:
+Implemented baseline:
 
-- No CPU skeleton or skin contract.
-- No imported animation clip/channel representation.
-- Renderer mesh vertices do not include joint indices or weights.
-- Renderer has no skinned mesh shader path or joint palette upload.
-- Runtime has no animated model owner, pose state, clip sampler, or animation update loop.
-- Cache identity and payloads do not yet include skeletal/animation pipeline versions.
-- FBX animation behavior is not normalized against engine semantics.
+- CPU skeleton, skin, joint, influence, clip, channel, and keyframe import records.
+- Animated model runtime ownership for materials, textures, bind-pose preview meshes, skinned meshes, and skinned instances.
+- CPU bind-pose and clip sampling, deterministic playback advancement, and pairwise crossfade blending.
+- Renderer skinned mesh resources, skinned instances, joint palette upload, and skinned shader submission.
+- Animated model cache, async import/cache jobs, diagnostics summaries, and profile reports.
+- Optional FBX/KayKit validation paths that remain disabled for normal tests unless explicitly requested.
+
+Remaining broad gaps:
+
+- No general scene/component integration for animated assets yet.
+- No animation graph, state machine, additive animation, retargeting, IK, or editor-facing controller.
+- FBX animation behavior is best-effort through Assimp and not normalized beyond the shared internal contracts.
 
 ## Phase B1 - CPU Skeleton And Clip Import Boundary
 

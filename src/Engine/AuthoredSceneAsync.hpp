@@ -7,6 +7,8 @@
 #include "Engine/AuthoredScene.hpp"
 
 namespace Engine {
+    // Worker-job results are plain data only. They must be consumed on the main
+    // thread before touching AssetCache, Renderer handles, or live scene state.
     struct AuthoredSceneCacheReadJobResult {
         AuthoredSceneCacheReadResult result;
         float readMs = 0.0f;
@@ -26,6 +28,8 @@ namespace Engine {
         float importMs = 0.0f;
     };
 
+    // Enqueues derived-cache I/O and source import/partition work. These jobs
+    // are worker-safe and do not create renderer resources.
     AsyncJobHandle enqueueAuthoredSceneCacheRead(
         AsyncWorkQueue& queue,
         AuthoredSceneCacheManifest manifest);

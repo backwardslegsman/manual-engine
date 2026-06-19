@@ -240,14 +240,9 @@ namespace {
         appendDeferredDiagnostics(imported, diagnostics);
     }
 
-    bool requiresAnimatedModelRuntime(const Assets::Assimp::ImportedScene& imported)
-    {
-        return !imported.skins.empty() || !imported.joints.empty() || !imported.animations.empty();
-    }
-
     std::string animatedModelRuntimeRequiredMessage()
     {
-        return "Authored scene imported successfully but contains skeletal or animation data and requires the future animated model runtime.";
+        return "Authored scene imported successfully but contains skeletal or animation data. Load it through the animated model runtime instead of the static authored scene path.";
     }
 
     void expandBounds(Assets::Assimp::ImportedSceneBounds& bounds, const glm::vec3& point)
@@ -1067,8 +1062,6 @@ namespace {
         node["missing_normal_primitive_count"] = diagnostics.missingNormalPrimitiveCount;
         node["missing_tangent_primitive_count"] = diagnostics.missingTangentPrimitiveCount;
         node["missing_texcoord0_primitive_count"] = diagnostics.missingTexcoord0PrimitiveCount;
-        node["unsupported_animation_count"] = diagnostics.unsupportedAnimationCount;
-        node["unsupported_skinned_mesh_count"] = diagnostics.unsupportedSkinnedMeshCount;
         node["skin_count"] = diagnostics.skinCount;
         node["joint_count"] = diagnostics.jointCount;
         node["skinned_mesh_count"] = diagnostics.skinnedMeshCount;
@@ -1132,8 +1125,6 @@ namespace {
         diagnostics.missingNormalPrimitiveCount = node["missing_normal_primitive_count"].as<uint32_t>(0);
         diagnostics.missingTangentPrimitiveCount = node["missing_tangent_primitive_count"].as<uint32_t>(0);
         diagnostics.missingTexcoord0PrimitiveCount = node["missing_texcoord0_primitive_count"].as<uint32_t>(0);
-        diagnostics.unsupportedAnimationCount = node["unsupported_animation_count"].as<uint32_t>(0);
-        diagnostics.unsupportedSkinnedMeshCount = node["unsupported_skinned_mesh_count"].as<uint32_t>(0);
         diagnostics.skinCount = node["skin_count"].as<uint32_t>(0);
         diagnostics.jointCount = node["joint_count"].as<uint32_t>(0);
         diagnostics.skinnedMeshCount = node["skinned_mesh_count"].as<uint32_t>(0);
@@ -1605,7 +1596,7 @@ namespace Engine {
         const std::filesystem::path rootPath = cacheRoot(manifest);
         result.path = rootPath / "manifest.yaml";
 
-        if (requiresAnimatedModelRuntime(payload.scene)) {
+        if (Assets::Assimp::containsSkeletalOrAnimationData(payload.scene)) {
             result.status = AuthoredSceneCacheStatus::WriteFailed;
             result.message = animatedModelRuntimeRequiredMessage();
             return result;
@@ -2391,7 +2382,7 @@ namespace Engine {
 
         result.scene.bounds_ = convertBounds(imported.bounds);
 
-        if (requiresAnimatedModelRuntime(imported)) {
+        if (Assets::Assimp::containsSkeletalOrAnimationData(imported)) {
             result.message = animatedModelRuntimeRequiredMessage();
             diagnostics.warnings.push_back(result.message);
             return result;
@@ -2636,7 +2627,7 @@ namespace Engine {
             partition.warnings.push_back(imported.error);
             return partition;
         }
-        if (requiresAnimatedModelRuntime(imported)) {
+        if (Assets::Assimp::containsSkeletalOrAnimationData(imported)) {
             AuthoredScenePartition partition;
             partition.usedFallbackRootSector = true;
             partition.warnings.push_back(animatedModelRuntimeRequiredMessage());
@@ -2655,7 +2646,7 @@ namespace Engine {
             partition.warnings.push_back(imported.error);
             return partition;
         }
-        if (requiresAnimatedModelRuntime(imported)) {
+        if (Assets::Assimp::containsSkeletalOrAnimationData(imported)) {
             AuthoredScenePartition partition;
             partition.usedFallbackRootSector = true;
             partition.warnings.push_back(animatedModelRuntimeRequiredMessage());
@@ -2688,7 +2679,7 @@ namespace Engine {
         const Assets::Assimp::ImportedScene& imported = result.scene.imported_->scene;
         appendImportDiagnostics(imported, result.scene.diagnostics_);
         result.scene.bounds_ = convertBounds(imported.bounds);
-        if (requiresAnimatedModelRuntime(imported)) {
+        if (Assets::Assimp::containsSkeletalOrAnimationData(imported)) {
             result.message = animatedModelRuntimeRequiredMessage();
             result.scene.diagnostics_.warnings.push_back(result.message);
             result.scene.imported_.reset();
@@ -2790,7 +2781,7 @@ namespace Engine {
                 failed.message = payload.scene.error;
                 return failed;
             }
-            if (requiresAnimatedModelRuntime(payload.scene)) {
+            if (Assets::Assimp::containsSkeletalOrAnimationData(payload.scene)) {
                 PartitionedAuthoredSceneLoadResult failed;
                 failed.message = animatedModelRuntimeRequiredMessage();
                 appendImportDiagnostics(payload.scene, failed.scene.diagnostics_);

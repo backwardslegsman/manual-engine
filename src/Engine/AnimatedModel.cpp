@@ -274,11 +274,6 @@ namespace {
         return descriptor;
     }
 
-    bool requiresAnimatedRuntime(const Assets::Assimp::ImportedScene& imported)
-    {
-        return !imported.skins.empty() || !imported.joints.empty() || !imported.animations.empty();
-    }
-
     void appendImportDiagnostics(
         const Assets::Assimp::ImportedScene& imported,
         Engine::AnimatedModelDiagnostics& diagnostics)
@@ -1083,7 +1078,7 @@ namespace Engine {
 
         appendImportDiagnostics(imported, result.model.diagnostics_);
         result.model.bounds_ = convertBounds(imported.bounds);
-        if (!requiresAnimatedRuntime(imported)) {
+        if (!Assets::Assimp::containsSkeletalOrAnimationData(imported)) {
             result.message = "Imported asset is not an animated model.";
             result.model.diagnostics_.warnings.push_back(result.message);
             return result;

@@ -276,8 +276,6 @@ namespace Assets::Assimp {
         uint32_t missingNormalPrimitiveCount = 0;
         uint32_t missingTangentPrimitiveCount = 0;
         uint32_t missingTexcoord0PrimitiveCount = 0;
-        uint32_t unsupportedAnimationCount = 0;
-        uint32_t unsupportedSkinnedMeshCount = 0;
         uint32_t skinCount = 0;
         uint32_t jointCount = 0;
         uint32_t skinnedMeshCount = 0;
@@ -322,6 +320,16 @@ namespace Assets::Assimp {
 
     ImportedSceneSourceFormat detectSceneSourceFormat(const std::filesystem::path& path);
     const char* sourceFormatName(ImportedSceneSourceFormat format);
+
+    // True when imported CPU data requires the animated model runtime instead of
+    // the static authored scene path.
+    bool containsSkeletalOrAnimationData(const ImportedScene& scene);
+
+    // Legacy simple-mesh import for static renderer assets. This path remains
+    // intentionally narrower than importScene and rejects animated/skinned data.
     ImportResult importStaticMesh(const std::filesystem::path& path);
+
+    // Full CPU authored-scene import. This creates no renderer/bgfx resources
+    // and preserves static, skeletal, material, texture, light, and animation records.
     ImportedScene importScene(const std::filesystem::path& path);
 }

@@ -22,7 +22,7 @@ This roadmap prepares ManualEngine to load, render, and eventually stream comple
 - Keep Sponza-specific compatibility useful as validation, but avoid hardcoding Sponza paths or material names into renderer systems.
 - Do not run heavy optional asset tests by default. Use `MANUAL_ENGINE_RUN_HEAVY_ASSET_TESTS=1` only for changes where Sponza-scale validation meaningfully exercises the code under review.
 
-## Current Gap Snapshot
+## Current State Snapshot
 
 The Sponza glTF currently exposes:
 
@@ -33,16 +33,20 @@ The Sponza glTF currently exposes:
 - `KHR_lights_punctual` metadata and an HDR environment texture.
 - Alpha and double-sided material cases.
 
-Current engine gaps:
+Implemented baseline:
 
-- No authored scene asset/runtime ownership model.
-- The Assimp importer reads raw static meshes but does not preserve a scene graph or node transforms.
-- Renderer material state lacks alpha mode, culling mode, channel-selectable metallic/roughness maps, occlusion, emissive, and texture color-space metadata.
-- Texture loading is synchronous PNG-to-RGBA8 with no mipmaps, compression, streaming, or sRGB/linear distinction.
-- The mesh vertex layout lacks tangent handedness, second UVs, and vertex color.
-- The mesh shader is a simple directional-light approximation, not a glTF-compatible PBR shader.
-- Renderer submission has one opaque mesh path and no transparent sorting.
-- App has no Release-authored-scene path separate from the procedural sample world.
+- CPU authored scene import preserves scene graph structure, transforms, meshes, materials, textures, lights, skeletal/animation records, bounds, and diagnostics.
+- Static authored runtime ownership creates renderer resources through eager and partitioned loaders.
+- Partitioned authored scenes support sector manifests, budgeted main-thread sector commits, cache reads/writes, async source import/cache work, and diagnostics summaries.
+- Renderer material, texture, vertex, lighting, alpha, PBR, static mesh, skinned mesh, and debug stats paths have been expanded to support authored assets.
+- Release authored mode can load a meaningful authored scene or fall back to committed lightweight assets when optional Sponza assets are absent.
+
+Remaining broad gaps:
+
+- No scene/component integration yet; authored scenes still live behind authored scene owners rather than general actors/components.
+- No persistent prebuilt compressed texture pipeline or GPU-ready scene package.
+- No occlusion culling, hierarchical LOD, or advanced visibility system for large authored environments.
+- Full HDR IBL, skybox/environment capture, shadows, and high-end material fidelity remain future renderer work.
 
 ## Phase A1 - Authored Scene CPU Import Boundary
 

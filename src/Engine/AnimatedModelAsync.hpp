@@ -7,6 +7,8 @@
 #include "Engine/AsyncWorkQueue.hpp"
 
 namespace Engine {
+    // Worker-job results are plain data only. Commit returned payloads on the
+    // main thread before touching AssetCache, Renderer handles, or live model state.
     struct AnimatedModelCacheReadJobResult {
         AnimatedModelCacheReadResult result;
         float readMs = 0.0f;
@@ -26,6 +28,8 @@ namespace Engine {
         float importMs = 0.0f;
     };
 
+    // Enqueues derived-cache I/O and source import work. These jobs are
+    // worker-safe and do not create renderer resources or mutate AnimatedModel.
     AsyncJobHandle enqueueAnimatedModelCacheRead(
         AsyncWorkQueue& queue,
         AnimatedModelCacheManifest manifest);

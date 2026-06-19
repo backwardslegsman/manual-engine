@@ -748,3 +748,15 @@ Changed:
 Rationale:
 - The next architecture pass should consolidate existing procedural, authored scene, animated model, renderer, navigation, cache, and async systems instead of rebuilding them independently.
 - Adding guidance files now makes future implementation work easier to scope without introducing build-affecting code.
+## 2026-06-18 - Authored And Animation Interface Cleanup
+
+Changed:
+- Removed obsolete imported-scene diagnostics that labeled animation and skinned mesh data as unsupported even though the CPU importer now preserves those records.
+- Added a shared `Assets::Assimp::containsSkeletalOrAnimationData()` predicate and routed static authored scene, animated model, and async loading checks through it.
+- Updated static authored scene rejection text to point users at the existing animated model runtime.
+- Bumped the authored scene cache format version after the diagnostics schema cleanup.
+- Refreshed authored scene and animation roadmap current-state snapshots so they describe the implemented pipeline rather than old gap analysis.
+
+Rationale:
+- The static authored scene and animated model paths should share the same import-boundary rule instead of duplicating skeletal/animation checks in multiple runtime owners.
+- Diagnostics should describe preserved imported data accurately and reserve “unsupported” wording for actual unsupported behavior.

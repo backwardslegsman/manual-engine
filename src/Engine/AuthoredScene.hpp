@@ -74,7 +74,7 @@ namespace Engine {
 
     struct AuthoredSceneCacheSettings {
         std::filesystem::path rootPath = "generated/authored_scene_cache";
-        uint32_t formatVersion = 1;
+        uint32_t formatVersion = 2;
         std::string importerVersion = "assimp_authored_scene_format_aware_a13";
         std::string materialPipelineVersion = "gltf_materials_a7";
         std::string texturePolicyVersion = "texture_descriptors_a5";
