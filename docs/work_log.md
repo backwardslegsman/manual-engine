@@ -1283,3 +1283,15 @@ Changed:
 Rationale:
 - Navigation needs a terrain-source-aware adapter before heightmap chunks can feed navmesh generation without coupling Recast builds to renderer terrain storage.
 - Including terrain identity in cache manifests prevents heightmap or terrain import changes from reusing stale procedural nav tile bytes.
+
+## 2026-06-19 - T6 Terrain Physics Collider Adapter
+
+Changed:
+- Added `Engine::TerrainPhysicsColliderAdapter` for deterministic static triangle mesh collider payload generation from `TerrainDataset` chunks, generated terrain tiles, and legacy `TerrainSystem` tiles.
+- Added explicit adapter-owned terrain collider bindings that create and release one static `ScenePhysicsWorld` body/collider per terrain chunk through caller-owned calls.
+- Added separate dirty collider chunk tracking for geometry, settings, enable-state, and removal reasons.
+- Added focused terrain physics collider adapter tests for dataset/procedural/legacy paths, invalid inputs, scene physics query hits, idempotent cleanup, and chunk-scoped dirty tracking.
+
+Rationale:
+- Terrain physics needs an explicit CPU bridge from authoritative height chunks to scene physics without deriving gameplay collision from renderer LOD meshes.
+- Keeping App gameplay and `BlockingCollisionSystem` unchanged lets terrain collider work proceed without migrating the procedural world loop.

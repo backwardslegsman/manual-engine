@@ -72,6 +72,7 @@ add_executable(manual_engine
     src/Engine/TerrainDerivedCacheAsync.cpp
     src/Engine/TerrainImport.cpp
     src/Engine/TerrainNavigationAdapter.cpp
+    src/Engine/TerrainPhysicsColliderAdapter.cpp
     src/Engine/TerrainRenderLodAdapter.cpp
     src/Engine/World.cpp
     src/Engine/WorldNavigationGraph.cpp
@@ -338,6 +339,31 @@ target_link_libraries(manual_engine_terrain_navigation_adapter_tests
 )
 
 add_test(NAME manual_engine_terrain_navigation_adapter_tests COMMAND manual_engine_terrain_navigation_adapter_tests)
+
+add_executable(manual_engine_terrain_physics_collider_adapter_tests
+    tests/terrain/TerrainPhysicsColliderAdapterTestRunner.cpp
+    tests/navigation/RendererStubs.cpp
+    src/Engine/Biome.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/Terrain.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainPhysicsColliderAdapter.cpp
+)
+
+target_include_directories(manual_engine_terrain_physics_collider_adapter_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_terrain_physics_collider_adapter_tests
+    PRIVATE
+        glm::glm
+        Jolt::Jolt
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_terrain_physics_collider_adapter_tests COMMAND manual_engine_terrain_physics_collider_adapter_tests)
 
 add_executable(manual_engine_asset_registry_tests
     tests/assets/AssetRegistryTestRunner.cpp

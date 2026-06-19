@@ -404,6 +404,8 @@ Exit criteria:
 
 ### Phase T6: Physics Collider Adapter
 
+Status: initial implementation added. `Engine::TerrainPhysicsColliderAdapter` now builds static triangle mesh collider payloads from immutable terrain chunk snapshots, supports `TerrainDataset` chunks, generated tile data, and legacy `TerrainSystem` tiles, and can explicitly create/release one static `ScenePhysicsWorld` body/collider per terrain chunk. Dirty collider chunks are tracked separately from render and navigation outputs. App gameplay, `BlockingCollisionSystem`, terrain ownership, navigation, renderer LOD, cache writes, and serialization remain unchanged.
+
 Deliverables:
 
 - Generate static triangle mesh collider data from terrain chunks at physics resolution.
