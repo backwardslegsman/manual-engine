@@ -90,6 +90,7 @@ namespace Engine {
         bool playOnStart = true;
         bool loop = true;
         float playbackSpeed = 1.0f;
+        bool allowRootFallbackSkinnedBindings = false;
         std::string materialNamePrefix = "SceneAnimated";
         std::string textureDebugNamePrefix = "SceneAnimated";
     };
@@ -207,6 +208,7 @@ namespace Engine {
         [[nodiscard]] const AnimatorRecord* record(SceneAnimatorHandle handle) const;
         [[nodiscard]] SceneSkeletonHandle allocateSkeleton();
         [[nodiscard]] SceneAnimatorHandle allocateAnimator();
+        void freeAnimator(SceneAnimatorHandle handle);
 
         [[nodiscard]] AnimatedSkeletonPose sampleAnimatorPose(AnimatorRecord& record, float deltaSeconds);
         void applyPoseToSkinnedRecords(AnimatorRecord& record, const AnimatedSkeletonPose& pose);

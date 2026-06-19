@@ -633,6 +633,7 @@ namespace {
             animatedRuntime = startAnimatedSampleRuntime(sceneSelection.animatedModelPath, authoredAsyncWork);
         } else {
             startReleaseSceneAnimatedSampleRuntime(runtime, assetCache, sceneSelection.animatedModelPath);
+            runtime.startSceneScheduler();
         }
 
         Engine::CameraSettings cameraSettings;
@@ -765,12 +766,9 @@ namespace {
                 }
                 applyAnimatedDebugSettings(animatedRuntime, debugSettings);
                 updateAnimatedSampleRuntime(animatedRuntime, dt);
-            } else {
-                updateReleaseSceneAnimatedSampleRuntime(runtime, dt);
             }
             if ((runtime.usingSceneAdapter || runtime.usingSceneAnimatedAdapter) && runtime.sceneRenderBridge) {
-                runtime.sceneRuntime.updateWorldTransforms();
-                runtime.sceneRenderBridge->sync(runtime.sceneRenderBackend);
+                runtime.tickSceneScheduler(dt);
                 const Engine::SceneRenderBridgeDiagnostics bridgeDiagnostics = runtime.sceneRenderBridge->diagnostics();
                 debugSettings.sceneStatus = runtime.status +
                     " | scene actors " + std::to_string(runtime.sceneAdapter.diagnostics.createdActorCount) +

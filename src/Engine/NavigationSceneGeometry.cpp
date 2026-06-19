@@ -157,6 +157,38 @@ namespace Engine {
         return true;
     }
 
+    bool SceneNavigationGeometryRegistry::unregisterSource(
+        Scene& scene,
+        SceneNavigationSourceHandle source,
+        float chunkSize)
+    {
+        if (!std::isfinite(chunkSize) || chunkSize <= 0.0f) {
+            diagnostics_.warnings.push_back("Invalid navigation dirty chunk size");
+            return false;
+        }
+
+        SourceRecord* sourceRecord = record(source);
+        if (!sourceRecord) {
+            return false;
+        }
+
+        if (sourceRecord->lastWorldBounds.has_value()) {
+            markChunksForBounds(*sourceRecord->lastWorldBounds, chunkSize);
+        }
+        if (std::optional<Renderer::Aabb> currentBounds = worldBounds(scene, *sourceRecord)) {
+            markChunksForBounds(*currentBounds, chunkSize);
+        }
+
+        sourceRecord->generation = nextGeneration(sourceRecord->generation);
+        sourceRecord->occupied = false;
+        sourceRecord->descriptor = {};
+        sourceRecord->lastWorldBounds.reset();
+        sourceRecord->dirtyReason = SceneNavigationDirtyReason::None;
+        freeSources_.push_back(source.index);
+        refreshDiagnostics();
+        return true;
+    }
+
     bool SceneNavigationGeometryRegistry::contains(SceneNavigationSourceHandle source) const
     {
         return record(source) != nullptr;

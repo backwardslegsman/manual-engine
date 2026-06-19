@@ -128,6 +128,7 @@ namespace Engine {
     public:
         [[nodiscard]] SceneNavigationSourceHandle registerSource(SceneNavigationSourceDescriptor descriptor);
         bool unregisterSource(SceneNavigationSourceHandle source);
+        bool unregisterSource(Scene& scene, SceneNavigationSourceHandle source, float chunkSize);
         [[nodiscard]] bool contains(SceneNavigationSourceHandle source) const;
         [[nodiscard]] std::optional<SceneNavigationSourceDescriptor> descriptor(SceneNavigationSourceHandle source) const;
         bool setSourceEnabled(SceneNavigationSourceHandle source, bool enabled);

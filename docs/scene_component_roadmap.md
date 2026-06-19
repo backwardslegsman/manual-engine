@@ -369,18 +369,135 @@ Exit criteria:
 
 Goal: Add Jolt physics behind engine-owned handles and scene components.
 
-- Add physics world ownership per scene.
-- Add `StaticColliderComponent`, `CapsuleColliderComponent`, and optional `RigidBodyComponent`.
-- Add engine-facing physics handles separate from actor/component handles.
-- Add queries: raycast, sweep, overlap, closest point.
-- Add transform sync rules for static, kinematic, and dynamic objects.
-- Add collision filters, layers, and simple material/friction settings.
-- Add debug draw for shapes, contacts, sweeps, and broadphase stats.
-- Add tests for body creation/destruction, transform sync, queries, and no-leak shutdown.
+Status: core scene physics facade implemented. `Engine::ScenePhysicsWorld` provides Jolt-backed static, kinematic, and dynamic scene bodies, generation-counted body/collider handles, fixed scheduler sync, direct shape descriptors, raycast/capsule sweep/overlap/closest-point queries, diagnostics, and headless tests. Procedural `World`, `ActorController`, `BlockingCollisionSystem`, authored collider generation, terrain colliders, navigation obstacle integration, App gameplay migration, scripting, serialization, and debug UI remain deferred.
+
+Detailed implementation plan and contract: `docs/scene_runtime/phase_10_physics_integration.md`.
+
+### Scope And Boundaries
+
+- Implement scene-owned physics first. `Engine::Scene` actors are the authoritative owners for physics components, transform sync, and future character movement.
+- Keep procedural `World`, `ActorController`, and `BlockingCollisionSystem` unchanged. `BlockingCollisionSystem` remains a legacy kinematic helper and must not become the foundation for scene physics.
+- Add Jolt behind a narrow Engine facade. Public Engine headers should expose Engine handles, descriptors, filters, diagnostics, and query results; they should not expose Jolt headers or Jolt object pointers.
+- Keep the first implementation CPU/simulation-facing. Renderer integration is limited to debug request data; do not add renderer draw calls, ImGui UI, App migration, serialization, scripting, navigation coupling, or authored-scene automatic collider generation in this phase.
+- Use the existing scene scheduler. Physics stepping belongs in fixed phases, with transform writeback before scene render bridge `PreRender`.
+
+### Public API Shape
+
+- Add `Engine::ScenePhysicsWorld` under `src/Engine/Physics`, composed with a `Scene&` rather than embedded directly into `Scene` storage.
+- Add generation-counted handles:
+  - `ScenePhysicsBodyHandle`
+  - `SceneColliderHandle`
+  - Optional `ScenePhysicsMaterialHandle` only if material ownership is more than descriptor metadata.
+- Add stable plain data types:
+  - `ScenePhysicsLayer`, `ScenePhysicsObjectType`, `ScenePhysicsMotionType::{Static, Kinematic, Dynamic}`
+  - `ScenePhysicsFilter` with include/exclude layer masks and sensor/query flags.
+  - `ScenePhysicsMaterial` with friction, restitution, density, and combine policy defaults.
+  - Shape descriptors for box, sphere, capsule, cylinder if Jolt support is clean, convex hull if cheap, and triangle mesh for static scene geometry.
+  - Body descriptors with owner `SceneActorHandle`, motion type, enabled/sensor flags, mass settings, damping, gravity factor, initial velocities, and material/filter data.
+  - Query result records for raycast, shape cast/sweep, overlap, closest point, and body lookup by owner actor.
+  - Diagnostics for body/collider counts, active/dormant counts, invalid owner cleanup, step timing, query counts/statuses, and warnings.
+- Add APIs:
+  - `createBody`, `destroyBody`, `contains`, `body`, `setBodyEnabled`, `setMotionType`.
+  - `attachCollider`, `detachCollider`, `colliders(body)`, `bodyForActor`.
+  - `setKinematicTarget`, `setLinearVelocity`, `setAngularVelocity`, `applyImpulse`, `applyForce` if dynamic bodies are included in Phase 10.
+  - `syncFromScene`, `stepFixed`, `syncToScene`, and `registerPhysicsSystems`.
+  - `raycast`, `sweep`, `overlap`, `closestPoint`.
+  - `debugRequests`, `clearDebugRequests`, `diagnostics`.
+
+### Scheduler And Transform Sync
+
+- Register one scene system, or a small ordered set of systems, while the scene is `Unloaded` or `Loaded`.
+- Recommended fixed-phase ordering:
+  - `FixedPrePhysics`: read dirty scene transforms into static and kinematic physics bodies.
+  - `FixedPhysics`: step the physics world using the fixed delta supplied by App/`FixedStepLoop`.
+  - `FixedPostPhysics`: write dynamic body transforms back to owning scene actors and mark descendants dirty.
+- `Scene::updateWorldTransforms()` already runs before `PreRender`; physics writeback must happen before that refresh.
+- Static bodies read scene transforms when created, enabled, reparented, or explicitly marked dirty. Avoid hidden expensive rebuilds in arbitrary setters.
+- Kinematic bodies are moved through explicit targets or scene transform sync policy; define one rule and test it.
+- Dynamic bodies write world transforms back to scene actors. For parented dynamic actors, either reject dynamic bodies or define local transform reconstruction against the parent with preserve-world behavior.
+- Pending-destroy or flushed scene actors invalidate physics owners. Cleanup should be deterministic by physics slot order and must release Jolt bodies/colliders without touching renderer or navigation.
+
+### Collision Data Sources
+
+- Direct descriptors are the primary Phase 10 path. Callers can create box/capsule/sphere/mesh colliders explicitly.
+- Static triangle mesh colliders may consume CPU vertices/indices from scene navigation geometry sources or authored adapter CPU data only through explicit helper functions. Do not infer colliders from renderer mesh handles.
+- Terrain collider support should be an explicit adapter from existing CPU terrain height/build data if included; otherwise defer it and keep tests on simple static mesh/box fixtures.
+- Do not generate colliders automatically during authored scene adaptation in the first implementation unless settings opt in and tests cover the ownership.
+
+### Queries And Filters
+
+- Raycast should return hit position, normal, distance/fraction, body handle, collider handle, owner actor, and material/layer data when available.
+- Sweep/shape cast should support at least capsule or sphere if character movement is the next milestone; otherwise document unsupported shapes clearly.
+- Overlap should return deterministic hits in a stable order, preferably sorted by body slot or hit distance depending on query type.
+- Invalid handles, stale owners, NaN inputs, negative sizes, empty mesh data, and invalid filters must fail cleanly with diagnostics and no mutation.
+- Query APIs must not step the simulation, build collision geometry, allocate renderer resources, or mutate scene transforms.
+
+### Debug And Diagnostics
+
+- Add renderer-independent debug request records for body bounds, collider shapes, contacts, raycasts, sweeps, overlaps, sleeping bodies, and broadphase stats.
+- Keep debug draw requests as plain Engine data. App/Renderer debug UI may consume them later.
+- Diagnostics should expose enough information to see whether physics is idle, stepping, skipping invalid owners, or leaking resources.
+- Long-frame profiling should be possible from step elapsed microseconds without coupling to the App long-frame recorder.
+
+### Build And Dependency Integration
+
+- Add Jolt through vcpkg.
+- Keep Jolt includes private to `ScenePhysics.cpp` or a private implementation header.
+- Add `ScenePhysics.cpp/.hpp` to `manual_engine`.
+- Add `manual_engine_scene_physics_tests`.
+- Keep the physics test target independent from Renderer, Assets, App, Navigation, scripting, bgfx, and ImGui. Link only Jolt, GLM, and scene runtime sources required for transform/scheduler tests.
+
+### Test Plan
+
+- Body and collider lifecycle:
+  - create/destroy static, kinematic, and dynamic bodies;
+  - stale handle invalidation on destroy/reuse;
+  - owner actor destroy/flush releases bodies and colliders deterministically;
+  - shutdown is idempotent and releases all Jolt resources.
+- Transform sync:
+  - static body reads initial scene transform;
+  - kinematic target updates physics transform on fixed step;
+  - dynamic body writes back to scene transform after step;
+  - hierarchy parent transforms compose correctly for static/kinematic bodies;
+  - pending-destroy actors are excluded from sync and queries.
+- Simulation:
+  - dynamic body falls under gravity onto a static floor;
+  - disabled bodies do not collide or move;
+  - sensor colliders report overlap without physical response if sensors are included.
+- Queries:
+  - raycast hits and misses deterministically;
+  - overlap returns expected colliders;
+  - capsule/sphere sweep detects a wall or floor;
+  - closest-point reports point/normal/distance where supported.
+- Filters/materials:
+  - layer masks include/exclude expected bodies;
+  - material settings are stored and surfaced in hits;
+  - invalid filter data fails cleanly.
+- Scheduler:
+  - registered physics systems run in fixed phase order;
+  - dynamic writeback is visible to `PreRender` bridge sync in the same frame when App calls fixed ticks before `tickFrame`;
+  - paused scene behavior is explicit, tested, and compatible with Phase 3 pause semantics.
+- Diagnostics/debug:
+  - step/query counters, timing, invalid owner cleanup, body counts, and debug requests update deterministically.
+
+### Deferred Work
+
+- Procedural `World` migration, `ActorController` replacement, and `BlockingCollisionSystem` removal.
+- Full App physics gameplay integration.
+- Character movement controller, floor snapping, stairs/steps, and path following; those belong to Milestone 11.
+- Physics-driven navigation blockers, dynamic obstacle carving, and automatic nav rebuild scheduling.
+- Serialization of bodies/colliders/materials.
+- Scripting/reflection access.
+- Editor/ImGui physics panels and renderer debug draw submission.
+- Constraints, ragdolls, vehicles, compound authoring tools, trigger events/inboxes, and continuous collision tuning beyond what Jolt provides by default.
 
 Exit criteria:
 
-- Scene actors can own colliders and answer collision queries through a stable physics API.
+- Scene actors can own static, kinematic, and dynamic physics bodies through transient Engine handles.
+- Scene transforms and physics body transforms sync through explicit scheduler phases.
+- Raycast, sweep or shape-cast, overlap, and closest-point queries work through stable Engine APIs without exposing Jolt.
+- Physics tests run headlessly without Renderer, App, Navigation, scripting, bgfx, or ImGui.
+- Existing procedural world movement, blocking collision, authored scene sample, render bridge, navigation runtime, and full CTest behavior remain unchanged.
 
 ## 11. Character Movement Roadmap
 

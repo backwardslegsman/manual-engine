@@ -187,6 +187,7 @@
         bool usingStreaming = false;
         bool usingSceneAdapter = false;
         bool usingSceneAnimatedAdapter = false;
+        bool sceneSchedulerStarted = false;
         bool sceneAnimatedPlaced = false;
         glm::vec3 sceneAnimatedFocus{0.0f};
         float sceneAnimatedCameraDistance = 20.0f;
@@ -215,19 +216,74 @@
         std::string status;
         Renderer::Aabb bounds{{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}};
 
+        bool startSceneScheduler()
+        {
+            if (!sceneRenderBridge) {
+                return false;
+            }
+            if (sceneRuntime.lifecycleState() == Engine::SceneLifecycleState::Started) {
+                sceneSchedulerStarted = true;
+                return true;
+            }
+
+            if (!Engine::isValid(sceneRenderBridge->registerPreRenderSystem(sceneRenderBackend))) {
+                status = "Failed to register scene render bridge scheduler system.";
+                SDL_Log("%s", status.c_str());
+                return false;
+            }
+            if (sceneAnimatedAdapter &&
+                !Engine::isValid(sceneAnimatedAdapter->registerVariableAnimationSystem())) {
+                status = "Failed to register scene animated adapter scheduler system.";
+                SDL_Log("%s", status.c_str());
+                return false;
+            }
+            if (sceneRuntime.lifecycleState() == Engine::SceneLifecycleState::Unloaded && !sceneRuntime.load()) {
+                status = "Failed to load scene runtime scheduler.";
+                SDL_Log("%s", status.c_str());
+                return false;
+            }
+            if (sceneRuntime.lifecycleState() == Engine::SceneLifecycleState::Loaded && !sceneRuntime.start()) {
+                status = "Failed to start scene runtime scheduler.";
+                SDL_Log("%s", status.c_str());
+                return false;
+            }
+
+            sceneSchedulerStarted = sceneRuntime.lifecycleState() == Engine::SceneLifecycleState::Started;
+            return sceneSchedulerStarted;
+        }
+
+        void tickSceneScheduler(float dt)
+        {
+            if (sceneSchedulerStarted &&
+                sceneRuntime.lifecycleState() == Engine::SceneLifecycleState::Started) {
+                sceneRuntime.tickFrame(dt);
+            }
+        }
+
         void shutdown(Engine::AssetCache& assetCache)
         {
+            if (sceneRuntime.lifecycleState() == Engine::SceneLifecycleState::Started) {
+                sceneRuntime.stop();
+            }
             if (sceneRenderBridge) {
                 sceneRenderBridge->releaseRendererResources(sceneRenderBackend);
             }
             Engine::releaseSceneAuthoredAdapterResources(sceneAdapter.resources, assetCache);
             if (sceneAnimatedAdapter) {
                 sceneAnimatedAdapter->releaseResources(sceneAnimatedResult.resources, assetCache);
+                sceneAnimatedAdapter->unregisterVariableAnimationSystem();
                 sceneAnimatedAdapter.reset();
             }
+            if (sceneRenderBridge) {
+                sceneRenderBridge->unregisterPreRenderSystem();
+            }
             sceneRenderBridge.reset();
+            if (sceneRuntime.lifecycleState() == Engine::SceneLifecycleState::Loaded) {
+                sceneRuntime.unload();
+            }
             usingSceneAdapter = false;
             usingSceneAnimatedAdapter = false;
+            sceneSchedulerStarted = false;
             streamingScene.shutdown();
             scene.shutdown();
             fallback.shutdown();
@@ -444,6 +500,7 @@
         settings.playOnStart = true;
         settings.loop = true;
         settings.playbackSpeed = 1.0f;
+        settings.allowRootFallbackSkinnedBindings = true;
         settings.materialNamePrefix = "ReleaseKayKitAnimatedMaterial";
         settings.textureDebugNamePrefix = "ReleaseKayKitAnimated";
         runtime.sceneAnimatedResult = runtime.sceneAnimatedAdapter->adaptImportedScene(
@@ -462,9 +519,6 @@
         runtime.usingSceneAnimatedAdapter = true;
         applyReleaseSceneAnimatedKayKitTextureMaterial(runtime, assetCache);
         placeSceneAnimatedSampleNearBounds(runtime);
-        runtime.sceneRuntime.updateWorldTransforms();
-        runtime.sceneAnimatedAdapter->updateAnimator(runtime.sceneAnimatedResult.animator, 0.0f);
-        runtime.sceneRenderBridge->sync(runtime.sceneRenderBackend);
         const Engine::SceneRenderBridgeDiagnostics bridgeDiagnostics = runtime.sceneRenderBridge->diagnostics();
         uint32_t validSkinnedResourceCount = 0;
         std::string skinnedResourceIds;
@@ -498,15 +552,6 @@
         for (const std::string& warning : runtime.sceneAnimatedResult.diagnostics.warnings) {
             SDL_Log("Release scene animated adapter warning: %s", warning.c_str());
         }
-    }
-
-    void updateReleaseSceneAnimatedSampleRuntime(AuthoredRuntime& runtime, float dt)
-    {
-        if (!runtime.usingSceneAnimatedAdapter || !runtime.sceneAnimatedAdapter) {
-            return;
-        }
-
-        runtime.sceneAnimatedAdapter->updateAnimator(runtime.sceneAnimatedResult.animator, dt);
     }
 
     AnimatedSampleRuntime startAnimatedSampleRuntime(
@@ -1035,8 +1080,6 @@
                     return runtime;
                 }
 
-                runtime.sceneRuntime.updateWorldTransforms();
-                runtime.sceneRenderBridge->sync(runtime.sceneRenderBackend);
                 runtime.usingSceneAdapter = true;
                 runtime.bounds = importedBoundsOrFallback(importedScene.bounds);
                 runtime.frameSceneAfterCommit = true;

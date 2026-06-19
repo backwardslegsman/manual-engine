@@ -1177,3 +1177,43 @@ Changed:
 
 Rationale:
 - Scene-authored static geometry needs a renderer-independent path into existing navigation tile build inputs before App streaming or automatic rebuild orchestration can consume it.
+
+## 2026-06-19 - Phase 10 Physics Readiness Pass
+
+Changed:
+- Moved release authored scene adapter updates onto the `Scene` scheduler so animated adapter playback runs in `VariableAnimation` and render bridge sync runs in `PreRender`.
+- Made animated adapter root-node skinned binding fallback an explicit setting and enabled it only for the release KayKit compatibility sample.
+- Added scene-aware navigation source unregister dirty tracking for sources removed before their first snapshot.
+- Documented that upcoming physics should be scene-owned and separate from the legacy procedural `BlockingCollisionSystem`.
+
+Rationale:
+- Physics needs explicit scene lifecycle and tick ordering before static colliders, bodies, queries, and transform sync are added.
+
+## 2026-06-19 - Expanded Physics Integration Roadmap
+
+Changed:
+- Expanded Milestone 10 in `docs/scene_component_roadmap.md` into a full scene-owned physics implementation plan.
+- Added `docs/scene_runtime/phase_10_physics_integration.md` covering public API shape, scheduler order, transform sync, collision geometry, queries, diagnostics, build integration, tests, deferred work, and acceptance checks.
+
+Rationale:
+- Physics needs a precise boundary before adding Jolt so scene-owned bodies, colliders, queries, and future character movement do not inherit procedural-world collision assumptions.
+
+## 2026-06-19 - Scene Physics Phase 10 Implementation
+
+Changed:
+- Added Jolt through vcpkg and wired `Jolt::Jolt` into `manual_engine` and the new scene physics test target.
+- Added `Engine::ScenePhysicsWorld` with generation-counted body/collider handles, static/kinematic/dynamic bodies, direct shape descriptors, fixed scheduler sync, queries, diagnostics, and debug request records.
+- Added headless scene physics tests covering lifecycle, transforms, dynamic writeback, queries, filters, scheduler order, diagnostics, and shutdown.
+- Updated contracts and overview docs to keep scene physics separate from procedural `World`, `ActorController`, and `BlockingCollisionSystem`.
+
+Rationale:
+- Scene-owned physics now has a stable Engine-facing surface for the upcoming character movement milestone without migrating existing procedural world behavior.
+
+## 2026-06-19 - Terrain Rework Roadmap
+
+Changed:
+- Added `docs/terrain_rework_roadmap.md` as a dedicated plan for first-class heightmap import, chunked terrain ownership, generated asset caching, terrain material metadata, navigation build data, and physics collider integration.
+- Linked the new terrain roadmap from the engine overview planning guidance.
+
+Rationale:
+- Heightmap terrain crosses assets, renderer LODs, navigation, physics, materials, caching, and future serialization, so it needs a dedicated roadmap before implementation starts.

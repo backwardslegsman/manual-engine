@@ -200,6 +200,18 @@ namespace Engine {
         return {static_cast<uint32_t>(animators_.size() - 1), 1};
     }
 
+    void SceneAnimatedModelAdapter::freeAnimator(SceneAnimatorHandle handle)
+    {
+        AnimatorRecord* animator = record(handle);
+        if (!animator) {
+            return;
+        }
+
+        const uint32_t generation = nextGeneration(animator->generation);
+        *animator = {};
+        animator->generation = generation;
+    }
+
     SceneAnimatedAdapterResult SceneAnimatedModelAdapter::adaptImportedScene(
         const Assets::Assimp::ImportedScene& importedScene,
         const std::filesystem::path& sourcePath,
@@ -447,7 +459,20 @@ namespace Engine {
             }
         }
 
-        if (result.diagnostics.createdSkinnedComponentCount == 0 && !result.nodes.empty()) {
+        if (result.diagnostics.createdSkinnedComponentCount == 0 &&
+            result.diagnostics.createdSkinnedMeshCount > 0 &&
+            !settings.allowRootFallbackSkinnedBindings) {
+            result.message = "Animated scene has skinned resources but no node mesh bindings; root fallback is disabled.";
+            result.diagnostics.warnings.push_back(result.message);
+            freeAnimator(animatorHandle);
+            diagnostics_ = result.diagnostics;
+            return result;
+        }
+
+        if (result.diagnostics.createdSkinnedComponentCount == 0 &&
+            result.diagnostics.createdSkinnedMeshCount > 0 &&
+            settings.allowRootFallbackSkinnedBindings &&
+            !result.nodes.empty()) {
             for (uint32_t meshIndex = 0; meshIndex < result.resources.skinnedMeshes.size(); ++meshIndex) {
                 if (rendererHandleValid(result.resources.skinnedMeshes[meshIndex])) {
                     attachSkinnedComponent(

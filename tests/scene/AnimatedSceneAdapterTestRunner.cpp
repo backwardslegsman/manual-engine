@@ -310,6 +310,48 @@ namespace {
         fixture.adapter.releaseResources(result.resources, fixture.cache);
     }
 
+    void rootFallbackDisabledRejectsUnboundSkinnedResources(TestContext& context)
+    {
+        TestRenderer::reset();
+        AdapterFixture fixture;
+        Assets::Assimp::ImportedScene imported = importSkinnedFixture();
+        for (Assets::Assimp::ImportedSceneNode& node : imported.nodes) {
+            node.meshIndices.clear();
+        }
+
+        Engine::SceneAnimatedAdapterSettings settings = testSettings();
+        settings.allowRootFallbackSkinnedBindings = false;
+        Engine::SceneAnimatedAdapterResult result =
+            fixture.adapter.adaptImportedScene(imported, skinnedFixturePath(), fixture.cache, settings);
+
+        context.expect(!result.success, "root fallback disabled rejects unbound skinned resources");
+        context.expect(result.diagnostics.createdSkinnedMeshCount > 0, "skinned resources were created before binding failed");
+        context.expect(result.diagnostics.createdSkinnedComponentCount == 0, "no fallback skinned components were created");
+
+        fixture.adapter.releaseResources(result.resources, fixture.cache);
+    }
+
+    void rootFallbackEnabledCreatesComponents(TestContext& context)
+    {
+        TestRenderer::reset();
+        AdapterFixture fixture;
+        Assets::Assimp::ImportedScene imported = importSkinnedFixture();
+        for (Assets::Assimp::ImportedSceneNode& node : imported.nodes) {
+            node.meshIndices.clear();
+        }
+
+        Engine::SceneAnimatedAdapterSettings settings = testSettings();
+        settings.allowRootFallbackSkinnedBindings = true;
+        Engine::SceneAnimatedAdapterResult result =
+            fixture.adapter.adaptImportedScene(imported, skinnedFixturePath(), fixture.cache, settings);
+
+        context.expect(result.success, "root fallback enabled adapts unbound skinned resources");
+        context.expect(result.diagnostics.createdSkinnedComponentCount == result.diagnostics.createdSkinnedMeshCount,
+            "fallback creates one skinned component per valid skinned mesh");
+
+        fixture.adapter.releaseResources(result.resources, fixture.cache);
+    }
+
     void fixtureCreatesRendererSkinnedMeshesAndMaterials(TestContext& context)
     {
         TestRenderer::reset();
@@ -596,6 +638,8 @@ int main()
         {"FixturePreservesSkeletonHierarchy", fixturePreservesSkeletonHierarchy},
         {"FixtureCreatesSkeletonBindings", fixtureCreatesSkeletonBindings},
         {"FixtureCreatesSkinnedMeshComponents", fixtureCreatesSkinnedMeshComponents},
+        {"RootFallbackDisabledRejectsUnboundSkinnedResources", rootFallbackDisabledRejectsUnboundSkinnedResources},
+        {"RootFallbackEnabledCreatesComponents", rootFallbackEnabledCreatesComponents},
         {"FixtureCreatesRendererSkinnedMeshesAndMaterials", fixtureCreatesRendererSkinnedMeshesAndMaterials},
         {"BindPoseMatchesAnimatedModelRuntime", bindPoseMatchesAnimatedModelRuntime},
         {"SampledClipMatchesAnimatedModelRuntime", sampledClipMatchesAnimatedModelRuntime},

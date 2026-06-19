@@ -11,6 +11,7 @@ find_package(assimp CONFIG REQUIRED)
 find_package(bgfx CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(Jolt CONFIG REQUIRED)
 find_package(recastnavigation CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(yaml-cpp CONFIG REQUIRED)
@@ -56,6 +57,7 @@ add_executable(manual_engine
     src/Engine/PersistentObjectEditor.cpp
     src/Engine/Picking.cpp
     src/Engine/ProceduralChunkContent.cpp
+    src/Engine/Physics/ScenePhysics.cpp
     src/Engine/Scene/RendererSceneRenderBackend.cpp
     src/Engine/Scene/AnimatedSceneAdapter.cpp
     src/Engine/Scene/AuthoredSceneAdapter.cpp
@@ -93,6 +95,7 @@ target_link_libraries(manual_engine
         bgfx::bgfx
         glm::glm
         $<$<CONFIG:Debug>:imgui::imgui>
+        Jolt::Jolt
         RecastNavigation::Recast
         RecastNavigation::Detour
         RecastNavigation::DetourTileCache
@@ -268,6 +271,25 @@ target_link_libraries(manual_engine_scene_render_bridge_tests
 )
 
 add_test(NAME manual_engine_scene_render_bridge_tests COMMAND manual_engine_scene_render_bridge_tests)
+
+add_executable(manual_engine_scene_physics_tests
+    tests/scene/ScenePhysicsTestRunner.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Scene/Scene.cpp
+)
+
+target_include_directories(manual_engine_scene_physics_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_scene_physics_tests
+    PRIVATE
+        glm::glm
+        Jolt::Jolt
+)
+
+add_test(NAME manual_engine_scene_physics_tests COMMAND manual_engine_scene_physics_tests)
 
 add_executable(manual_engine_authored_scene_adapter_tests
     tests/scene/AuthoredSceneAdapterTestRunner.cpp

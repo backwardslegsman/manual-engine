@@ -288,10 +288,27 @@ namespace {
         ctx.expect(std::ranges::find(dirty, Engine::ChunkCoord{1, 0}) != dirty.end(), "new chunk was not dirtied");
 
         registry.clearDirty();
-        registry.unregisterSource(source);
-        registry.refreshDirtySources(scene, ChunkSize);
+        registry.unregisterSource(scene, source, ChunkSize);
         dirty = registry.dirtyChunks();
         ctx.expect(std::ranges::find(dirty, Engine::ChunkCoord{1, 0}) != dirty.end(), "removed source chunk was not dirtied");
+    }
+
+    void unregisterBeforeSnapshotMarksDirtyChunks(TestContext& ctx)
+    {
+        Engine::Scene scene;
+        Engine::SceneNavigationGeometryRegistry registry;
+        const Engine::SceneActorHandle actor = scene.createActor();
+        Engine::SceneTransform transform;
+        transform.translation = {ChunkSize, 0.0f, 0.0f};
+        scene.setLocalTransform(actor, transform);
+
+        const Engine::SceneNavigationSourceHandle source = registry.registerSource(planeSource(actor));
+        registry.clearDirty();
+        ctx.expect(registry.unregisterSource(scene, source, ChunkSize), "scene-aware unregister succeeds before snapshot");
+        const std::vector<Engine::ChunkCoord> dirty = registry.dirtyChunks();
+
+        ctx.expect(std::ranges::find(dirty, Engine::ChunkCoord{1, 0}) != dirty.end(), "current source chunk was dirtied before snapshot");
+        ctx.expect(!registry.contains(source), "unregistered source handle is invalidated");
     }
 
     Assets::Assimp::ImportedScene syntheticImportedScene()
@@ -369,6 +386,7 @@ int main()
         {"BlockerSourceProducesBlockingGeometry", blockerSourceProducesBlockingGeometry},
         {"TerrainAndSceneSourcesMerge", terrainAndSceneSourcesMerge},
         {"DirtyTrackingMarksExpectedChunks", dirtyTrackingMarksExpectedChunks},
+        {"UnregisterBeforeSnapshotMarksDirtyChunks", unregisterBeforeSnapshotMarksDirtyChunks},
         {"AuthoredAdapterRegistersNavSourcesWhenOptedIn", authoredAdapterRegistersNavSourcesWhenOptedIn},
     };
 
