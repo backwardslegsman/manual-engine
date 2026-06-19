@@ -17,10 +17,17 @@
       ]
     },
     "joltphysics",
+    "lua",
     "recastnavigation",
     "sdl3",
     "stb",
     "yaml-cpp"
+  ],
+  "overrides": [
+    {
+      "name": "lua",
+      "version": "5.4.8"
+    }
   ],
   "builtin-baseline": "c16c1bd46c7f6de21efc6dcf19c1069d6825df23"
 }

@@ -12,6 +12,7 @@ find_package(bgfx CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(Jolt CONFIG REQUIRED)
+find_package(Lua REQUIRED)
 find_package(recastnavigation CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(yaml-cpp CONFIG REQUIRED)
@@ -62,6 +63,7 @@ add_executable(manual_engine
     src/Engine/Reflection.cpp
     src/Engine/SceneBehaviorHooks.cpp
     src/Engine/SceneCharacterMovement.cpp
+    src/Engine/SceneLuaScripting.cpp
     src/Engine/SceneReflection.cpp
     src/Engine/Scene/RendererSceneRenderBackend.cpp
     src/Engine/Scene/AnimatedSceneAdapter.cpp
@@ -99,6 +101,7 @@ target_include_directories(manual_engine
     PRIVATE
         src
         ${Stb_INCLUDE_DIR}
+        ${LUA_INCLUDE_DIR}
 )
 
 target_compile_definitions(manual_engine
@@ -114,6 +117,7 @@ target_link_libraries(manual_engine
         glm::glm
         $<$<CONFIG:Debug>:imgui::imgui>
         Jolt::Jolt
+        ${LUA_LIBRARIES}
         RecastNavigation::Recast
         RecastNavigation::Detour
         RecastNavigation::DetourTileCache
@@ -596,6 +600,47 @@ target_link_libraries(manual_engine_scene_behavior_hooks_tests
 )
 
 add_test(NAME manual_engine_scene_behavior_hooks_tests COMMAND manual_engine_scene_behavior_hooks_tests)
+
+add_executable(manual_engine_scene_lua_scripting_tests
+    tests/scene/SceneLuaScriptingTestRunner.cpp
+    tests/navigation/RendererStubs.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Engine/AssetRegistry.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationRuntime.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Reflection.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/Scene/SceneRenderBridge.cpp
+    src/Engine/SceneBehaviorHooks.cpp
+    src/Engine/SceneCharacterMovement.cpp
+    src/Engine/SceneLuaScripting.cpp
+    src/Engine/Terrain.cpp
+    src/Engine/SceneReflection.cpp
+    src/Engine/TerrainDataset.cpp
+)
+
+target_include_directories(manual_engine_scene_lua_scripting_tests
+    PRIVATE
+        src
+        ${LUA_INCLUDE_DIR}
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+)
+
+target_link_libraries(manual_engine_scene_lua_scripting_tests
+    PRIVATE
+        glm::glm
+        assimp::assimp
+        Jolt::Jolt
+        ${LUA_LIBRARIES}
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_scene_lua_scripting_tests COMMAND manual_engine_scene_lua_scripting_tests)
 
 add_executable(manual_engine_scene_serialization_tests
     tests/scene/SceneSerializationTestRunner.cpp

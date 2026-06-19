@@ -994,16 +994,157 @@ Exit criteria:
 
 Goal: Add Lua as a safe scripting layer over reflected, opaque engine APIs.
 
-- Add Lua VM lifetime per scene or app policy.
-- Bind opaque scene, actor, component, asset, physics, navigation, and renderer-debug handles.
-- Expose reflected property get/set and approved system APIs.
-- Add script lifecycle hooks matching native hooks.
-- Add error reporting, stack traces, script reload behavior, and execution budget diagnostics.
-- Add tests for hook execution, property access, invalid handle behavior, reload, and script errors.
+Status: initial implementation added. `Engine::SceneLuaRuntime` now adds Lua scripting as a constrained runtime layer on top of `SceneBehaviorHooks`, `SceneReflection`, `OpaqueHandle`, and explicit Engine service APIs. Lua scripts can drive simple scene actor/component behavior through scheduler-ordered native hooks and reflected properties without seeing C++ storage, renderer internals, Jolt IDs, Detour refs, bgfx state, App objects, filesystem-write APIs, or transient subsystem handles.
+
+Scope:
+
+- Add a CPU-only scripting module under `src/Engine`, likely `SceneLuaScripting.hpp/.cpp`.
+- Use stock Lua through vcpkg as the first VM target. Prefer a small direct C API binding layer unless a binding helper proves necessary; avoid introducing a broad C++ reflection-to-Lua framework in the first pass.
+- Keep VM ownership explicit: one `SceneLuaRuntime` is composed beside a `Scene`, `ReflectionRegistry`, `SceneReflectionContext`, and `SceneBehaviorHooks`.
+- Do not add editor UI, Lua debugger UI, hot reload file watching, async script execution, native plugin loading, networking, App input migration, procedural `World` hooks, or scene serialization of Lua state in Phase 15.
+- Scripts run synchronously on the main thread during native hook callbacks or explicit runtime calls. They must not call renderer/bgfx, build nav tiles, create physics terrain, import assets, or perform unbudgeted file I/O through engine bindings.
+- Script access is allowlisted. Adding a new Lua binding should be treated like adding a public Engine API and should update this roadmap/contracts when it crosses subsystem boundaries.
+
+Runtime ownership and script identity:
+
+- Add `LuaScriptId` as a stable caller-supplied script type/asset identity for diagnostics and future binding metadata.
+- Add `LuaScriptInstanceHandle` as a transient generation-counted runtime handle. It must not be serialized.
+- Add `LuaScriptDescriptor`:
+  - script ID and debug name;
+  - script source: inline string for tests/tools or filesystem path for runtime composition;
+  - target `OpaqueHandle` and target kind;
+  - enabled flag;
+  - hook phases and priority;
+  - optional exported function names for lifecycle/tick/property callbacks;
+  - maximum instruction count or execution budget policy;
+  - optional failure policy: keep enabled, disable script, or request unregister.
+- Add `LuaScriptInstanceState`:
+  - loaded/compiled/enabled/error state;
+  - target handle;
+  - script environment/table reference;
+  - last status/message;
+  - execution counters and elapsed microseconds.
+- Keep Lua VM stack references, registry references, closures, coroutine handles, and script tables private to the Lua runtime implementation.
+
+Lua binding surface:
+
+- Bind opaque handle values as userdata or plain tagged values that expose only safe methods:
+  - `is_valid(handle)`;
+  - `kind(handle)`;
+  - equality/comparison;
+  - no direct index/generation mutation.
+- Expose reflected property APIs:
+  - `get(handle, property)` returns a Lua value plus status;
+  - `set(handle, property, value)` routes through `SceneReflection::setReflectedProperty`;
+  - `set_and_notify(handle, property, value)` routes through `SceneBehaviorHooks::setReflectedPropertyAndNotify`;
+  - property lookup by stable enum/string name from registered reflection descriptors.
+- Expose minimal scene actor helpers:
+  - current target handle;
+  - actor stable ID;
+  - local transform get/set helpers that wrap reflected properties;
+  - parent/child count read-only helpers where reflection already supports them.
+- Expose optional system helpers only where Phase 12/14 already provide safe public access:
+  - character movement enabled/move-input settings;
+  - physics velocity/enabled/motion metadata where reflected mutators exist;
+  - navigation query calls only through `SceneNavigationService` explicit APIs, not property getters;
+  - asset and terrain metadata reads only.
+- Do not bind live renderer handles, renderer resource creation/destruction, Jolt/Detour/bgfx identifiers, `AssetCache` acquisitions, filesystem writes, `World` mutation, or App debug controls.
+
+Hook integration:
+
+- Lua scripts should register native `SceneBehaviorHooks` descriptors internally. The native hook callback becomes the bridge that invokes script functions.
+- Lifecycle functions should mirror native hooks:
+  - `on_load(context)`;
+  - `on_start(context)`;
+  - `on_stop(context)`;
+  - `on_unload(context)`;
+  - `on_target_invalidated(context)`.
+- Tick functions should receive a context with phase, delta seconds, frame index, fixed step index, paused flag, target handle, and script handle.
+- Property callbacks should receive target handle, property ID/name, old value, new value, and status metadata.
+- A script failure should not throw across the scheduler. The bridge converts Lua errors to hook statuses, diagnostics, and the script failure policy.
+- Script-created unregister/disable requests should go through `SceneBehaviorHooks::requestUnregisterBehavior` or script-runtime APIs, not direct vector/storage mutation.
+
+Execution safety:
+
+- Configure an instruction-count hook or equivalent execution budget for each script call. Budget exhaustion returns a typed failure and applies the script failure policy.
+- Set a recursion/depth guard so script callbacks cannot re-enter the same script indefinitely through reflected notifications.
+- Normalize Lua type conversion:
+  - numbers convert to reflected integer/float only when range/type is valid;
+  - tables convert to `vec2`, `vec3`, `quat`, or `mat4` only with explicit fields or array lengths;
+  - strings are length-limited;
+  - unsupported values fail with `TypeMismatch`;
+  - `nil` is not accepted for required reflected values.
+- Keep script environments sandboxed:
+  - no default `os`, `io`, `debug`, or package loading in runtime scripts;
+  - deterministic base libraries only where needed for gameplay math/string/table operations;
+  - expose Engine math helpers explicitly rather than relying on global mutable state.
+- Script reload is explicit API only:
+  - `reloadScript(handle)` recompiles source and swaps the script environment only if compilation succeeds;
+  - failed reload keeps the previous working script enabled unless the caller asks to disable on reload failure;
+  - no filesystem watcher in Phase 15.
+
+Diagnostics:
+
+- Add `SceneLuaDiagnostics`:
+  - loaded/compiled/enabled/error script counts;
+  - lifecycle/tick/property call counts;
+  - failed call count;
+  - budget-exceeded count;
+  - invalid handle/property/type count;
+  - reload count and reload failure count;
+  - last script ID/name/status/message;
+  - elapsed microseconds per call and aggregate;
+  - bounded stack trace strings.
+- Add renderer-independent debug records for script load, callback, reload, failure, budget timeout, and invalid access. Debug visualization/UI consumption is Phase 16 or App composition work.
+
+Serialization relationship:
+
+- Do not serialize Lua VM state, stack state, coroutine state, upvalues, function closures, script tables, or runtime script handles.
+- Future scene serialization may store script binding metadata only:
+  - `SceneObjectId`;
+  - `LuaScriptId` or `AssetId` for script source;
+  - target kind;
+  - enabled flag;
+  - serialized reflected variables explicitly marked script-visible and serializable.
+- Phase 15 should not add script chunks to the binary scene format unless a minimal metadata fixture is required for validation. Follow `docs/scene_runtime/serialization_conventions.md` when script binding persistence is planned.
+
+Implemented Phase 15 surface:
+
+1. Dependency and runtime shell:
+   - Lua dependency/build wiring, VM lifetime, sandboxed library setup, runtime handles, descriptors, statuses, diagnostics, and inline/file script support are implemented.
+2. Reflection value conversion:
+   - Lua-to-`ReflectedValue` and `ReflectedValue`-to-Lua conversion covers approved primitive, string, vector, quaternion, matrix, stable-ID, terrain chunk ID, and opaque-handle values.
+3. Opaque/reflection bindings:
+   - Handle validation, reflected get/set, reflected set-and-notify, property lookup, `engine.target`, self-disable, and self-unregister helpers are implemented through an allowlisted `engine` table.
+4. Hook bridge:
+   - Lua-backed native behavior hooks invoke script lifecycle/tick/property functions through `SceneBehaviorHooks`.
+5. Execution safety and diagnostics:
+   - Instruction budgets, error capture, failure policy, reload preserve-on-failure behavior, and deterministic diagnostics/debug records are implemented.
+6. Documentation and non-goals:
+   - System contracts and engine overview document sandbox, threading, serialization, and App-boundary rules. File watching, hot reload watchers, serialized script binding chunks, coroutine scheduling, Lua debugger UI, broader Engine APIs, App gameplay migration, and procedural `World` hooks remain deferred.
+
+Test plan:
+
+- Add `manual_engine_scene_lua_scripting_tests` as a CPU-only target independent from App, Renderer/bgfx implementation, ImGui, authored/animated loaders, optional sample assets, and scene serialization file I/O.
+- Required tests:
+  - VM creation/shutdown is deterministic and idempotent;
+  - inline script compiles and registers lifecycle/tick hooks through `SceneBehaviorHooks`;
+  - lifecycle and tick functions run in scheduler order and receive correct context values;
+  - reflected get/set from Lua updates scene actor local transform through public APIs;
+  - `set_and_notify` triggers native property-change hooks while raw reflected set does not;
+  - invalid, stale, wrong-kind, and wrong-owner opaque handles fail cleanly in Lua;
+  - Lua type conversion accepts valid bool/number/string/vector/quaternion/matrix/stable-ID values and rejects malformed tables or unsupported values;
+  - script errors produce diagnostics and do not stop unrelated native or Lua hooks;
+  - budget exhaustion disables or reports scripts according to descriptor policy;
+  - explicit reload succeeds without losing target binding and failed reload preserves the previous working script;
+  - sandbox blocks `os`, `io`, `debug`, and package loading by default;
+  - runtime script handles, Lua closures, Lua registry refs, and opaque handles are not serializable payload data.
 
 Exit criteria:
 
-- Lua scripts can drive simple actor/component behavior without direct access to engine internals.
+- Lua scripts can drive simple scene actor/component behavior through native hook ordering, reflected properties, and opaque handles without direct access to engine internals.
+- Script failures, invalid access, and budget overruns are diagnosable and isolated from unrelated hooks.
+- Lua runtime identity and VM state remain separate from future serialized script binding metadata.
 
 ## 16. Debug Visualization Roadmap
 

@@ -1455,3 +1455,25 @@ Changed:
 
 Rationale:
 - Scene gameplay now has a native C++ callback layer that can drive behavior through scheduler/reflection contracts before Lua or broader App gameplay migration is introduced.
+
+## 2026-06-19 - Phase 15 Lua Scripting Roadmap Expansion
+
+Changed:
+- Expanded Phase 15 in `docs/scene_component_roadmap.md` into a full Lua scripting plan covering VM ownership, script IDs/handles/descriptors, sandboxing, reflection and opaque-handle bindings, native hook integration, execution budgets, reload behavior, diagnostics, serialization boundaries, implementation subphases, and tests.
+- Clarified that Lua scripts run synchronously through native hook ordering and may mutate scene state only through reflected/public Engine APIs.
+
+Rationale:
+- Lua scripting should build on the proven reflection, serialization, and native hook boundaries rather than exposing subsystem storage or App-local gameplay state.
+
+## 2026-06-19 - Phase 15 Lua Scripting
+
+Changed:
+- Added `Engine::SceneLuaRuntime` with generation-counted Lua script instance handles, inline/file script descriptors, sandboxed Lua VM ownership, per-script environments, reload preserve-on-failure behavior, diagnostics, and debug records.
+- Routed Lua lifecycle/tick/property callbacks through `SceneBehaviorHooks`, with reflected `engine.get`, `engine.set`, `engine.set_and_notify`, target validation, self-disable, self-unregister, and instruction-budget failure handling.
+- Added Lua value conversion for approved reflected primitives, vectors, quaternions, matrices, stable IDs, terrain chunk IDs, and opaque handles while keeping Lua registry refs, closures, VM state, and runtime handles unserialized.
+- Added `manual_engine_scene_lua_scripting_tests` covering VM cleanup, scheduler integration, reflected actor transform writes, property notifications, malformed values, error isolation, instruction budgets, reload behavior, sandboxing, and runtime identity boundaries.
+- Added the vcpkg `lua` dependency, pinned to Lua 5.4.8 because the current Lua 5.5 vcpkg port requires a newer internal CMake than this Visual Studio vcpkg bootstrap provides.
+- Updated system contracts, engine overview, and the scene roadmap to document the Lua scripting boundary.
+
+Rationale:
+- Scene gameplay now has a constrained Lua layer that reuses the native hook/reflection/opaque-handle contract without exposing subsystem storage, renderer/bgfx, Jolt, Detour, App state, or serialization payloads.
