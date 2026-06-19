@@ -785,3 +785,20 @@ Changed:
 
 Rationale:
 - The scene/component roadmap should start with `main.cpp` acting as composition and frame-loop code rather than owning large authored/animated state machines inline.
+
+## 2026-06-18 - Scene Kernel Phase 1 Plan Refinement
+
+Changed:
+- Expanded the Phase 1 scene-kernel plan with concrete handle names, handle layout, lifecycle semantics, metadata-only component storage rules, API shape, and test target expectations.
+
+Rationale:
+- The scene runtime implementation needs to avoid the existing procedural `ActorHandle` name and lock destruction/iteration semantics before code is introduced.
+
+## 2026-06-19 - Scene Kernel Phase 1 Implementation
+
+Changed:
+- Added the renderer-independent `Engine::Scene` kernel with generation-counted scene actor/component handles, stable scene ID metadata, and metadata-only component attachment.
+- Added isolated scene kernel tests and documented the new runtime identity contract.
+
+Rationale:
+- The scene/component runtime needs a small handle-safe ownership shell before transforms, renderer bridges, serialization, physics, scripting, navigation, or authored-scene migration are introduced.

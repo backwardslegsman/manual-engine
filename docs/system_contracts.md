@@ -6,6 +6,7 @@ This guide is the quick reference for what the prototype currently supports and 
 
 - **World ownership:** `Engine::World` owns transient world object handles, transforms, stable object IDs, local/world CPU bounds, collision flags, angular velocity, and optional renderer instance bindings.
 - **Stable identity:** `Engine::ObjectId` is the persistence-facing identity. `WorldObjectHandle` is transient and must not be saved.
+- **Scene kernel:** `Engine::Scene` owns renderer-independent scene actor records and metadata-only component records. `SceneActorHandle` and `SceneComponentHandle` are transient generation-counted runtime handles; `SceneObjectId` is reserved as stable scene identity but is not connected to save/load yet.
 - **Fixed-step loop:** `Engine::FixedStepLoop` provides clamped frame timing and 60 Hz fixed update ticks.
 - **Input mapping:** SDL events flow into `Engine::InputState`; `Engine::InputMapping` publishes semantic input actions from `assets/config/input.yaml`.
 - **Event queue:** `Engine::EventQueue` carries frame input action events and interaction events. It is explicitly cleared at the end of the frame. It is not a general event bus registry; new message-driven systems should prefer system-owned typed inboxes with publish-only sinks.
@@ -66,7 +67,7 @@ This guide is the quick reference for what the prototype currently supports and 
 
 3. **Engine services**
    - Load the active navigation profile from `assets/config/navigation_profiles.yaml`, falling back to defaults on failure.
-   - Create `World`, `ActorController`, `BlockingCollisionSystem`, `SpatialRegistry`, `TerrainSystem`, `NavigationSystem`, `NavigationConnectivitySystem`, `WorldNavigationGraph`, `NavigationCache`, `WorldObjectOverrides`, `AsyncWorkQueue`, `FrameBudget`, `MainThreadWorkQueue`, `ChunkStreamer`, input/event/interaction systems, and camera.
+   - Create `World`, `ActorController`, `BlockingCollisionSystem`, `SpatialRegistry`, `TerrainSystem`, `NavigationSystem`, `NavigationConnectivitySystem`, `WorldNavigationGraph`, `NavigationCache`, `WorldObjectOverrides`, `AsyncWorkQueue`, `FrameBudget`, `MainThreadWorkQueue`, `ChunkStreamer`, input/event/interaction systems, and camera. `Scene` is available as an isolated runtime container but is not part of the sample boot path yet.
    - Use one consistent chunk size across spatial registry, terrain, procedural content, chunk streamer, persistent editor, and world graph.
    - Configure camera bounds and terrain LOD distances before creating chunks.
 
@@ -108,7 +109,7 @@ This guide is the quick reference for what the prototype currently supports and 
 
 ## Cross-System Contracts
 
-- **Future scene runtime identity:** Scene, actor, and component runtime handles should be transient, generation-counted values and must never be serialized. Stable scene IDs are serialized identity and are distinct from runtime handles. Future asset handles identify asset registry records and are distinct from renderer handles. Renderer handles remain renderer-owned GPU/resource identifiers and must not become scene/component storage IDs. Future physics and navigation handles are owned by their systems and are distinct from actor/component handles. Existing `ObjectId` remains the procedural world/save identity until the scene serialization phase defines an explicit migration.
+- **Scene runtime identity:** Scene actor and component runtime handles are transient, generation-counted values and must never be serialized. `SceneObjectId` is stable scene identity reserved for future serialization and remains distinct from runtime handles; it is not wired to save/load in the scene kernel phase. Future asset handles identify asset registry records and are distinct from renderer handles. Renderer handles remain renderer-owned GPU/resource identifiers and must not become scene/component storage IDs. Future physics and navigation handles are owned by their systems and are distinct from actor/component handles. Existing `ObjectId` remains the procedural world/save identity until the scene serialization phase defines an explicit migration.
 - **World to renderer:** World objects may hold renderer instance handles, but renderer resources do not own world object lifetime. `World::syncRenderState()` is the transform handoff.
 - **World to save:** Save files use `ObjectId`, never `WorldObjectHandle`. Procedural IDs are stable only if chunk coordinate derivation, archetype IDs, and local slot numbering remain stable.
 - **Chunk to world:** Chunk streamer owns loaded membership lists. `World` owns the object records. Unloading a chunk must remove its objects from spatial registry and destroy renderer instances through world/chunk cleanup. Budgeted unloads should split navigation removal, object destruction, terrain destruction, render-group destruction, and final dirty marking into separate cooperative work items.

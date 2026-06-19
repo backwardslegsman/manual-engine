@@ -36,6 +36,8 @@ Use this document for long-range architectural work that crosses `src/Engine`, `
 
 Goal: Introduce a central runtime container without replacing existing systems in one pass.
 
+Phase 1 implementation note: the initial kernel uses `SceneActorHandle` instead of `ActorHandle` to avoid the existing procedural actor-controller handle name. Component storage is metadata-only and keyed by caller-supplied `SceneComponentTypeId`; transforms, renderer bridges, registry integration, serialization, physics, scripting, navigation, names, and tags remain later-phase work.
+
 - Add `SceneHandle`, `ActorHandle`, `ComponentHandle`, and generation-counted validity.
 - Add stable `SceneObjectId` or equivalent serialized identity separate from transient handles.
 - Follow the handle and identity rules in `docs/system_contracts.md` before adding storage or serialization-facing APIs.

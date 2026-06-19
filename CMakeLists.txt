@@ -52,6 +52,7 @@ add_executable(manual_engine
     src/Engine/PersistentObjectEditor.cpp
     src/Engine/Picking.cpp
     src/Engine/ProceduralChunkContent.cpp
+    src/Engine/Scene/Scene.cpp
     src/Engine/SpatialRegistry.cpp
     src/Engine/Terrain.cpp
     src/Engine/World.cpp
@@ -147,6 +148,18 @@ target_link_libraries(manual_engine_asset_import_tests
 )
 
 add_test(NAME manual_engine_asset_import_tests COMMAND manual_engine_asset_import_tests)
+
+add_executable(manual_engine_scene_tests
+    tests/scene/SceneTestRunner.cpp
+    src/Engine/Scene/Scene.cpp
+)
+
+target_include_directories(manual_engine_scene_tests
+    PRIVATE
+        src
+)
+
+add_test(NAME manual_engine_scene_tests COMMAND manual_engine_scene_tests)
 
 add_executable(manual_engine_authored_scene_tests
     tests/authored_scene/AuthoredSceneTestRunner.cpp
