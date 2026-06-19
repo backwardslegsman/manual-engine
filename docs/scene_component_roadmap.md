@@ -59,14 +59,17 @@ Exit criteria:
 
 Goal: Make transforms a first-class scene feature that can replace ad hoc object/node transform ownership over time.
 
-- Add `TransformComponent` with local translation, rotation, scale, and cached world matrix.
-- Support roots and parent/child relationships.
-- Add attach, detach, reparent, preserve-world-transform, and preserve-local-transform operations.
-- Add dirty propagation from parent to descendants.
-- Add deterministic world-transform update order.
-- Add cycle prevention and invalid-parent diagnostics.
-- Add bounds hooks for components that need transform-driven world bounds.
-- Add tests for hierarchy composition, non-uniform scale, detach behavior, cycle rejection, and dirty propagation.
+Detailed implementation plan: `docs/scene_runtime/phase_02_transform_hierarchy.md`.
+
+- Add scene-owned actor transform data with local translation, rotation, scale, and cached world matrix.
+- Use `SceneActorHandle` as the hierarchy identity; do not add separate transform handles or migrate `World` yet.
+- Treat every active actor as transformable with an identity default; pending-destroy and stale actors are excluded from transform and hierarchy queries.
+- Support roots, parent/child relationships, attach, detach, and reparent operations with explicit preserve-world versus keep-local behavior.
+- Add dirty propagation from changed actors to descendants, lazy world-matrix refresh for individual queries, and deterministic full-scene update in root/child order.
+- Reject invalid parents, self-parenting, and cycles without mutation, returning explicit status.
+- On parent destruction, detach surviving children to roots while preserving their world transforms.
+- Defer bounds hooks, renderer sync, authored-scene conversion, serialization, physics, navigation, scripting, names, tags, and editor UI to later phases.
+- Add CPU-only scene tests for hierarchy composition, non-uniform scale, preserve-world operations, dirty propagation, deterministic roots/children, cycle rejection, destroy cleanup, pending-destroy exclusion, and slot reuse cleanup.
 
 Exit criteria:
 
@@ -77,14 +80,18 @@ Exit criteria:
 
 Goal: Formalize scene lifecycle and frame phase ordering while preserving existing fixed-step behavior.
 
-- Add scene lifecycle calls: load, start, tick, stop, unload.
-- Add frame phases: begin frame, pre-physics, physics, post-physics, animation, render submit, end frame.
-- Define fixed-step versus variable-step phase rules.
-- Define system registration order and explicit dependencies.
-- Define main-thread-only phases and worker-safe phases.
-- Add budget integration for phase work that can be split across frames.
-- Add diagnostics for phase timings, skipped phases, pending work, and long-frame contributors.
-- Add tests for phase order, paused scenes, unload during pending work, and fixed-step accumulation.
+Detailed implementation plan: `docs/scene_runtime/phase_03_tick_scheduler.md`.
+
+- Add a renderer-independent scene lifecycle shell with explicit `load`, `start`, `stop`, and `unload` transitions.
+- Add generation-counted scene system handles and narrow scheduler registration for lifecycle/tick callbacks.
+- Define fixed phases separately from variable frame phases; keep fixed timestep accumulation owned by existing `FixedStepLoop`/App code.
+- Run systems deterministically by registration order within each phase and reject registration mutation while the scene is started.
+- Keep all scheduler callbacks main-thread/synchronous in this phase; worker jobs may only be future producers of plain data.
+- Add pause semantics that skip simulation phases while allowing begin/render/end style phases to continue for diagnostics and visual prep.
+- Refresh scene world transforms before the pre-render phase so future renderer bridges can consume stable matrices.
+- Add plain Engine diagnostics for lifecycle state, phase counts, skipped work, callback counts, and phase timing without ImGui or Renderer dependencies.
+- Defer task graphs, async scheduling, native actor/component hooks, Lua, renderer submission, physics, navigation, serialization, editor UI, and authored-scene integration to later phases.
+- Add CPU-only scene tests for lifecycle transitions, phase order, deterministic system order, pause behavior, invalid transitions, stale system handles, transform refresh before pre-render, diagnostics, and actor destruction during callbacks.
 
 Exit criteria:
 
@@ -95,14 +102,16 @@ Exit criteria:
 
 Goal: Create stable asset handles and import records that sit above current import/cache systems.
 
-- Add `AssetHandle`, `AssetId`, `AssetType`, and asset metadata records.
-- Add registry records for source path, canonical path, source format, content hash, import settings, and dependencies.
-- Represent imported data as records for static mesh, skinned mesh, skeleton, material, texture, animation clip, authored scene, and navigation source geometry.
-- Connect existing Assimp import diagnostics to asset import records.
-- Connect authored scene and animated model cache identity to registry metadata.
-- Add dependency queries so scenes can report required assets.
-- Add invalid/stale/missing asset diagnostics.
-- Add tests for stable handle lookup, dependency graph queries, stale detection, and optional-asset skipping.
+Detailed implementation plan: `docs/scene_runtime/phase_04_asset_registry.md`.
+
+- Add CPU-only `Engine::AssetRegistry` ownership for stable asset identity and metadata records.
+- Add generation-counted `AssetHandle` values and stable `AssetId` values distinct from scene, renderer, physics, navigation, and save-facing identities.
+- Track source path, canonical path, source format, content hash, import settings identity, asset type, dependencies, and diagnostics without creating renderer resources.
+- Keep `AssetCache` as the renderer-resource cache; do not replace authored-scene cache files, path-based importers, or current `AuthoredScene`/`AnimatedModel` owners.
+- Add helper paths for imported scene metadata and dependency extraction from existing Assimp CPU import records.
+- Add queries by handle, stable ID, canonical path, dependencies, dependents, type/status counts, and stale/missing diagnostics.
+- Defer component migration, serialization, hot reload, async import, disk asset database, package formats, editor UI, and cache rewrite to later phases.
+- Add CPU-only tests for stable registration, duplicate handling, import settings identity, stale/missing refresh, dependency queries, imported-scene dependency extraction, and target independence from Renderer/App/Navigation/Physics/scripting.
 
 Exit criteria:
 

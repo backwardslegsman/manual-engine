@@ -30,6 +30,7 @@ add_executable(manual_engine
     src/Engine/AuthoredSceneAsync.cpp
     src/Engine/AsyncWorkQueue.cpp
     src/Engine/AssetCache.cpp
+    src/Engine/AssetRegistry.cpp
     src/Engine/Biome.cpp
     src/Engine/BlockingCollision.cpp
     src/Engine/ChunkStreamer.cpp
@@ -149,6 +150,25 @@ target_link_libraries(manual_engine_asset_import_tests
 
 add_test(NAME manual_engine_asset_import_tests COMMAND manual_engine_asset_import_tests)
 
+add_executable(manual_engine_asset_registry_tests
+    tests/assets/AssetRegistryTestRunner.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Engine/AssetRegistry.cpp
+)
+
+target_include_directories(manual_engine_asset_registry_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_asset_registry_tests
+    PRIVATE
+        assimp::assimp
+        glm::glm
+)
+
+add_test(NAME manual_engine_asset_registry_tests COMMAND manual_engine_asset_registry_tests)
+
 add_executable(manual_engine_scene_tests
     tests/scene/SceneTestRunner.cpp
     src/Engine/Scene/Scene.cpp
@@ -157,6 +177,11 @@ add_executable(manual_engine_scene_tests
 target_include_directories(manual_engine_scene_tests
     PRIVATE
         src
+)
+
+target_link_libraries(manual_engine_scene_tests
+    PRIVATE
+        glm::glm
 )
 
 add_test(NAME manual_engine_scene_tests COMMAND manual_engine_scene_tests)

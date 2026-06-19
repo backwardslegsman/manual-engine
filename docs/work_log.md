@@ -802,3 +802,57 @@ Changed:
 
 Rationale:
 - The scene/component runtime needs a small handle-safe ownership shell before transforms, renderer bridges, serialization, physics, scripting, navigation, or authored-scene migration are introduced.
+
+## 2026-06-19 - Transform Hierarchy Phase 2 Plan
+
+Changed:
+- Added a dedicated Phase 2 transform hierarchy plan covering scene-owned local/world transforms, hierarchy mutation, preserve-world behavior, dirty propagation, destroy cleanup, and CPU-only tests.
+- Updated the scene/component roadmap to link the detailed phase plan and lock the transform hierarchy scope boundaries.
+
+Rationale:
+- The transform hierarchy needs precise ownership, invalid-handle, cycle-prevention, and update-order semantics before implementation starts.
+
+## 2026-06-19 - Transform Hierarchy Phase 2 Implementation
+
+Changed:
+- Added scene-owned local/world transforms, parent/child hierarchy state, dirty propagation, preserve-world hierarchy mutation, and destroy/reuse cleanup to `Engine::Scene`.
+- Extended isolated scene tests to cover transform composition, hierarchy mutation, cycle rejection, pending-destroy exclusion, and slot cleanup.
+
+Rationale:
+- The scene runtime needs deterministic transform hierarchy behavior before renderer, authored-scene, physics, navigation, serialization, or scripting adapters consume scene actors.
+
+## 2026-06-19 - Tick Scheduler Phase 3 Plan
+
+Changed:
+- Added a dedicated Phase 3 tick scheduler plan covering scene lifecycle, fixed and variable phases, system registration, pause behavior, transform refresh timing, diagnostics, and CPU-only tests.
+- Updated the scene/component roadmap milestone to link the detailed plan and lock the scheduler scope boundaries.
+
+Rationale:
+- Future renderer, physics, navigation, animation, scripting, and behavior phases need a deterministic scene phase contract before they register runtime systems.
+
+## 2026-06-19 - Tick Scheduler Phase 3 Implementation
+
+Changed:
+- Added `Engine::Scene` system registration, lifecycle transitions, fixed/variable tick phases, pause handling, transform refresh before pre-render, and scheduler diagnostics.
+- Extended isolated scene tests to cover lifecycle order, phase order, enable/disable behavior, pause behavior, stale system handles, diagnostics, and actor destruction during ticks.
+
+Rationale:
+- Scene-owned systems need deterministic runtime ordering before renderer, physics, navigation, animation, scripting, or native behavior adapters plug into the scene runtime.
+
+## 2026-06-19 - Asset Registry Phase 4 Plan
+
+Changed:
+- Added a dedicated Phase 4 asset registry plan covering stable asset IDs, runtime asset handles, source metadata, import settings identity, dependency tracking, stale/missing diagnostics, and CPU-only tests.
+- Updated the scene/component roadmap milestone to link the detailed plan and keep `AssetCache`, authored-scene cache files, and current path-based runtime owners intact.
+
+Rationale:
+- Later scene components need stable asset references without coupling component storage to renderer handles, source importer details, or current path-based cache ownership.
+
+## 2026-06-19 - Asset Registry Phase 4 Implementation
+
+Changed:
+- Added CPU-only `Engine::AssetRegistry` metadata ownership for stable asset IDs, transient asset handles, source format/status metadata, import settings identity, dependency edges, refresh diagnostics, and imported-scene texture dependency registration.
+- Added isolated asset registry tests and documented the registry/cache ownership boundary.
+
+Rationale:
+- Scene components need stable asset identity and dependency metadata before renderer-resource components, serialization, or authored-scene conversion start consuming asset references.

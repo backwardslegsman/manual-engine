@@ -6,7 +6,7 @@ This guide is the quick reference for what the prototype currently supports and 
 
 - **World ownership:** `Engine::World` owns transient world object handles, transforms, stable object IDs, local/world CPU bounds, collision flags, angular velocity, and optional renderer instance bindings.
 - **Stable identity:** `Engine::ObjectId` is the persistence-facing identity. `WorldObjectHandle` is transient and must not be saved.
-- **Scene kernel:** `Engine::Scene` owns renderer-independent scene actor records and metadata-only component records. `SceneActorHandle` and `SceneComponentHandle` are transient generation-counted runtime handles; `SceneObjectId` is reserved as stable scene identity but is not connected to save/load yet.
+- **Scene kernel:** `Engine::Scene` owns renderer-independent scene actor records, metadata-only component records, scene-local transform hierarchy state, and a CPU-only lifecycle/tick scheduler shell. `SceneActorHandle`, `SceneComponentHandle`, and `SceneSystemHandle` are transient generation-counted runtime handles; `SceneObjectId` is reserved as stable scene identity but is not connected to save/load yet. Scene transform hierarchy and scheduler state are runtime-only and do not drive `World`, Renderer, physics, navigation, or serialization yet.
 - **Fixed-step loop:** `Engine::FixedStepLoop` provides clamped frame timing and 60 Hz fixed update ticks.
 - **Input mapping:** SDL events flow into `Engine::InputState`; `Engine::InputMapping` publishes semantic input actions from `assets/config/input.yaml`.
 - **Event queue:** `Engine::EventQueue` carries frame input action events and interaction events. It is explicitly cleared at the end of the frame. It is not a general event bus registry; new message-driven systems should prefer system-owned typed inboxes with publish-only sinks.
@@ -32,6 +32,7 @@ This guide is the quick reference for what the prototype currently supports and 
 - **World navigation graph:** `Engine::WorldNavigationGraph` builds a deterministic coarse chunk graph over the generated world and returns coarse routes used by actor hierarchical move commands.
 - **Navigation cache:** `Engine::NavigationCache` stores derived baseline nav tile bytes, connectivity metadata, and graph metadata under a versioned manifest. Runtime cache file reads/writes use worker-safe helper jobs; cache misses enqueue worker generation rather than forcing synchronous Recast work.
 - **Frame dirty orchestration:** `src/App` owns dirty flags for nav tile sync, nav connectivity, world graph rebuilds, renderer visibility metadata, and picking. Expensive derived systems should run when inputs change, not every frame. Renderer metadata reapply uses dirty chunk sets for local changes and a capped full-reapply queue only when global visibility/debug settings change.
+- **Asset registry:** `Engine::AssetRegistry` owns CPU-only asset identity, source metadata, import settings identity, dependency edges, and stale/missing diagnostics. `AssetHandle` is a transient generation-counted runtime handle; `AssetId` is the stable registry identity intended for future scene/component serialization references. The registry does not import payloads, allocate renderer resources, replace path-based loaders, or own `AssetCache` entries.
 - **Asset cache:** `Engine::AssetCache` deduplicates reusable renderer meshes and textures; terrain draw buffers remain transient.
 
 ## Available Rendering Features
@@ -59,6 +60,7 @@ This guide is the quick reference for what the prototype currently supports and 
    - Set initial bgfx reset/view clear/view rect.
 
 2. **Runtime assets and descriptors**
+   - `Engine::AssetRegistry` may be created by tools or future scene composition code to track stable source metadata. The current sample boot path still uses path-based imports and `AssetCache` directly.
    - Create `Engine::AssetCache`.
    - Acquire fallback/player/debug solid textures and fallback mesh.
    - Load object archetypes from `assets/config/object_archetypes.yaml`, falling back to defaults on failure.
@@ -110,6 +112,10 @@ This guide is the quick reference for what the prototype currently supports and 
 ## Cross-System Contracts
 
 - **Scene runtime identity:** Scene actor and component runtime handles are transient, generation-counted values and must never be serialized. `SceneObjectId` is stable scene identity reserved for future serialization and remains distinct from runtime handles; it is not wired to save/load in the scene kernel phase. Future asset handles identify asset registry records and are distinct from renderer handles. Renderer handles remain renderer-owned GPU/resource identifiers and must not become scene/component storage IDs. Future physics and navigation handles are owned by their systems and are distinct from actor/component handles. Existing `ObjectId` remains the procedural world/save identity until the scene serialization phase defines an explicit migration.
+- **Scene transform hierarchy:** `Scene` actor transforms use local TRS data, cached world matrices, parent/child links, and dirty propagation. Hierarchy mutation is main-thread runtime state only; future authored-scene, renderer, physics, navigation, and serialization phases must consume it through explicit bridge APIs rather than reading storage directly.
+- **Scene tick scheduler:** `Scene` scheduler phases are synchronous main-thread callbacks with explicit lifecycle transitions and fixed/variable phase order. Existing `FixedStepLoop` and App frame code still own fixed timestep accumulation and decide when to call scene fixed ticks. Future renderer, physics, navigation, animation, scripting, and behavior systems must register through the scheduler rather than adding hidden app-local ordering.
+- **Asset registry identity:** Asset registry records have two identities: transient `AssetHandle` values for runtime lookup and stable `AssetId` values for durable references. Asset IDs are derived from canonical source path, asset type, and import settings unless an explicit tool/test ID is supplied. Dependency edges store `AssetId`s and resolve to live handles only when the referenced assets are currently registered. Registry metadata is CPU-only; it must not become renderer resource ownership or an implicit import pipeline.
+- **Asset registry to cache:** `AssetRegistry` tracks source identity and dependencies; `AssetCache` continues to own renderer mesh/texture reuse and explicit release before renderer shutdown. Registry records may describe assets that are missing, stale, generated, or not loaded into renderer memory.
 - **World to renderer:** World objects may hold renderer instance handles, but renderer resources do not own world object lifetime. `World::syncRenderState()` is the transform handoff.
 - **World to save:** Save files use `ObjectId`, never `WorldObjectHandle`. Procedural IDs are stable only if chunk coordinate derivation, archetype IDs, and local slot numbering remain stable.
 - **Chunk to world:** Chunk streamer owns loaded membership lists. `World` owns the object records. Unloading a chunk must remove its objects from spatial registry and destroy renderer instances through world/chunk cleanup. Budgeted unloads should split navigation removal, object destruction, terrain destruction, render-group destruction, and final dirty marking into separate cooperative work items.
@@ -136,7 +142,7 @@ This guide is the quick reference for what the prototype currently supports and 
 - **Release debug tools:** `MANUAL_ENGINE_ENABLE_DEBUG_TOOLS` is `1` for Debug and `0` for Release. Release builds stub Dear ImGui, skip debug primitive gathering/submission, and do not link the ImGui target.
 - **Picking cadence:** Debug builds continuously update hover picking for inspection. Release builds run picking only for commands that require a fresh target, such as select/interact/place/move clicks.
 - **Renderer visibility:** Render layers, visibility flags, render groups, materials, and max draw distance affect submission only. They must not drive simulation, chunk lifetime, or persistence. App-owned visibility metadata updates should be incremental by chunk when possible; full loaded-set reapplies are reserved for global debug setting changes and must be budgeted.
-- **Asset cache:** Cache-owned renderer assets must be explicitly released before renderer shutdown. Terrain tile resources are transient and stay outside the cache.
+- **Asset cache:** Cache-owned renderer assets must be explicitly released before renderer shutdown. Terrain tile resources are transient and stay outside the cache. `AssetId` and `AssetHandle` are not renderer handles and must not be released through renderer or cache APIs.
 
 ## Update Rule
 
