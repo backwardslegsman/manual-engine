@@ -777,3 +777,11 @@ Changed:
 
 Rationale:
 - Static authored scenes and animated models share material, texture, and vertex conversion policy; keeping that policy in one Engine helper reduces drift before scene/component integration begins.
+## 2026-06-18 - App Authored Runtime Extraction
+
+Changed:
+- Moved authored-scene and animated-sample startup/runtime helper state out of `src/App/main.cpp` into an app-local runtime include.
+- Kept the top-level authored frame loop in `main.cpp` while reducing inline startup, async, fallback, and debug-population helper code.
+
+Rationale:
+- The scene/component roadmap should start with `main.cpp` acting as composition and frame-loop code rather than owning large authored/animated state machines inline.
