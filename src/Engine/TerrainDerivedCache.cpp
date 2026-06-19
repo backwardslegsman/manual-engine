@@ -718,7 +718,9 @@ namespace Engine {
             for (uint32_t x = 0; x + 1u < resolution; ++x) {
                 const uint32_t topA = x;
                 const uint32_t topB = x + 1u;
-                pushQuad(payload.indices, topA, topB, addSkirtVertex(topA), addSkirtVertex(topB));
+                const uint32_t topSkirtA = addSkirtVertex(topA);
+                const uint32_t topSkirtB = addSkirtVertex(topB);
+                pushQuad(payload.indices, topA, topB, topSkirtA, topSkirtB);
                 const uint32_t bottomA = (resolution - 1u) * resolution + x;
                 const uint32_t bottomB = bottomA + 1u;
                 const uint32_t bottomSkirtB = addSkirtVertex(bottomB);
@@ -733,7 +735,9 @@ namespace Engine {
                 pushQuad(payload.indices, leftB, leftA, leftSkirtB, leftSkirtA);
                 const uint32_t rightA = z * resolution + (resolution - 1u);
                 const uint32_t rightB = (z + 1u) * resolution + (resolution - 1u);
-                pushQuad(payload.indices, rightA, rightB, addSkirtVertex(rightA), addSkirtVertex(rightB));
+                const uint32_t rightSkirtA = addSkirtVertex(rightA);
+                const uint32_t rightSkirtB = addSkirtVertex(rightB);
+                pushQuad(payload.indices, rightA, rightB, rightSkirtA, rightSkirtB);
             }
         }
         return payload;

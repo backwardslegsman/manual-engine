@@ -60,6 +60,8 @@
 #include "Engine/ProceduralChunkContent.hpp"
 #include "Engine/SpatialRegistry.hpp"
 #include "Engine/Terrain.hpp"
+#include "Engine/TerrainNavigationAdapter.hpp"
+#include "Engine/TerrainRenderLodAdapter.hpp"
 #include "Engine/World.hpp"
 #include "Engine/WorldNavigationGraph.hpp"
 #include "Engine/WorldObjectOverrides.hpp"
@@ -307,7 +309,7 @@ namespace {
     };
 
     struct TerrainLodWorkerResult {
-        Engine::TerrainRenderMeshBuildResult build;
+        Engine::TerrainRenderLodBuildResult build;
     };
 
     struct TerrainLodRuntimeStats {
@@ -316,6 +318,11 @@ namespace {
         uint32_t jobsFailedThisFrame = 0;
         uint32_t commitsThisFrame = 0;
         uint32_t staleResultsThisFrame = 0;
+        uint32_t cacheHitsThisFrame = 0;
+        uint32_t cacheMissesThisFrame = 0;
+        uint32_t cacheStaleThisFrame = 0;
+        uint32_t cacheCorruptThisFrame = 0;
+        uint32_t generatedThisFrame = 0;
         uint32_t pendingJobs = 0;
         uint32_t completedResults = 0;
         float lastBuildMs = 0.0f;
@@ -2117,6 +2124,19 @@ int main(int argc, char** argv)
     Engine::NavAgentSettings playerNavAgent = navigationProfileLoad.profile.agent;
     terrainSettings.navigationResolution = navigationProfileLoad.profile.navigationResolution;
     Engine::TerrainSystem terrain(terrainSettings);
+    const auto terrainNavigationSourceTypeName = [](Engine::TerrainDatasetSourceType type) {
+        switch (type) {
+            case Engine::TerrainDatasetSourceType::HeightmapImported:
+                return std::string{"heightmap_imported"};
+            case Engine::TerrainDatasetSourceType::Procedural:
+                return std::string{"procedural"};
+            case Engine::TerrainDatasetSourceType::Generated:
+                return std::string{"generated"};
+        }
+        return std::string{"unknown"};
+    };
+    const Engine::TerrainNavigationSourceIdentity terrainNavigationIdentity =
+        Engine::legacyProceduralTerrainNavigationIdentity(terrainSettings);
     Engine::NavigationSystem navigation(navBuildSettings);
     Engine::NavigationConnectivitySystem navigationConnectivity;
     Engine::WorldNavigationGraph worldNavigationGraph({SampleWorldGraphRadius, SampleChunkSize});
@@ -2130,7 +2150,12 @@ int main(int argc, char** argv)
         playerNavAgent,
         activeNavigationProfileId,
         "assets/config/biomes.yaml",
-        "assets/config/object_archetypes.yaml");
+        "assets/config/object_archetypes.yaml",
+        terrainNavigationIdentity.sourceId,
+        terrainNavigationIdentity.sourceHash,
+        terrainNavigationIdentity.importSettings,
+        terrainNavigationSourceTypeName(terrainNavigationIdentity.sourceType),
+        Engine::TerrainNavigationAdapterVersion);
     Engine::NavigationCache navigationCache(navigationCacheSettings, navigationCacheManifest);
     navigationCache.ensureManifest();
     const auto refreshNavigationCacheManifest = [&]() {
@@ -2145,7 +2170,12 @@ int main(int argc, char** argv)
                 playerNavAgent,
                 activeNavigationProfileId,
                 "assets/config/biomes.yaml",
-                "assets/config/object_archetypes.yaml"));
+                "assets/config/object_archetypes.yaml",
+                terrainNavigationIdentity.sourceId,
+                terrainNavigationIdentity.sourceHash,
+                terrainNavigationIdentity.importSettings,
+                terrainNavigationSourceTypeName(terrainNavigationIdentity.sourceType),
+                Engine::TerrainNavigationAdapterVersion));
         navigationCache.ensureManifest();
     };
     Engine::WorldNavRoute lastWorldRoute;
@@ -2403,25 +2433,32 @@ int main(int argc, char** argv)
                     return;
                 }
 
-                std::optional<Engine::NavigationTerrainBuildData> buildData =
-                    Engine::TerrainSystem::navigationBuildData(
+                const std::optional<Engine::TerrainNavigationBuildRequest> request =
+                    Engine::terrainNavigationRequestFromGeneratedTile(
                         result.chunk.terrain,
-                        workerTerrainSettings.navigationResolution);
-                if (!buildData) {
+                        workerTerrainSettings.navigationResolution,
+                        terrainNavigationIdentity);
+                if (!request) {
                     return;
                 }
+                Engine::TerrainNavigationBuildResult terrainNavigation =
+                    Engine::buildTerrainNavigationData(*request);
+                if (!terrainNavigation.success || !terrainNavigation.buildData) {
+                    return;
+                }
+                Engine::NavigationTerrainBuildData buildData = std::move(*terrainNavigation.buildData);
                 for (const Engine::GeneratedChunkProp& prop : result.chunk.props) {
                     if (!prop.collisionEnabled) {
                         continue;
                     }
                     appendAabbNavigationBlocker(
-                        *buildData,
+                        buildData,
                         scaledTranslatedBounds(prop.localBounds, prop.position, prop.scale));
                     result.blockerStats.vertices += 8;
                     result.blockerStats.triangles += 12;
                 }
                 result.navigation =
-                    Engine::NavigationSystem::buildTerrainTileData(*buildData, navAgentSnapshot, navBuildSettingsSnapshot);
+                    Engine::NavigationSystem::buildTerrainTileData(buildData, navAgentSnapshot, navBuildSettingsSnapshot);
             });
         }
 
@@ -2915,10 +2952,21 @@ int main(int argc, char** argv)
         Engine::TerrainTileHandle terrainTile,
         const std::vector<Engine::WorldObjectHandle>& objects,
         NavigationBlockerStats* blockerStats = nullptr) -> std::optional<Engine::NavigationTerrainBuildData> {
-        std::optional<Engine::NavigationTerrainBuildData> buildData = terrain.navigationBuildData(terrainTile);
-        if (!buildData) {
+        const std::optional<Engine::TerrainNavigationBuildRequest> request =
+            Engine::terrainNavigationRequestFromTerrainSystemTile(
+                terrain,
+                terrainTile,
+                terrain.settings().navigationResolution,
+                terrainNavigationIdentity);
+        if (!request) {
             return std::nullopt;
         }
+        Engine::TerrainNavigationBuildResult terrainNavigation =
+            Engine::buildTerrainNavigationData(*request);
+        if (!terrainNavigation.success || !terrainNavigation.buildData) {
+            return std::nullopt;
+        }
+        Engine::NavigationTerrainBuildData buildData = std::move(*terrainNavigation.buildData);
 
         for (Engine::WorldObjectHandle object : objects) {
             if (object.id == UINT32_MAX || object.id == playerObject.id || !world.isValid(object) || !world.collisionEnabled(object)) {
@@ -2930,7 +2978,7 @@ int main(int argc, char** argv)
                 continue;
             }
 
-            appendAabbNavigationBlocker(*buildData, *bounds);
+            appendAabbNavigationBlocker(buildData, *bounds);
             if (blockerStats) {
                 blockerStats->vertices += 8;
                 blockerStats->triangles += 12;
@@ -3130,16 +3178,39 @@ int main(int argc, char** argv)
         lastTerrainLodUpdate.pendingCount = static_cast<uint32_t>(pendingTerrainLodJobs.size() + inputs.size());
         for (Engine::TerrainRenderMeshBuildInput input : inputs) {
             const uint32_t tileId = input.tile.id;
+            Engine::TerrainDerivedCacheSettings terrainLodCacheSettings;
+            terrainLodCacheSettings.policy = Engine::TerrainDerivedCachePolicy::ReadOnly;
+            const Engine::TerrainRenderLodSourceIdentity terrainLodIdentity =
+                Engine::legacyProceduralTerrainRenderLodIdentity(terrain.settings());
             const Engine::AsyncJobHandle handle = asyncWork.submit(
                 "terrain lod mesh build",
-                [input = std::move(input)](std::stop_token stopToken) -> std::any {
+                [input = std::move(input),
+                    terrainLodIdentity,
+                    terrainLodCacheSettings](std::stop_token stopToken) -> std::any {
                     TerrainLodWorkerResult result;
+                    result.build.build.mesh.tile = input.tile;
+                    result.build.build.mesh.coord = input.coord;
+                    result.build.build.mesh.generation = input.generation;
                     if (stopToken.stop_requested()) {
                         result.build.success = false;
-                        result.build.message = "Terrain LOD build cancelled.";
+                        result.build.build.success = false;
+                        result.build.build.message = "Terrain LOD build cancelled.";
+                        result.build.diagnostics.message = result.build.build.message;
                         return result;
                     }
-                    result.build = Engine::TerrainSystem::buildRenderMeshData(input);
+                    const std::optional<Engine::TerrainRenderLodBuildRequest> request =
+                        Engine::renderLodRequestFromTerrainSystemInput(
+                            input,
+                            terrainLodIdentity,
+                            terrainLodCacheSettings);
+                    if (!request) {
+                        result.build.success = false;
+                        result.build.build.success = false;
+                        result.build.build.message = "Invalid terrain render LOD adapter request.";
+                        result.build.diagnostics.message = result.build.build.message;
+                        return result;
+                    }
+                    result.build = Engine::buildTerrainRenderLod(*request);
                     return result;
                 });
             if (handle.id != UINT64_MAX) {
@@ -3728,18 +3799,25 @@ int main(int argc, char** argv)
             if (completed.result.type() == typeid(TerrainLodWorkerResult)) {
                 TerrainLodWorkerResult result =
                     std::any_cast<TerrainLodWorkerResult>(std::move(completed.result));
-                auto pendingLod = pendingTerrainLodJobs.find(result.build.mesh.tile.id);
+                auto pendingLod = pendingTerrainLodJobs.find(result.build.build.mesh.tile.id);
                 if (pendingLod != pendingTerrainLodJobs.end() && pendingLod->second.id == completed.handle.id) {
                     pendingTerrainLodJobs.erase(pendingLod);
                 } else {
                     ++terrainLodRuntimeStats.staleResultsThisFrame;
                     continue;
                 }
-                terrainLodRuntimeStats.lastBuildMs = result.build.buildMs;
-                terrainLodRuntimeStats.lastMessage = result.build.message;
+                terrainLodRuntimeStats.lastBuildMs = result.build.diagnostics.buildMs;
+                terrainLodRuntimeStats.lastMessage = result.build.diagnostics.message.empty()
+                    ? result.build.build.message
+                    : result.build.diagnostics.message;
+                terrainLodRuntimeStats.cacheHitsThisFrame += result.build.diagnostics.cacheHitCount;
+                terrainLodRuntimeStats.cacheMissesThisFrame += result.build.diagnostics.cacheMissCount;
+                terrainLodRuntimeStats.cacheStaleThisFrame += result.build.diagnostics.cacheStaleCount;
+                terrainLodRuntimeStats.cacheCorruptThisFrame += result.build.diagnostics.cacheCorruptCount;
+                terrainLodRuntimeStats.generatedThisFrame += result.build.diagnostics.generatedCount;
                 if (result.build.success) {
                     ++terrainLodRuntimeStats.jobsCompletedThisFrame;
-                    completedTerrainLodBuilds.push_back(std::move(result.build));
+                    completedTerrainLodBuilds.push_back(std::move(result.build.build));
                 } else {
                     ++terrainLodRuntimeStats.jobsFailedThisFrame;
                 }
@@ -4933,6 +5011,11 @@ int main(int argc, char** argv)
             navigationStats.terrainLodJobsFailedThisFrame = terrainLodRuntimeStats.jobsFailedThisFrame;
             navigationStats.terrainLodCommitsThisFrame = terrainLodRuntimeStats.commitsThisFrame;
             navigationStats.terrainLodStaleResultsThisFrame = terrainLodRuntimeStats.staleResultsThisFrame;
+            navigationStats.terrainLodCacheHitsThisFrame = terrainLodRuntimeStats.cacheHitsThisFrame;
+            navigationStats.terrainLodCacheMissesThisFrame = terrainLodRuntimeStats.cacheMissesThisFrame;
+            navigationStats.terrainLodCacheStaleThisFrame = terrainLodRuntimeStats.cacheStaleThisFrame;
+            navigationStats.terrainLodCacheCorruptThisFrame = terrainLodRuntimeStats.cacheCorruptThisFrame;
+            navigationStats.terrainLodGeneratedThisFrame = terrainLodRuntimeStats.generatedThisFrame;
             navigationStats.terrainLodPendingJobs = static_cast<uint32_t>(pendingTerrainLodJobs.size());
             navigationStats.terrainLodCompletedResults = static_cast<uint32_t>(completedTerrainLodBuilds.size());
             navigationStats.lastTerrainLodBuildMs = terrainLodRuntimeStats.lastBuildMs;

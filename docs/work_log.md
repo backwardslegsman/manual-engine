@@ -1259,3 +1259,27 @@ Changed:
 Rationale:
 - Heightmap terrain needs reusable generated CPU payloads before render LOD, navigation, physics, material-weight, and future serialization phases consume terrain chunks at scale.
 - Keeping cache records disposable and free of live renderer/navigation/physics handles preserves explicit runtime ownership.
+
+## 2026-06-19 - T4 Terrain Render LOD Adapter
+
+Changed:
+- Added `Engine::TerrainRenderLodAdapter` as the worker-safe boundary for building renderer terrain LOD mesh data from immutable terrain chunk snapshots.
+- Added support for both `TerrainDataset` chunks and legacy `TerrainSystem` tile inputs, plus conversion between T3 renderer-independent LOD cache payloads and current renderer mesh data.
+- Migrated the App async terrain LOD worker path to the adapter with read-only derived-cache probes and new cache/generation debug counters.
+- Added focused adapter tests covering dataset builds, parity with the old build path, cache hit/miss/stale/corrupt fallback, LOD counts, bounds, and stale commit rejection.
+
+Rationale:
+- Terrain render LOD generation now has a narrow bridge between the new dataset/cache model and the existing renderer commit path, allowing future heightmap runtime integration without replacing `TerrainSystem` storage in one step.
+- Runtime cache reads can reduce worker mesh generation cost without adding surprise frame-time disk writes.
+
+## 2026-06-19 - T5 Terrain Navigation Adapter
+
+Changed:
+- Added `Engine::TerrainNavigationAdapter` for deterministic `NavigationTerrainBuildData` generation from `TerrainDataset` chunks, generated terrain tiles, and legacy `TerrainSystem` tiles.
+- Migrated App terrain navigation build-data creation through the adapter while preserving blocker append, nav cache async flow, live tile insertion, connectivity, graph routing, and chunk streaming ownership.
+- Extended navigation cache manifest identity with terrain source/import identity and terrain navigation adapter version.
+- Added focused terrain navigation adapter tests covering dataset/procedural/legacy paths, parity with existing terrain helpers, Detour tile build compatibility, invalid inputs, blocker boundaries, and cache identity changes.
+
+Rationale:
+- Navigation needs a terrain-source-aware adapter before heightmap chunks can feed navmesh generation without coupling Recast builds to renderer terrain storage.
+- Including terrain identity in cache manifests prevents heightmap or terrain import changes from reusing stale procedural nav tile bytes.

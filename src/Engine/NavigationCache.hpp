@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 
+#include "Engine/AssetRegistry.hpp"
 #include "Engine/Navigation.hpp"
 #include "Engine/NavigationConnectivity.hpp"
 #include "Engine/WorldNavigationGraph.hpp"
@@ -30,6 +31,11 @@ namespace Engine {
         std::string profileId = "default";
         std::string biomeConfigHash;
         std::string archetypeConfigHash;
+        AssetId terrainSourceId;
+        std::string terrainSourceHash;
+        AssetImportSettingsKey terrainImportSettings;
+        std::string terrainSourceType = "unknown";
+        std::string terrainNavigationAdapterVersion = "terrain_navigation_adapter_t5_v1";
         std::string generatorVersion = "navigation_phase_12_v6_async_runtime_tiles";
         std::string identityHash;
     };
@@ -108,7 +114,12 @@ namespace Engine {
             const NavAgentSettings& agent,
             std::string profileId,
             const std::filesystem::path& biomeConfigPath,
-            const std::filesystem::path& archetypeConfigPath);
+            const std::filesystem::path& archetypeConfigPath,
+            AssetId terrainSourceId = {},
+            std::string terrainSourceHash = {},
+            AssetImportSettingsKey terrainImportSettings = {},
+            std::string terrainSourceType = "unknown",
+            std::string terrainNavigationAdapterVersion = "terrain_navigation_adapter_t5_v1");
         static std::string hashFile(const std::filesystem::path& path);
 
         const NavigationCacheManifest& manifest() const;

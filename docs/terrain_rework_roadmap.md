@@ -372,6 +372,8 @@ Exit criteria:
 
 ### Phase T4: Render LOD Adapter
 
+Status: initial implementation added. `Engine::TerrainRenderLodAdapter` now builds renderer LOD mesh data from immutable terrain chunk snapshots, supports both `TerrainDataset` chunks and legacy `TerrainSystem` tile inputs, converts T3 renderer-independent cache payloads into current renderer mesh data, and lets the App async terrain LOD worker path use read-only derived-cache probes before generating meshes. `TerrainSystem` remains the runtime terrain owner and renderer commit path.
+
 Deliverables:
 
 - Rebuild terrain renderer LOD generation on the new chunk data model.
@@ -385,6 +387,8 @@ Exit criteria:
 - LOD generation remains worker-safe.
 
 ### Phase T5: Navigation Data Adapter
+
+Status: initial implementation added. `Engine::TerrainNavigationAdapter` now builds existing `NavigationTerrainBuildData` from immutable terrain snapshots, supports `TerrainDataset` chunks, generated tile data, and legacy `TerrainSystem` tiles, and preserves the previous terrain sampling/downsampling/winding contract. App navigation build-data creation now goes through the adapter while blocker append, nav cache async flow, live tile insertion, connectivity, graph routing, and chunk streaming remain unchanged. Navigation cache identity now includes terrain source/import identity and the terrain navigation adapter version.
 
 Deliverables:
 

@@ -783,6 +783,12 @@ namespace Renderer::DebugUi {
             navigation.terrainLodCommitsThisFrame,
             navigation.terrainLodStaleResultsThisFrame,
             navigation.terrainLodCompletedResults);
+        ImGui::Text("Terrain LOD cache hit/miss/stale/corrupt: %u / %u / %u / %u",
+            navigation.terrainLodCacheHitsThisFrame,
+            navigation.terrainLodCacheMissesThisFrame,
+            navigation.terrainLodCacheStaleThisFrame,
+            navigation.terrainLodCacheCorruptThisFrame);
+        ImGui::Text("Terrain LOD generated this frame: %u", navigation.terrainLodGeneratedThisFrame);
         ImGui::Text("Terrain LOD pending jobs: %u", navigation.terrainLodPendingJobs);
         ImGui::Text("Last terrain LOD worker build: %.3f ms", navigation.lastTerrainLodBuildMs);
         if (!navigation.lastTerrainLodMessage.empty()) {

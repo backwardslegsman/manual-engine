@@ -71,6 +71,8 @@ add_executable(manual_engine
     src/Engine/TerrainDerivedCache.cpp
     src/Engine/TerrainDerivedCacheAsync.cpp
     src/Engine/TerrainImport.cpp
+    src/Engine/TerrainNavigationAdapter.cpp
+    src/Engine/TerrainRenderLodAdapter.cpp
     src/Engine/World.cpp
     src/Engine/WorldNavigationGraph.cpp
     src/Engine/WorldObjectOverrides.cpp
@@ -286,6 +288,56 @@ target_link_libraries(manual_engine_terrain_cache_tests
 )
 
 add_test(NAME manual_engine_terrain_cache_tests COMMAND manual_engine_terrain_cache_tests)
+
+add_executable(manual_engine_terrain_render_lod_adapter_tests
+    tests/terrain/TerrainRenderLodAdapterTestRunner.cpp
+    tests/navigation/RendererStubs.cpp
+    src/Engine/Biome.cpp
+    src/Engine/Terrain.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainDerivedCache.cpp
+    src/Engine/TerrainRenderLodAdapter.cpp
+)
+
+target_include_directories(manual_engine_terrain_render_lod_adapter_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_terrain_render_lod_adapter_tests
+    PRIVATE
+        glm::glm
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_terrain_render_lod_adapter_tests COMMAND manual_engine_terrain_render_lod_adapter_tests)
+
+add_executable(manual_engine_terrain_navigation_adapter_tests
+    tests/terrain/TerrainNavigationAdapterTestRunner.cpp
+    tests/navigation/RendererStubs.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationCache.cpp
+    src/Engine/Terrain.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainNavigationAdapter.cpp
+)
+
+target_include_directories(manual_engine_terrain_navigation_adapter_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_terrain_navigation_adapter_tests
+    PRIVATE
+        glm::glm
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_terrain_navigation_adapter_tests COMMAND manual_engine_terrain_navigation_adapter_tests)
 
 add_executable(manual_engine_asset_registry_tests
     tests/assets/AssetRegistryTestRunner.cpp

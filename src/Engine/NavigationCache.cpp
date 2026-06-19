@@ -258,6 +258,13 @@ namespace Engine {
             node["navigation_resolution"] = manifest.navigationResolution;
             node["biome_config_hash"] = manifest.biomeConfigHash;
             node["archetype_config_hash"] = manifest.archetypeConfigHash;
+            node["terrain_source_id"] = manifest.terrainSourceId.value;
+            node["terrain_source_hash"] = manifest.terrainSourceHash;
+            node["terrain_source_type"] = manifest.terrainSourceType;
+            node["terrain_navigation_adapter_version"] = manifest.terrainNavigationAdapterVersion;
+            node["terrain_import_settings"]["pipeline"] = manifest.terrainImportSettings.pipeline;
+            node["terrain_import_settings"]["version"] = manifest.terrainImportSettings.version;
+            node["terrain_import_settings"]["options_hash"] = manifest.terrainImportSettings.optionsHash;
             node["generator_version"] = manifest.generatorVersion;
             node["identity_hash"] = manifest.identityHash;
             node["profile_id"] = manifest.profileId;
@@ -330,7 +337,12 @@ namespace Engine {
         const NavAgentSettings& agent,
         std::string profileId,
         const std::filesystem::path& biomeConfigPath,
-        const std::filesystem::path& archetypeConfigPath)
+        const std::filesystem::path& archetypeConfigPath,
+        AssetId terrainSourceId,
+        std::string terrainSourceHash,
+        AssetImportSettingsKey terrainImportSettings,
+        std::string terrainSourceType,
+        std::string terrainNavigationAdapterVersion)
     {
         NavigationCacheManifest manifest;
         manifest.worldId = settings.worldId;
@@ -343,6 +355,11 @@ namespace Engine {
         manifest.profileId = std::move(profileId);
         manifest.biomeConfigHash = hashFile(biomeConfigPath);
         manifest.archetypeConfigHash = hashFile(archetypeConfigPath);
+        manifest.terrainSourceId = terrainSourceId;
+        manifest.terrainSourceHash = std::move(terrainSourceHash);
+        manifest.terrainImportSettings = std::move(terrainImportSettings);
+        manifest.terrainSourceType = std::move(terrainSourceType);
+        manifest.terrainNavigationAdapterVersion = std::move(terrainNavigationAdapterVersion);
 
         std::ostringstream identity;
         identity << manifest.worldId << '|'
@@ -353,6 +370,13 @@ namespace Engine {
                  << manifest.biomeConfigHash << '|'
                  << manifest.archetypeConfigHash << '|'
                  << manifest.profileId << '|'
+                 << manifest.terrainSourceId.value << '|'
+                 << manifest.terrainSourceHash << '|'
+                 << manifest.terrainImportSettings.pipeline << '|'
+                 << manifest.terrainImportSettings.version << '|'
+                 << manifest.terrainImportSettings.optionsHash << '|'
+                 << manifest.terrainSourceType << '|'
+                 << manifest.terrainNavigationAdapterVersion << '|'
                  << manifest.generatorVersion << '|';
         appendHashInput(identity, manifest.build);
         appendHashInput(identity, manifest.agent);

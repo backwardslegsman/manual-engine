@@ -239,6 +239,11 @@ namespace Renderer::DebugUi {
         uint32_t terrainLodJobsFailedThisFrame = 0;
         uint32_t terrainLodCommitsThisFrame = 0;
         uint32_t terrainLodStaleResultsThisFrame = 0;
+        uint32_t terrainLodCacheHitsThisFrame = 0;
+        uint32_t terrainLodCacheMissesThisFrame = 0;
+        uint32_t terrainLodCacheStaleThisFrame = 0;
+        uint32_t terrainLodCacheCorruptThisFrame = 0;
+        uint32_t terrainLodGeneratedThisFrame = 0;
         uint32_t terrainLodPendingJobs = 0;
         uint32_t terrainLodCompletedResults = 0;
         float lastTerrainLodBuildMs = 0.0f;
