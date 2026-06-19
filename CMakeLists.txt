@@ -53,7 +53,9 @@ add_executable(manual_engine
     src/Engine/PersistentObjectEditor.cpp
     src/Engine/Picking.cpp
     src/Engine/ProceduralChunkContent.cpp
+    src/Engine/Scene/RendererSceneRenderBackend.cpp
     src/Engine/Scene/Scene.cpp
+    src/Engine/Scene/SceneRenderBridge.cpp
     src/Engine/SpatialRegistry.cpp
     src/Engine/Terrain.cpp
     src/Engine/World.cpp
@@ -185,6 +187,25 @@ target_link_libraries(manual_engine_scene_tests
 )
 
 add_test(NAME manual_engine_scene_tests COMMAND manual_engine_scene_tests)
+
+add_executable(manual_engine_scene_render_bridge_tests
+    tests/scene/SceneRenderBridgeTestRunner.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/Scene/SceneRenderBridge.cpp
+)
+
+target_include_directories(manual_engine_scene_render_bridge_tests
+    PRIVATE
+        src
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+)
+
+target_link_libraries(manual_engine_scene_render_bridge_tests
+    PRIVATE
+        glm::glm
+)
+
+add_test(NAME manual_engine_scene_render_bridge_tests COMMAND manual_engine_scene_render_bridge_tests)
 
 add_executable(manual_engine_authored_scene_tests
     tests/authored_scene/AuthoredSceneTestRunner.cpp

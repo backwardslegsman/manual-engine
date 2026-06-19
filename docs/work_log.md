@@ -856,3 +856,21 @@ Changed:
 
 Rationale:
 - Scene components need stable asset identity and dependency metadata before renderer-resource components, serialization, or authored-scene conversion start consuming asset references.
+
+## 2026-06-19 - Render Component Bridge Phase 5 Plan
+
+Changed:
+- Added a dedicated Phase 5 render component bridge plan covering scene mesh/light/camera component descriptors, renderer facade boundaries, asset/cache compatibility, pre-render sync, dirty tracking, diagnostics, and renderer-independent tests.
+- Updated the scene/component roadmap milestone to link the detailed plan and keep authored-scene, animated-model, procedural world, and renderer ownership unchanged.
+
+Rationale:
+- Render components need a precise bridge contract before scene actors start creating renderer instances or later authored/animated adapters migrate onto the scene runtime.
+
+## 2026-06-19 - Render Component Bridge Phase 5 Implementation
+
+Changed:
+- Added `Engine::SceneRenderBridge` with typed mesh, skinned mesh, light, and camera component handles plus backend-driven sync to renderer-facing resources.
+- Added a production renderer backend adapter and isolated fake-backend tests for transform sync, resource lifetime, scheduler pre-render sync, camera view construction, and diagnostics.
+
+Rationale:
+- Scene actors need an explicit renderer bridge boundary before authored-scene and animated-model adapters can move onto the scene runtime without making Renderer depend on scene storage.

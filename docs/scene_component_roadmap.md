@@ -122,13 +122,16 @@ Exit criteria:
 
 Goal: Let scene components drive renderer handles without coupling renderer internals to component storage.
 
-- Add `MeshComponent`, `SkinnedMeshComponent`, `CameraComponent`, `LightComponent`, and material reference fields.
-- Add a render submission system that translates scene components into renderer handles and instance updates.
-- Keep renderer handle ownership explicit and deterministic.
-- Add dirty flags for transform, visibility, material, mesh, light, and camera changes.
-- Preserve render layers, max draw distance, render groups, and alpha paths.
-- Support static and skinned draw stats through existing renderer diagnostics.
-- Add tests with renderer stubs for component creation, update, removal, and no-leak shutdown.
+Detailed implementation plan: `docs/scene_runtime/phase_05_render_component_bridge.md`.
+
+- Add an Engine-owned scene render bridge that maps scene actor/component records to existing renderer handles without making Renderer read scene storage.
+- Add static mesh, skinned mesh, light, and camera component descriptors with explicit material, visibility, render layer, max draw distance, and render group fields where current renderer APIs support them.
+- Use scene world transforms as the source for renderer instance, light, and camera placement, with bridge sync running during `PreRender` after transform refresh.
+- Keep renderer resource ownership explicit: Renderer owns renderer handles, `AssetCache` owns cached renderer asset references, and the bridge owns only the mapping/lifetime of resources it creates or acquires.
+- Support transitional direct renderer-handle references and path/`AssetCache` compatibility while leaving registry-backed resource resolution for a later adapter.
+- Add dirty tracking for transform, resource, material, visibility, light, and camera updates without hiding import or allocation work behind generic scene setters.
+- Preserve existing `World`, `AuthoredScene`, `PartitionedAuthoredScene`, `AnimatedModel`, `AssetCache`, renderer submission, render layers, render groups, material paths, and diagnostics behavior.
+- Add tests with renderer facades or stubs for component creation, transform sync, descriptor update, removal, actor destruction cleanup, scheduler pre-render ordering, diagnostics, and no-leak shutdown.
 
 Exit criteria:
 
