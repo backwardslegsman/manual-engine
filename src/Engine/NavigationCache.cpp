@@ -191,64 +191,6 @@ namespace Engine {
             return connectivity;
         }
 
-        YAML::Node graphNode(const WorldNavigationGraphCacheData& graph)
-        {
-            YAML::Node node;
-            node["center"] = chunkNode(graph.centerChunk);
-            node["has_graph"] = graph.hasGraph;
-            for (const WorldNavNode& graphNode : graph.nodes) {
-                YAML::Node item;
-                item["coord"] = chunkNode(graphNode.coord);
-                item["biome"] = graphNode.biomeId;
-                item["position"] = vec3Node(graphNode.position);
-                item["traversal_cost"] = graphNode.traversalCost;
-                node["nodes"].push_back(item);
-            }
-            for (const WorldNavEdge& edge : graph.edges) {
-                YAML::Node item;
-                item["from"] = chunkNode(edge.from);
-                item["to"] = chunkNode(edge.to);
-                item["direction"] = directionName(edge.direction);
-                item["cost"] = edge.cost;
-                item["blocked"] = edge.blocked;
-                item["waypoint"] = vec3Node(edge.waypoint);
-                item["ingress_waypoint"] = vec3Node(edge.ingressWaypoint);
-                node["edges"].push_back(item);
-            }
-            return node;
-        }
-
-        WorldNavigationGraphCacheData readGraph(const YAML::Node& node)
-        {
-            WorldNavigationGraphCacheData graph;
-            graph.centerChunk = readChunk(node["center"]);
-            graph.hasGraph = node["has_graph"].as<bool>(false);
-            if (const YAML::Node nodes = node["nodes"]; nodes && nodes.IsSequence()) {
-                for (const YAML::Node& item : nodes) {
-                    graph.nodes.push_back({
-                        readChunk(item["coord"]),
-                        item["biome"].as<std::string>(std::string{}),
-                        readVec3(item["position"]),
-                        item["traversal_cost"].as<float>(1.0f),
-                    });
-                }
-            }
-            if (const YAML::Node edges = node["edges"]; edges && edges.IsSequence()) {
-                for (const YAML::Node& item : edges) {
-                    graph.edges.push_back({
-                        readChunk(item["from"]),
-                        readChunk(item["to"]),
-                        readDirection(item["direction"]),
-                        item["cost"].as<float>(1.0f),
-                        item["blocked"].as<bool>(false),
-                        readVec3(item["waypoint"]),
-                        item["ingress_waypoint"] ? readVec3(item["ingress_waypoint"]) : readVec3(item["waypoint"]),
-                    });
-                }
-            }
-            return graph;
-        }
-
         YAML::Node manifestNode(const NavigationCacheManifest& manifest)
         {
             YAML::Node node;
@@ -320,13 +262,6 @@ namespace Engine {
             return navigationCacheRoot(settings, manifest) / "connectivity" / chunkFileName(coord, ".yaml");
         }
 
-        std::filesystem::path navigationGraphPath(
-            const NavigationCacheSettings& settings,
-            const NavigationCacheManifest& manifest,
-            ChunkCoord centerChunk)
-        {
-            return navigationCacheRoot(settings, manifest) / "graphs" / chunkFileName(centerChunk, ".yaml");
-        }
     }
 
     NavigationCache::NavigationCache(NavigationCacheSettings settings, NavigationCacheManifest manifest)
@@ -601,68 +536,6 @@ namespace Engine {
         }
     }
 
-    NavigationCacheGraphReadResult NavigationCache::readGraphCache(
-        const NavigationCacheSettings& settings,
-        const NavigationCacheManifest& manifest,
-        ChunkCoord centerChunk)
-    {
-        NavigationCacheGraphReadResult result;
-        result.kind = NavigationCacheKind::Graph;
-        result.coord = centerChunk;
-        result.path = navigationGraphPath(settings, manifest, centerChunk);
-        try {
-            const YAML::Node root = YAML::LoadFile(result.path.string());
-            if (root["identity_hash"].as<std::string>(std::string{}) != manifest.identityHash) {
-                result.status = NavigationCacheOperationStatus::Stale;
-                result.message = "World navigation graph cache identity mismatch.";
-                return result;
-            }
-            result.status = NavigationCacheOperationStatus::Hit;
-            result.message = "Loaded world navigation graph cache.";
-            result.graph = readGraph(root["graph"]);
-            return result;
-        } catch (const YAML::BadFile& exception) {
-            result.status = NavigationCacheOperationStatus::Miss;
-            result.message = exception.what();
-            return result;
-        } catch (const std::exception& exception) {
-            result.status = NavigationCacheOperationStatus::Corrupt;
-            result.message = exception.what();
-            return result;
-        }
-    }
-
-    NavigationCacheWriteResult NavigationCache::writeGraphCache(
-        const NavigationCacheSettings& settings,
-        const NavigationCacheManifest& manifest,
-        const WorldNavigationGraphCacheData& graph)
-    {
-        NavigationCacheWriteResult result;
-        result.kind = NavigationCacheKind::Graph;
-        result.coord = graph.centerChunk;
-        result.path = navigationGraphPath(settings, manifest, graph.centerChunk);
-        try {
-            std::filesystem::create_directories(result.path.parent_path());
-            YAML::Node root;
-            root["identity_hash"] = manifest.identityHash;
-            root["graph"] = graphNode(graph);
-            std::ofstream file(result.path);
-            if (!file) {
-                result.status = NavigationCacheOperationStatus::WriteFailed;
-                result.message = "Failed to open world navigation graph cache for writing.";
-                return result;
-            }
-            file << root;
-            result.status = NavigationCacheOperationStatus::WriteSuccess;
-            result.message = "Wrote world navigation graph cache.";
-            return result;
-        } catch (const std::exception& exception) {
-            result.status = NavigationCacheOperationStatus::WriteFailed;
-            result.message = exception.what();
-            return result;
-        }
-    }
-
     void NavigationCache::recordReadResult(const NavigationCacheOperationResult& result)
     {
         switch (result.kind) {
@@ -683,13 +556,6 @@ namespace Engine {
                     ++stats_.connectivityMisses;
                 }
                 break;
-            case NavigationCacheKind::Graph:
-                if (result.status == NavigationCacheOperationStatus::Hit) {
-                    ++stats_.graphHits;
-                } else {
-                    ++stats_.graphMisses;
-                }
-                break;
         }
         setLast(result.path, result.message);
     }
@@ -703,9 +569,6 @@ namespace Engine {
                     break;
                 case NavigationCacheKind::Connectivity:
                     ++stats_.connectivityWrites;
-                    break;
-                case NavigationCacheKind::Graph:
-                    ++stats_.graphWrites;
                     break;
             }
         }
@@ -758,20 +621,6 @@ namespace Engine {
         return result.status == NavigationCacheOperationStatus::WriteSuccess;
     }
 
-    std::optional<WorldNavigationGraphCacheData> NavigationCache::loadGraph(ChunkCoord centerChunk)
-    {
-        NavigationCacheGraphReadResult result = readGraphCache(settings_, manifest_, centerChunk);
-        recordReadResult(result);
-        return std::move(result.graph);
-    }
-
-    bool NavigationCache::writeGraph(const WorldNavigationGraphCacheData& graph)
-    {
-        NavigationCacheWriteResult result = writeGraphCache(settings_, manifest_, graph);
-        recordWriteResult(result);
-        return result.status == NavigationCacheOperationStatus::WriteSuccess;
-    }
-
     std::filesystem::path NavigationCache::cacheRoot() const
     {
         return navigationCacheRoot(settings_, manifest_);
@@ -790,11 +639,6 @@ namespace Engine {
     std::filesystem::path NavigationCache::connectivityPath(ChunkCoord coord) const
     {
         return navigationConnectivityPath(settings_, manifest_, coord);
-    }
-
-    std::filesystem::path NavigationCache::graphPath(ChunkCoord centerChunk) const
-    {
-        return navigationGraphPath(settings_, manifest_, centerChunk);
     }
 
     void NavigationCache::setLast(std::filesystem::path path, std::string message)

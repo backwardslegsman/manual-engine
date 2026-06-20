@@ -11,7 +11,7 @@
 #include <glm/glm.hpp>
 
 #include "Assets/Assimp/Importer.hpp"
-#include "Engine/AnimatedModel.hpp"
+#include "Engine/AnimationPose.hpp"
 #include "Engine/AnimatedModelPose.hpp"
 #include "Engine/AssetCache.hpp"
 #include "Engine/Scene/AnimatedSceneAdapter.hpp"
@@ -596,21 +596,6 @@ namespace {
         context.expect(movedJointCount > 0, "KayKit clip 0 moves imported joints");
     }
 
-    void cachePayloadCanCommitThroughAdapter(TestContext& context)
-    {
-        TestRenderer::reset();
-        AdapterFixture fixture;
-        Engine::AnimatedModelCachePayload payload;
-        payload.scene = importSkinnedFixture();
-        Engine::SceneAnimatedAdapterResult result =
-            fixture.adapter.adaptImportedScene(payload.scene, skinnedFixturePath(), fixture.cache, testSettings());
-
-        context.expect(result.success, "imported scene carried by animated cache payload can adapt");
-        context.expect(Engine::isValid(result.animator), "payload adaptation returns animator handle");
-
-        fixture.adapter.releaseResources(result.resources, fixture.cache);
-    }
-
     void resourceReleaseIsDeterministic(TestContext& context)
     {
         TestRenderer::reset();
@@ -651,7 +636,6 @@ int main()
         {"InvalidReferencesAreDiagnosed", invalidReferencesAreDiagnosed},
         {"StaticSceneRejectedCleanly", staticSceneRejectedCleanly},
         {"OptionalKayKitClipMovesJoints", optionalKayKitClipMovesJoints},
-        {"CachePayloadCanCommitThroughAdapter", cachePayloadCanCommitThroughAdapter},
         {"ResourceReleaseIsDeterministic", resourceReleaseIsDeterministic},
     };
 

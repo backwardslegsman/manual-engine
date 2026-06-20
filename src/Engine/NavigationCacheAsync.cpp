@@ -61,26 +61,6 @@ namespace Engine {
         });
     }
 
-    AsyncJobHandle enqueueNavigationGraphCacheRead(
-        AsyncWorkQueue& queue,
-        NavigationCacheSettings settings,
-        NavigationCacheManifest manifest,
-        ChunkCoord centerChunk)
-    {
-        return queue.submit("navigation graph cache read", [settings = std::move(settings), manifest = std::move(manifest), centerChunk](std::stop_token stopToken) -> std::any {
-            NavigationGraphCacheReadJobResult result;
-            if (stopToken.stop_requested()) {
-                result.result.kind = NavigationCacheKind::Graph;
-                result.result.coord = centerChunk;
-                result.result.status = NavigationCacheOperationStatus::Cancelled;
-                result.result.message = "Navigation graph cache read cancelled.";
-                return result;
-            }
-            result.result = NavigationCache::readGraphCache(settings, manifest, centerChunk);
-            return result;
-        });
-    }
-
     AsyncJobHandle enqueueNavigationTileCacheWrite(
         AsyncWorkQueue& queue,
         NavigationCacheSettings settings,
@@ -113,19 +93,4 @@ namespace Engine {
         });
     }
 
-    AsyncJobHandle enqueueNavigationGraphCacheWrite(
-        AsyncWorkQueue& queue,
-        NavigationCacheSettings settings,
-        NavigationCacheManifest manifest,
-        WorldNavigationGraphCacheData graph)
-    {
-        return queue.submit("navigation graph cache write", [settings = std::move(settings), manifest = std::move(manifest), graph = std::move(graph)](std::stop_token stopToken) -> std::any {
-            if (stopToken.stop_requested()) {
-                return cancelledWriteResult(NavigationCacheKind::Graph, graph.centerChunk);
-            }
-            NavigationCacheWriteJobResult result;
-            result.result = NavigationCache::writeGraphCache(settings, manifest, graph);
-            return result;
-        });
-    }
 }

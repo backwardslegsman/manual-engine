@@ -93,24 +93,22 @@ namespace {
         return chunk;
     }
 
-    Engine::TerrainRenderMeshBuildInput legacyInput()
+    std::optional<Engine::TerrainRenderLodBuildRequest> datasetRequest(
+        std::string_view cacheName,
+        uint32_t renderResolution = 5,
+        float skirtDepth = 0.5f,
+        Engine::TerrainDerivedCachePolicy policy = Engine::TerrainDerivedCachePolicy::ReadOnly)
     {
-        Engine::TerrainRenderMeshBuildInput input;
-        input.tile = {4};
-        input.coord = {0, 0};
-        input.generation = 12;
-        input.lodIndex = 1;
-        input.renderResolution = 5;
-        input.origin = {0.0f, 0.0f, 0.0f};
-        input.size = 4.0f;
-        input.cpuResolution = 3;
-        input.heights = {
-            0.0f, 1.0f, 2.0f,
-            1.0f, 2.0f, 3.0f,
-            2.0f, 3.0f, 4.0f,
-        };
-        input.skirtDepth = 0.5f;
-        return input;
+        Engine::TerrainDataset dataset;
+        const Engine::TerrainSourceHandle source = dataset.registerSource(importedSourceDescriptor());
+        const Engine::TerrainChunkHandle chunk = dataset.loadImportedChunk(source, importedChunk());
+        Engine::TerrainLodMeshBuildSettings lod;
+        lod.lodIndex = 1;
+        lod.renderResolution = renderResolution;
+        lod.skirtDepth = skirtDepth;
+        Engine::TerrainDerivedCacheSettings settings = cacheSettings(cacheName);
+        settings.policy = policy;
+        return Engine::renderLodRequestFromDatasetChunk(dataset, chunk, lod, sourceIdentity(), 42, settings);
     }
 
     bool sameVertex(const Renderer::MeshVertex& lhs, const Renderer::MeshVertex& rhs)
@@ -142,8 +140,8 @@ namespace {
         lod.renderResolution = 5;
         lod.skirtDepth = 0.5f;
 
-        const auto firstRequest = Engine::renderLodRequestFromDatasetChunk(dataset, chunk, lod, sourceIdentity(), {7}, 42, cacheSettings("dataset"));
-        const auto secondRequest = Engine::renderLodRequestFromDatasetChunk(dataset, chunk, lod, sourceIdentity(), {7}, 42, cacheSettings("dataset"));
+        const auto firstRequest = Engine::renderLodRequestFromDatasetChunk(dataset, chunk, lod, sourceIdentity(), 42, cacheSettings("dataset"));
+        const auto secondRequest = Engine::renderLodRequestFromDatasetChunk(dataset, chunk, lod, sourceIdentity(), 42, cacheSettings("dataset"));
         ctx.expect(firstRequest.has_value() && secondRequest.has_value(), "dataset request was not built");
         if (!firstRequest || !secondRequest) {
             return;
@@ -158,28 +156,6 @@ namespace {
             "dataset render LOD first vertex was not deterministic");
     }
 
-    void legacyInputMatchesOldTerrainSystemBuild(TestContext& ctx)
-    {
-        const Engine::TerrainRenderMeshBuildInput input = legacyInput();
-        Engine::TerrainDerivedCacheSettings settings = cacheSettings("legacy_parity");
-        settings.policy = Engine::TerrainDerivedCachePolicy::Disabled;
-        const auto request = Engine::renderLodRequestFromTerrainSystemInput(input, sourceIdentity(), settings);
-        ctx.expect(request.has_value(), "legacy request was not built");
-        if (!request) {
-            return;
-        }
-
-        const Engine::TerrainRenderMeshBuildResult oldBuild = Engine::TerrainSystem::buildRenderMeshData(input);
-        const Engine::TerrainRenderLodBuildResult adapter = Engine::buildTerrainRenderLod(*request);
-        ctx.expect(oldBuild.success && adapter.success, "old or adapter build failed");
-        ctx.expect(oldBuild.mesh.vertices.size() == adapter.build.mesh.vertices.size(), "adapter vertex count differed from old build");
-        ctx.expect(oldBuild.mesh.indices == adapter.build.mesh.indices, "adapter indices differed from old build");
-        if (!oldBuild.mesh.vertices.empty() && !adapter.build.mesh.vertices.empty()) {
-            ctx.expect(sameVertex(oldBuild.mesh.vertices.front(), adapter.build.mesh.vertices.front()), "adapter first vertex differed from old build");
-            ctx.expect(sameVertex(oldBuild.mesh.vertices.back(), adapter.build.mesh.vertices.back()), "adapter last vertex differed from old build");
-        }
-    }
-
     void importedHeightmapChunkRendersWithExpectedBounds(TestContext& ctx)
     {
         Engine::TerrainDataset dataset;
@@ -188,7 +164,7 @@ namespace {
         Engine::TerrainLodMeshBuildSettings lod;
         lod.renderResolution = 5;
         lod.skirtDepth = 1.0f;
-        const auto request = Engine::renderLodRequestFromDatasetChunk(dataset, chunk, lod, sourceIdentity(), {1}, 1, cacheSettings("bounds"));
+        const auto request = Engine::renderLodRequestFromDatasetChunk(dataset, chunk, lod, sourceIdentity(), 1, cacheSettings("bounds"));
         ctx.expect(request.has_value(), "heightmap request was not built");
         if (!request) {
             return;
@@ -202,12 +178,7 @@ namespace {
 
     void lodResolutionAndSkirtsProduceExpectedCounts(TestContext& ctx)
     {
-        Engine::TerrainRenderMeshBuildInput input = legacyInput();
-        input.renderResolution = 3;
-        input.skirtDepth = 1.0f;
-        Engine::TerrainDerivedCacheSettings settings = cacheSettings("counts");
-        settings.policy = Engine::TerrainDerivedCachePolicy::Disabled;
-        const auto request = Engine::renderLodRequestFromTerrainSystemInput(input, sourceIdentity(), settings);
+        const auto request = datasetRequest("counts", 3, 1.0f, Engine::TerrainDerivedCachePolicy::Disabled);
         ctx.expect(request.has_value(), "count request was not built");
         if (!request) {
             return;
@@ -220,10 +191,9 @@ namespace {
 
     void cacheHitReturnsPayloadWithoutRegeneration(TestContext& ctx)
     {
-        Engine::TerrainRenderMeshBuildInput input = legacyInput();
         Engine::TerrainDerivedCacheSettings settings = cacheSettings("cache_hit");
         clearRoot(settings.rootPath);
-        const auto request = Engine::renderLodRequestFromTerrainSystemInput(input, sourceIdentity(), settings);
+        const auto request = datasetRequest("cache_hit");
         ctx.expect(request.has_value(), "cache hit request was not built");
         if (!request) {
             return;
@@ -249,10 +219,9 @@ namespace {
 
     void cacheMissStaleCorruptFallbackGenerates(TestContext& ctx)
     {
-        const Engine::TerrainRenderMeshBuildInput input = legacyInput();
         Engine::TerrainDerivedCacheSettings missSettings = cacheSettings("cache_miss");
         clearRoot(missSettings.rootPath);
-        const auto missRequest = Engine::renderLodRequestFromTerrainSystemInput(input, sourceIdentity(), missSettings);
+        const auto missRequest = datasetRequest("cache_miss");
         ctx.expect(missRequest.has_value(), "miss request was not built");
         if (missRequest) {
             const Engine::TerrainRenderLodBuildResult miss = Engine::buildTerrainRenderLod(*missRequest);
@@ -262,7 +231,7 @@ namespace {
 
         Engine::TerrainDerivedCacheSettings staleSettings = cacheSettings("cache_stale");
         clearRoot(staleSettings.rootPath);
-        const auto staleRequest = Engine::renderLodRequestFromTerrainSystemInput(input, sourceIdentity(), staleSettings);
+        const auto staleRequest = datasetRequest("cache_stale");
         ctx.expect(staleRequest.has_value(), "stale request was not built");
         if (staleRequest) {
             Engine::TerrainLodMeshBuildSettings lod;
@@ -285,7 +254,7 @@ namespace {
 
         Engine::TerrainDerivedCacheSettings corruptSettings = cacheSettings("cache_corrupt");
         clearRoot(corruptSettings.rootPath);
-        const auto corruptRequest = Engine::renderLodRequestFromTerrainSystemInput(input, sourceIdentity(), corruptSettings);
+        const auto corruptRequest = datasetRequest("cache_corrupt");
         ctx.expect(corruptRequest.has_value(), "corrupt request was not built");
         if (corruptRequest) {
             Engine::TerrainLodMeshBuildSettings lod;
@@ -307,29 +276,6 @@ namespace {
         }
     }
 
-    void staleTileGenerationRejectedByTerrainSystemCommit(TestContext& ctx)
-    {
-        Engine::TerrainSettings settings;
-        settings.createRendererResources = true;
-        Engine::TerrainSystem terrain(settings);
-        const Engine::TerrainTileHandle tile = terrain.createTile({0, 0}, {});
-        const std::optional<Engine::TerrainRenderMeshBuildInput> input = terrain.renderMeshBuildInput(tile, 1);
-        ctx.expect(input.has_value(), "terrain system did not create LOD input");
-        if (!input) {
-            return;
-        }
-        Engine::TerrainDerivedCacheSettings cache = cacheSettings("stale_commit");
-        cache.policy = Engine::TerrainDerivedCachePolicy::Disabled;
-        const auto request = Engine::renderLodRequestFromTerrainSystemInput(input.value(), Engine::legacyProceduralTerrainRenderLodIdentity(settings), cache);
-        ctx.expect(request.has_value(), "stale commit request was not built");
-        if (!request) {
-            return;
-        }
-        Engine::TerrainRenderLodBuildResult build = Engine::buildTerrainRenderLod(*request);
-        ctx.expect(build.success, "stale commit build failed");
-        build.build.mesh.generation += 1;
-        ctx.expect(!terrain.commitRendererMesh(build.build.mesh), "terrain system accepted stale LOD generation");
-    }
 }
 
 int main()
@@ -337,12 +283,10 @@ int main()
     std::vector<TestFailure> failures;
     const std::vector<std::pair<std::string, void (*)(TestContext&)>> tests = {
         {"DatasetChunkBuildsDeterministicRendererMesh", datasetChunkBuildsDeterministicRendererMesh},
-        {"LegacyInputMatchesOldTerrainSystemBuild", legacyInputMatchesOldTerrainSystemBuild},
         {"ImportedHeightmapChunkRendersWithExpectedBounds", importedHeightmapChunkRendersWithExpectedBounds},
         {"LodResolutionAndSkirtsProduceExpectedCounts", lodResolutionAndSkirtsProduceExpectedCounts},
         {"CacheHitReturnsPayloadWithoutRegeneration", cacheHitReturnsPayloadWithoutRegeneration},
         {"CacheMissStaleCorruptFallbackGenerates", cacheMissStaleCorruptFallbackGenerates},
-        {"StaleTileGenerationRejectedByTerrainSystemCommit", staleTileGenerationRejectedByTerrainSystemCommit},
     };
 
     for (const auto& [name, test] : tests) {

@@ -7,7 +7,8 @@
 #include <vector>
 
 #include "Assets/Assimp/Importer.hpp"
-#include "Engine/AnimatedModel.hpp"
+#include "Engine/AnimationPose.hpp"
+#include "Engine/AnimatedModelPose.hpp"
 #include "Engine/AssetCache.hpp"
 #include "Engine/Scene/Scene.hpp"
 #include "Engine/Scene/SceneRenderBridge.hpp"

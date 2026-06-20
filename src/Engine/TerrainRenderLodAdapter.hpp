@@ -18,7 +18,6 @@ namespace Engine {
     };
 
     struct TerrainRenderLodBuildRequest {
-        TerrainTileHandle tile;
         TerrainSourceChunkId chunkId;
         ChunkCoord coord;
         uint64_t generation = 0;
@@ -54,18 +53,11 @@ namespace Engine {
         TerrainRenderLodBuildDiagnostics diagnostics;
     };
 
-    [[nodiscard]] TerrainRenderLodSourceIdentity legacyProceduralTerrainRenderLodIdentity(
-        const TerrainSettings& settings);
-    [[nodiscard]] std::optional<TerrainRenderLodBuildRequest> renderLodRequestFromTerrainSystemInput(
-        const TerrainRenderMeshBuildInput& input,
-        TerrainRenderLodSourceIdentity identity,
-        TerrainDerivedCacheSettings cacheSettings = {});
     [[nodiscard]] std::optional<TerrainRenderLodBuildRequest> renderLodRequestFromDatasetChunk(
         const TerrainDataset& dataset,
         TerrainChunkHandle chunk,
         const TerrainLodMeshBuildSettings& lod,
         TerrainRenderLodSourceIdentity identity,
-        TerrainTileHandle tile = {},
         uint64_t generation = 0,
         TerrainDerivedCacheSettings cacheSettings = {});
 

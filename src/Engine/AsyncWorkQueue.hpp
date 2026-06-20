@@ -29,8 +29,8 @@ namespace Engine {
     };
 
     // Small worker queue for CPU-only generated data. Jobs must not touch live
-    // World, Renderer/bgfx, TerrainSystem storage, NavigationSystem state, or
-    // SpatialRegistry. Return plain data and commit it on the main thread.
+    // Scene, Renderer/bgfx, TerrainDataset, NavigationSystem, or physics state.
+    // Return plain data and commit it on the main thread.
     class AsyncWorkQueue {
     public:
         using Job = std::function<std::any(std::stop_token)>;

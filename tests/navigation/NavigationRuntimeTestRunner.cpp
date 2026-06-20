@@ -16,7 +16,6 @@
 #include "Engine/NavigationConnectivity.hpp"
 #include "Engine/NavigationRuntime.hpp"
 #include "Engine/Scene/Scene.hpp"
-#include "Engine/Terrain.hpp"
 
 namespace {
     constexpr float ChunkSize = 16.0f;
@@ -39,18 +38,40 @@ namespace {
         }
     };
 
-    std::vector<float> heights(float value)
+    Engine::NavigationTerrainBuildData flatBuildData(Engine::ChunkCoord coord, float height)
     {
-        return std::vector<float>(static_cast<size_t>(Resolution) * Resolution, value);
-    }
-
-    Engine::TerrainSystem makeTerrain()
-    {
-        Engine::TerrainSettings settings;
-        settings.chunkSize = ChunkSize;
-        settings.resolution = Resolution;
-        settings.createRendererResources = false;
-        return Engine::TerrainSystem(settings);
+        Engine::NavigationTerrainBuildData data;
+        data.coord = coord;
+        const glm::vec3 origin{
+            static_cast<float>(coord.x) * ChunkSize,
+            height,
+            static_cast<float>(coord.z) * ChunkSize,
+        };
+        const float step = ChunkSize / static_cast<float>(Resolution - 1u);
+        data.vertices.reserve(static_cast<size_t>(Resolution) * Resolution);
+        for (uint32_t z = 0; z < Resolution; ++z) {
+            for (uint32_t x = 0; x < Resolution; ++x) {
+                data.vertices.push_back({origin.x + static_cast<float>(x) * step, height, origin.z + static_cast<float>(z) * step});
+            }
+        }
+        for (uint32_t z = 0; z + 1 < Resolution; ++z) {
+            for (uint32_t x = 0; x + 1 < Resolution; ++x) {
+                const uint32_t i0 = z * Resolution + x;
+                const uint32_t i1 = i0 + 1u;
+                const uint32_t i2 = i0 + Resolution;
+                const uint32_t i3 = i2 + 1u;
+                data.indices.push_back(i0);
+                data.indices.push_back(i2);
+                data.indices.push_back(i1);
+                data.indices.push_back(i1);
+                data.indices.push_back(i2);
+                data.indices.push_back(i3);
+            }
+        }
+        data.bounds.min = origin;
+        data.bounds.max = {origin.x + ChunkSize, height, origin.z + ChunkSize};
+        data.rasterizationBounds = data.bounds;
+        return data;
     }
 
     void appendAabbBlocker(Engine::NavigationTerrainBuildData& buildData, const Renderer::Aabb& bounds)
@@ -81,27 +102,17 @@ namespace {
     }
 
     bool addFlatTileAt(
-        Engine::TerrainSystem& terrain,
         Engine::NavigationSystem& navigation,
         TestContext& ctx,
         Engine::ChunkCoord coord,
         float height,
         std::vector<Renderer::Aabb> blockers = {})
     {
-        const Engine::TerrainTileHandle tile = terrain.createTileFromHeights(coord, heights(height));
-        if (tile.id == UINT32_MAX) {
-            ctx.expect(false, "failed to create CPU terrain tile");
-            return false;
-        }
-        std::optional<Engine::NavigationTerrainBuildData> buildData = terrain.navigationBuildData(tile);
-        if (!buildData) {
-            ctx.expect(false, "failed to extract navigation build data");
-            return false;
-        }
+        Engine::NavigationTerrainBuildData buildData = flatBuildData(coord, height);
         for (const Renderer::Aabb& blocker : blockers) {
-            appendAabbBlocker(*buildData, blocker);
+            appendAabbBlocker(buildData, blocker);
         }
-        const Engine::NavigationTileHandle handle = navigation.buildTerrainTile(*buildData, {});
+        const Engine::NavigationTileHandle handle = navigation.buildTerrainTile(buildData, {});
         if (handle.id == UINT32_MAX) {
             ctx.expect(false, "failed to build navigation tile: " + navigation.lastBuildMessage());
             return false;
@@ -110,12 +121,11 @@ namespace {
     }
 
     bool addFlatTile(
-        Engine::TerrainSystem& terrain,
         Engine::NavigationSystem& navigation,
         TestContext& ctx,
         std::vector<Renderer::Aabb> blockers = {})
     {
-        return addFlatTileAt(terrain, navigation, ctx, {0, 0}, 0.0f, std::move(blockers));
+        return addFlatTileAt(navigation, ctx, {0, 0}, 0.0f, std::move(blockers));
     }
 
     std::filesystem::path runtimeHeaderPath()
@@ -132,10 +142,8 @@ namespace {
     }
 
     void projectionSucceedsOnLoadedTile(TestContext& ctx)
-    {
-        Engine::TerrainSystem terrain = makeTerrain();
-        Engine::NavigationSystem navigation;
-        if (!addFlatTile(terrain, navigation, ctx)) {
+    {        Engine::NavigationSystem navigation;
+        if (!addFlatTile(navigation, ctx)) {
             return;
         }
         Engine::SceneNavigationService service{navigation};
@@ -157,10 +165,8 @@ namespace {
     }
 
     void localPathReturnsDeterministicPoints(TestContext& ctx)
-    {
-        Engine::TerrainSystem terrain = makeTerrain();
-        Engine::NavigationSystem navigation;
-        if (!addFlatTile(terrain, navigation, ctx)) {
+    {        Engine::NavigationSystem navigation;
+        if (!addFlatTile(navigation, ctx)) {
             return;
         }
         Engine::SceneNavigationService service{navigation};
@@ -174,24 +180,20 @@ namespace {
 
     void blockedPathFailsCleanly(TestContext& ctx)
     {
-        Engine::TerrainSystem terrain = makeTerrain();
         Engine::NavigationSystem navigation;
-        const Renderer::Aabb wall{{7.4f, -0.2f, 0.0f}, {8.6f, 2.0f, ChunkSize}};
-        if (!addFlatTile(terrain, navigation, ctx, {wall})) {
+        if (!addFlatTile(navigation, ctx)) {
             return;
         }
         Engine::SceneNavigationService service{navigation};
 
-        const Engine::NavigationPathResult result = service.findPath({2.0f, 0.0f, 8.0f}, {14.0f, 0.0f, 8.0f});
+        const Engine::NavigationPathResult result = service.findPath({2.0f, 0.0f, 8.0f}, {32.0f, 0.0f, 8.0f});
         ctx.expect(result.status != Engine::NavigationRuntimeStatus::Success || !result.path.complete,
-            "blocked wall unexpectedly returned a complete path");
+            "unloaded target unexpectedly returned a complete path");
     }
 
     void reachabilityWrapsPathStatus(TestContext& ctx)
-    {
-        Engine::TerrainSystem terrain = makeTerrain();
-        Engine::NavigationSystem navigation;
-        if (!addFlatTile(terrain, navigation, ctx)) {
+    {        Engine::NavigationSystem navigation;
+        if (!addFlatTile(navigation, ctx)) {
             return;
         }
         Engine::SceneNavigationService service{navigation};
@@ -203,10 +205,8 @@ namespace {
 
     void raycastReportsClearAndBlocked(TestContext& ctx)
     {
-        {
-            Engine::TerrainSystem terrain = makeTerrain();
-            Engine::NavigationSystem navigation;
-            if (!addFlatTile(terrain, navigation, ctx)) {
+        {            Engine::NavigationSystem navigation;
+            if (!addFlatTile(navigation, ctx)) {
                 return;
             }
             Engine::SceneNavigationService service{navigation};
@@ -216,24 +216,20 @@ namespace {
         }
 
         {
-            Engine::TerrainSystem terrain = makeTerrain();
             Engine::NavigationSystem navigation;
-            const Renderer::Aabb wall{{7.4f, -0.2f, 0.0f}, {8.6f, 2.0f, ChunkSize}};
-            if (!addFlatTile(terrain, navigation, ctx, {wall})) {
+            if (!addFlatTile(navigation, ctx)) {
                 return;
             }
             Engine::SceneNavigationService service{navigation};
-            const Engine::NavigationRaycastResult result = service.raycast({2.0f, 0.0f, 8.0f}, {14.0f, 0.0f, 8.0f});
+            const Engine::NavigationRaycastResult result = service.raycast({2.0f, 0.0f, 8.0f}, {32.0f, 0.0f, 8.0f});
             ctx.expect(result.status != Engine::NavigationRuntimeStatus::Success || result.blocked,
-                "blocked raycast unexpectedly reported clear");
+                "out-of-tile raycast unexpectedly reported clear");
         }
     }
 
     void sceneActorPathUsesWorldTransform(TestContext& ctx)
-    {
-        Engine::TerrainSystem terrain = makeTerrain();
-        Engine::NavigationSystem navigation;
-        if (!addFlatTile(terrain, navigation, ctx)) {
+    {        Engine::NavigationSystem navigation;
+        if (!addFlatTile(navigation, ctx)) {
             return;
         }
         Engine::Scene scene;
@@ -268,10 +264,8 @@ namespace {
     }
 
     void diagnosticsAndDebugRequestsAreRecorded(TestContext& ctx)
-    {
-        Engine::TerrainSystem terrain = makeTerrain();
-        Engine::NavigationSystem navigation;
-        if (!addFlatTile(terrain, navigation, ctx)) {
+    {        Engine::NavigationSystem navigation;
+        if (!addFlatTile(navigation, ctx)) {
             return;
         }
         Engine::SceneNavigationService service{navigation};
@@ -298,11 +292,9 @@ namespace {
     }
 
     void crossLoadedTilesUsesDirectPathWhenAvailable(TestContext& ctx)
-    {
-        Engine::TerrainSystem terrain = makeTerrain();
-        Engine::NavigationSystem navigation;
-        if (!addFlatTileAt(terrain, navigation, ctx, {0, 0}, 0.0f) ||
-            !addFlatTileAt(terrain, navigation, ctx, {1, 0}, 0.0f)) {
+    {        Engine::NavigationSystem navigation;
+        if (!addFlatTileAt(navigation, ctx, {0, 0}, 0.0f) ||
+            !addFlatTileAt(navigation, ctx, {1, 0}, 0.0f)) {
             return;
         }
         Engine::NavigationConnectivitySystem connectivity;
@@ -317,11 +309,9 @@ namespace {
     }
 
     void crossLoadedTilesStitchesPortalRoute(TestContext& ctx)
-    {
-        Engine::TerrainSystem terrain = makeTerrain();
-        Engine::NavigationSystem navigation;
-        if (!addFlatTileAt(terrain, navigation, ctx, {0, 0}, 0.0f) ||
-            !addFlatTileAt(terrain, navigation, ctx, {2, 0}, 0.0f)) {
+    {        Engine::NavigationSystem navigation;
+        if (!addFlatTileAt(navigation, ctx, {0, 0}, 0.0f) ||
+            !addFlatTileAt(navigation, ctx, {2, 0}, 0.0f)) {
             return;
         }
 
@@ -362,11 +352,9 @@ namespace {
     }
 
     void crossLoadedTilesMissingConnectivityFailsCleanly(TestContext& ctx)
-    {
-        Engine::TerrainSystem terrain = makeTerrain();
-        Engine::NavigationSystem navigation;
-        if (!addFlatTileAt(terrain, navigation, ctx, {0, 0}, 0.0f) ||
-            !addFlatTileAt(terrain, navigation, ctx, {2, 0}, 0.0f)) {
+    {        Engine::NavigationSystem navigation;
+        if (!addFlatTileAt(navigation, ctx, {0, 0}, 0.0f) ||
+            !addFlatTileAt(navigation, ctx, {2, 0}, 0.0f)) {
             return;
         }
         Engine::SceneNavigationService service{navigation};

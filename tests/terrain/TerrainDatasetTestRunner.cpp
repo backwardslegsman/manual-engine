@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "Engine/TerrainDataset.hpp"
-#include "Engine/TerrainDatasetCompatibility.hpp"
 
 namespace {
     struct TestFailure {
@@ -247,48 +246,6 @@ namespace {
         ctx.expect(dataset.diagnostics().invalidRequestCount >= 5, "invalid request diagnostics were not counted");
     }
 
-    void datasetChunkConvertsToGeneratedTerrainTileData(TestContext& ctx)
-    {
-        Engine::TerrainDataset dataset;
-        const Engine::TerrainSourceHandle source = dataset.registerSource(importedSourceDescriptor());
-        const Engine::TerrainChunkHandle chunk = dataset.loadImportedChunk(source, importedChunk({101}, {3, 4}, {6.0f, 0.0f, 8.0f}));
-        const std::optional<Engine::GeneratedTerrainTileData> generated = Engine::toGeneratedTerrainTileData(dataset, chunk);
-
-        ctx.expect(generated.has_value(), "dataset chunk did not convert to generated terrain data");
-        if (generated) {
-            ctx.expect(generated->coord == Engine::ChunkCoord{3, 4}, "generated terrain coord was wrong");
-            ctx.expect(near(generated->origin.x, 6.0f) && near(generated->origin.z, 8.0f), "generated terrain origin was wrong");
-            ctx.expect(generated->heights.size() == 9, "generated terrain heights were wrong");
-        }
-    }
-
-    void compatibilityTerrainSystemMatchesDatasetSampling(TestContext& ctx)
-    {
-        Engine::TerrainDataset dataset;
-        const Engine::TerrainSourceHandle source = dataset.registerSource(importedSourceDescriptor());
-        const Engine::TerrainChunkHandle chunk = dataset.loadImportedChunk(source, importedChunk({101}, {0, 0}, {0.0f, 0.0f, 0.0f}));
-        const std::optional<Engine::GeneratedTerrainTileData> generated = Engine::toGeneratedTerrainTileData(dataset, chunk);
-        ctx.expect(generated.has_value(), "generated terrain compatibility data was missing");
-        if (!generated) {
-            return;
-        }
-
-        Engine::TerrainSettings settings;
-        settings.chunkSize = generated->size;
-        settings.resolution = generated->resolution;
-        settings.createRendererResources = false;
-        Engine::TerrainSystem terrain(settings);
-        const Engine::TerrainTileHandle tile = terrain.createTileFromHeights(generated->coord, generated->heights);
-        ctx.expect(tile.id != UINT32_MAX, "legacy terrain tile creation failed");
-
-        const std::optional<float> datasetHeight = dataset.sampleHeight(1.0f, 1.0f);
-        const std::optional<float> terrainHeight = terrain.sampleHeight(1.0f, 1.0f);
-        ctx.expect(datasetHeight.has_value() && terrainHeight.has_value(), "compatibility sample was missing");
-        if (datasetHeight && terrainHeight) {
-            ctx.expect(near(*datasetHeight, *terrainHeight), "legacy TerrainSystem sample did not match dataset sample");
-        }
-    }
-
     void noRendererDependencyForDatasetTests(TestContext& ctx)
     {
         Engine::TerrainDataset dataset;
@@ -314,8 +271,6 @@ int main()
         {"ProceduralSourceLoadsChunkThroughSameQueryPath", proceduralSourceLoadsChunkThroughSameQueryPath},
         {"ImportedAndProceduralChunksShareRuntimeQueries", importedAndProceduralChunksShareRuntimeQueries},
         {"InvalidInputsAreNoOps", invalidInputsAreNoOps},
-        {"DatasetChunkConvertsToGeneratedTerrainTileData", datasetChunkConvertsToGeneratedTerrainTileData},
-        {"CompatibilityTerrainSystemMatchesDatasetSampling", compatibilityTerrainSystemMatchesDatasetSampling},
         {"NoRendererDependencyForDatasetTests", noRendererDependencyForDatasetTests},
     };
 

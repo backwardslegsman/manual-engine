@@ -12,14 +12,14 @@
 - Keep first-pass actors kinematic and terrain-grounded. Actor controllers should consume semantic input events and write through `World`, not bypass world ownership.
 - Keep actor selection and group-command helpers deterministic and renderer-independent. App may choose targets, but reusable formation and command rules belong here.
 - For open-world features, start with explicit chunk coordinates, load/unload calls, and simple distance-based policies.
-- Keep chunk streaming grid-based and explicit. Expensive generation may run through `AsyncWorkQueue`, but loaded chunk membership and all live `World`/`Renderer`/`TerrainSystem`/`NavigationSystem` mutation must commit on the main thread.
+- Keep open-world streaming grid-based and explicit. Expensive generation may run through `AsyncWorkQueue`, but live `Scene`, renderer, terrain dataset, navigation, and physics mutation must commit on the main thread.
 - Keep procedural chunk content behind small descriptor/config interfaces. App code may translate descriptors into renderer/world resources, but placement rules should not live inline in the sample loop.
 - Keep terrain as deterministic chunk-aligned heightfield tiles until there is a concrete need for authored heightmaps, terrain editing, LOD, or material splat blending.
-- Keep terrain LOD as a renderer-mesh detail owned by `TerrainSystem`; gameplay height queries must continue to use CPU terrain data, not the active render LOD.
+- Keep terrain LOD as a renderer-mesh detail built from `TerrainDataset` CPU chunks; gameplay height queries must continue to use CPU terrain data, not the active render LOD.
 - Use simple skirts as the first terrain LOD seam-hiding strategy; defer stitching or geomorphing until visual cracks become a concrete blocker.
 - Route reusable static meshes and shared textures through `AssetCache`; keep transient terrain tiles owned by the chunk/terrain systems.
 - Keep first-pass persistence high-level: save player/camera state, seed/settings, persistent object overrides, and removed object records while regenerating terrain and baseline procedural content.
-- Compare persistent objects, removed procedural props, quests, and interactions by stable `ObjectId`, never by transient `WorldObjectHandle`.
+- Compare persistent scene data by `SceneObjectId`, `AssetId`, or durable terrain chunk identity, never by transient runtime handles.
 - Keep biome, procedural content, terrain, and persistence rules deterministic from world coordinates, chunk coordinates, stable object IDs, and saved settings.
 - Debug/editor tools should mutate durable world state through `WorldObjectOverrides`, not by writing ad hoc serialized scene data.
 - Keep Recast/Detour private to `Navigation.cpp`; public navigation headers should expose plain Engine types and status values only.

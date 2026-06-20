@@ -6,28 +6,27 @@ ManualEngine is intended to grow into a simple open world game engine. Keep chan
 
 - Prefer small subsystems with clear ownership over broad framework code.
 - Public headers are the contract. Keep them documented, stable, and free of implementation storage details.
-- Use handle-based APIs for renderer-owned GPU resources and future world-owned entities.
+- Use handle-based APIs for renderer-owned GPU resources and transient scene/terrain/streaming runtime records.
 - Keep `src/App` as composition/sample code only. Engine behavior belongs under `src/Engine`, rendering under `src/Renderer`, and import/asset decoding under `src/Assets`.
 - Use Dear ImGui for debug display and runtime debug knobs. Keep debug UI wiring in renderer/app composition code, not buried inside engine simulation systems.
-- Do not introduce an ECS, task graph, scripting layer, editor layer, or streaming system until a simpler interface proves insufficient.
+- Do not introduce an ECS, task graph, or editor layer without a focused roadmap. The active runtime already includes scene scripting and open-world streaming; extend those systems rather than adding parallel frameworks.
 - Keep `docs/engine_overview.md` current when subsystem ownership or data flow changes.
 - Consult `docs/system_contracts.md` before changing cross-system behavior, and update it when adding features, public interface contracts, or initialization dependencies.
 - Consult `docs/system_inboxes.md` before adding message-driven cross-system communication; prefer receiver-owned typed inboxes and explicit publish-only sinks over global bus registries.
 - Consult `docs/authored_scene_roadmap.md` before adding glTF/PBR authored scene loading, material, texture, lighting, or scene streaming work.
 - Consult `docs/scene_component_roadmap.md` before adding scene, actor/entity, component, transform hierarchy, asset registry, physics, scripting, serialization, or cross-runtime integration work.
+- Consult `docs/terrain_rework_roadmap.md` and `docs/open_world_streaming_roadmap.md` before changing terrain ownership, heightmap import, derived cache payloads, baked nav/physics data, or streaming residency behavior.
 - After each feature/refactor pass, append a short dated entry to `docs/work_log.md` describing what changed and why.
 
 ## Open World Direction
 
-Add systems in this order unless a task says otherwise:
+The active architecture is modern scene-backed open-world streaming:
 
-1. Engine loop and world ownership: fixed timestep hooks, scene/world lifetime, and clean startup/shutdown.
-2. Camera and input: free camera, player-style camera, and SDL input state abstraction.
-3. Spatial organization: simple world chunks/sectors with explicit load/unload APIs.
-4. Asset cache: renderer/asset resource reuse, reference lifetime, and central path resolution.
-5. Terrain: heightfield or mesh-tile terrain with material assignment.
-6. Visibility: frustum culling and distance culling before any advanced occlusion.
-7. Persistence: lightweight world description files only after runtime APIs are stable.
+1. `Scene` owns actors/components, transform hierarchy, lifecycle, and scheduler ordering.
+2. `TerrainDataset` owns CPU terrain source/chunk records; terrain render/nav/physics/material/cache/serialization outputs are explicit adapters.
+3. `OpenWorldStreamingRuntime` owns residency planning, async cache/generation queues, and budgeted live promotion/demotion callbacks.
+4. `ScenePhysicsWorld`, `SceneNavigationService`, `NavigationConnectivitySystem`, and `SceneCharacterMovementSystem` are the gameplay runtime path.
+5. Legacy procedural world, legacy terrain owner, legacy authored scene owner, and legacy animated model owner have been removed. Do not add compatibility branches for them.
 
 ## Code Style
 

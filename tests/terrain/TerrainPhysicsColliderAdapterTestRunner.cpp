@@ -93,46 +93,22 @@ namespace {
         return chunk;
     }
 
-    Engine::GeneratedTerrainTileData generatedTile()
+    std::optional<Engine::TerrainPhysicsColliderBuildRequest> importedRequest(uint32_t colliderResolution)
     {
-        Engine::GeneratedTerrainTileData tile;
-        tile.coord = {0, 0};
-        tile.origin = {0.0f, 0.0f, 0.0f};
-        tile.size = 4.0f;
-        tile.resolution = 3;
-        tile.heights = {
-            0.0f, 1.0f, 2.0f,
-            1.0f, 2.0f, 3.0f,
-            2.0f, 3.0f, 4.0f,
-        };
-        return tile;
-    }
-
-    Engine::GeneratedTerrainTileData flatGeneratedTile()
-    {
-        Engine::GeneratedTerrainTileData tile;
-        tile.coord = {0, 0};
-        tile.origin = {0.0f, 0.0f, 0.0f};
-        tile.size = 4.0f;
-        tile.resolution = 3;
-        tile.heights.assign(9, 0.0f);
-        return tile;
-    }
-
-    Engine::TerrainSettings terrainSettings()
-    {
-        Engine::TerrainSettings settings;
-        settings.createRendererResources = false;
-        settings.chunkSize = 4.0f;
-        settings.resolution = 3;
-        settings.navigationResolution = 5;
-        settings.heightScale = 1.0f;
-        return settings;
+        Engine::TerrainDataset dataset;
+        const Engine::TerrainSourceHandle source = dataset.registerSource(importedSourceDescriptor());
+        const Engine::TerrainChunkHandle chunk = dataset.loadImportedChunk(source, importedChunk());
+        return Engine::terrainPhysicsColliderRequestFromDatasetChunk(dataset, chunk, colliderResolution, identity());
     }
 
     Engine::TerrainPhysicsColliderPayload flatPayload(TestContext& ctx)
     {
-        const auto request = Engine::terrainPhysicsColliderRequestFromGeneratedTile(flatGeneratedTile(), 5, identity());
+        Engine::TerrainDataset dataset;
+        Engine::TerrainImportedChunk flat = importedChunk();
+        flat.heights.assign(9, 0.0f);
+        const Engine::TerrainSourceHandle source = dataset.registerSource(importedSourceDescriptor());
+        const Engine::TerrainChunkHandle chunk = dataset.loadImportedChunk(source, flat);
+        const auto request = Engine::terrainPhysicsColliderRequestFromDatasetChunk(dataset, chunk, 5, identity());
         ctx.expect(request.has_value(), "flat collider request was not built");
         if (!request) {
             return {};
@@ -187,33 +163,10 @@ namespace {
         }
     }
 
-    void legacyTerrainTileBuildsCollider(TestContext& ctx)
-    {
-        Engine::TerrainSystem terrain(terrainSettings());
-        const Engine::TerrainTileHandle tile = terrain.createTileFromHeights({0, 0}, importedChunk().heights);
-        const auto request = Engine::terrainPhysicsColliderRequestFromTerrainSystemTile(
-            terrain,
-            tile,
-            5,
-            Engine::legacyProceduralTerrainPhysicsIdentity(terrain.settings()));
-        ctx.expect(request.has_value(), "legacy terrain physics request was not built");
-        if (!request) {
-            return;
-        }
-
-        const Engine::TerrainPhysicsColliderBuildResult result = Engine::buildTerrainPhysicsCollider(*request);
-        ctx.expect(result.success && result.payload.has_value(), "legacy terrain physics build failed");
-        if (result.payload) {
-            ctx.expect(result.payload->vertices.size() == 25, "legacy terrain collider vertex count was wrong");
-            ctx.expect(result.payload->indices.size() == 96, "legacy terrain collider index count was wrong");
-        }
-    }
-
     void colliderResolutionControlsGeometry(TestContext& ctx)
     {
-        const Engine::GeneratedTerrainTileData generated = generatedTile();
-        const auto fullRequest = Engine::terrainPhysicsColliderRequestFromGeneratedTile(generated, 5, identity());
-        const auto reducedRequest = Engine::terrainPhysicsColliderRequestFromGeneratedTile(generated, 3, identity());
+        const auto fullRequest = importedRequest(5);
+        const auto reducedRequest = importedRequest(3);
         ctx.expect(fullRequest.has_value() && reducedRequest.has_value(), "resolution requests were not built");
         if (!fullRequest || !reducedRequest) {
             return;
@@ -235,15 +188,20 @@ namespace {
         const auto staleRequest = Engine::terrainPhysicsColliderRequestFromDatasetChunk(dataset, {}, 5, identity());
         ctx.expect(!staleRequest.has_value(), "default dataset chunk unexpectedly built request");
 
-        Engine::GeneratedTerrainTileData malformed = generatedTile();
+        Engine::TerrainDataset malformedDataset;
+        const Engine::TerrainSourceHandle malformedSource = malformedDataset.registerSource(importedSourceDescriptor());
+        Engine::TerrainImportedChunk malformed = importedChunk();
         malformed.heights.pop_back();
-        ctx.expect(!Engine::terrainPhysicsColliderRequestFromGeneratedTile(malformed, 5, identity()).has_value(),
-            "malformed generated tile unexpectedly built request");
+        ctx.expect(!Engine::isValid(malformedDataset.loadImportedChunk(malformedSource, malformed)),
+            "malformed imported chunk unexpectedly loaded");
 
-        Engine::GeneratedTerrainTileData nonFinite = generatedTile();
+        Engine::TerrainDataset nonFiniteDataset;
+        const Engine::TerrainSourceHandle nonFiniteSource = nonFiniteDataset.registerSource(importedSourceDescriptor());
+        Engine::TerrainImportedChunk nonFinite = importedChunk();
         nonFinite.heights[4] = std::numeric_limits<float>::quiet_NaN();
-        ctx.expect(!Engine::terrainPhysicsColliderRequestFromGeneratedTile(nonFinite, 5, identity()).has_value(),
-            "non-finite generated tile unexpectedly built request");
+        const Engine::TerrainChunkHandle nonFiniteChunk = nonFiniteDataset.loadImportedChunk(nonFiniteSource, nonFinite);
+        ctx.expect(!Engine::terrainPhysicsColliderRequestFromDatasetChunk(nonFiniteDataset, nonFiniteChunk, 5, identity()).has_value(),
+            "non-finite imported chunk unexpectedly built request");
 
         Engine::TerrainPhysicsColliderBuildRequest request;
         request.chunkId = {{1201}, {0, 0}};
@@ -368,7 +326,6 @@ int main()
     const std::vector<std::pair<std::string, void (*)(TestContext&)>> tests = {
         {"DatasetImportedChunkBuildsDeterministicCollider", datasetImportedChunkBuildsDeterministicCollider},
         {"DatasetProceduralChunkUsesSameAdapterPath", datasetProceduralChunkUsesSameAdapterPath},
-        {"LegacyTerrainTileBuildsCollider", legacyTerrainTileBuildsCollider},
         {"ColliderResolutionControlsGeometry", colliderResolutionControlsGeometry},
         {"InvalidInputsFailCleanly", invalidInputsFailCleanly},
         {"CreateStaticColliderAndQueriesHitTerrain", createStaticColliderAndQueriesHitTerrain},

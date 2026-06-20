@@ -4,7 +4,7 @@
 #include <vector>
 
 #include "Assets/Assimp/Importer.hpp"
-#include "Engine/AnimatedModel.hpp"
+#include "Engine/AnimationPose.hpp"
 #include "Renderer/Scene.hpp"
 
 namespace Engine {

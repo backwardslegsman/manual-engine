@@ -172,6 +172,22 @@ namespace {
 }
 
 namespace Engine {
+    const glm::mat4* AnimatedSkeletonPose::jointModelTransform(uint32_t jointIndex) const
+    {
+        if (jointIndex >= joints.size()) {
+            return nullptr;
+        }
+        return &joints[jointIndex].modelTransform;
+    }
+
+    const glm::mat4* AnimatedSkeletonPose::finalSkinningMatrix(uint32_t jointIndex) const
+    {
+        if (jointIndex >= joints.size()) {
+            return nullptr;
+        }
+        return &joints[jointIndex].finalSkinningMatrix;
+    }
+
     Renderer::SkinnedMeshVertex animatedImportedSceneVertexToSkinnedMeshVertex(
         const Assets::Assimp::ImportedSceneVertex& vertex,
         AnimatedSkinnedVertexPackingStats& stats)
@@ -269,6 +285,82 @@ namespace Engine {
             palette.push_back(joint.finalSkinningMatrix);
         }
         return palette;
+    }
+
+    AnimatedSkeletonPose blendSkeletonPoses(
+        const AnimatedSkeletonPose& a,
+        const AnimatedSkeletonPose& b,
+        float weight)
+    {
+        AnimatedSkeletonPose blended;
+        blended.diagnostics.sourceJointCount = static_cast<uint32_t>(a.joints.size());
+        blended.diagnostics.targetJointCount = static_cast<uint32_t>(b.joints.size());
+        blended.diagnostics.jointCount = blended.diagnostics.sourceJointCount;
+
+        if (!a.diagnostics.valid || !b.diagnostics.valid) {
+            blended.diagnostics.warnings.push_back("Cannot blend invalid skeleton poses.");
+            return blended;
+        }
+        if (a.joints.size() != b.joints.size()) {
+            blended.diagnostics.mismatchedJointCount =
+                static_cast<uint32_t>(std::max(a.joints.size(), b.joints.size()) - std::min(a.joints.size(), b.joints.size()));
+            blended.diagnostics.warnings.push_back("Cannot blend skeleton poses with different joint counts.");
+            return blended;
+        }
+
+        const float clampedWeight = std::clamp(weight, 0.0f, 1.0f);
+        blended.diagnostics.blendWeight = clampedWeight;
+        if (clampedWeight != weight) {
+            blended.diagnostics.blendWeightClamped = true;
+            blended.diagnostics.warnings.push_back("Animation blend weight was clamped to [0, 1].");
+        }
+
+        blended.joints.reserve(a.joints.size());
+        for (uint32_t jointIndex = 0; jointIndex < a.joints.size(); ++jointIndex) {
+            const AnimatedJointPose& source = a.joints[jointIndex];
+            const AnimatedJointPose& target = b.joints[jointIndex];
+            const NodeTransformComponents sourceLocal = decomposeNodeTransform(source.localTransform);
+            const NodeTransformComponents targetLocal = decomposeNodeTransform(target.localTransform);
+            const NodeTransformComponents sourceModel = decomposeNodeTransform(source.modelTransform);
+            const NodeTransformComponents targetModel = decomposeNodeTransform(target.modelTransform);
+
+            NodeTransformComponents blendedLocal;
+            blendedLocal.translation = glm::mix(sourceLocal.translation, targetLocal.translation, clampedWeight);
+            blendedLocal.rotation = glm::normalize(glm::slerp(sourceLocal.rotation, targetLocal.rotation, clampedWeight));
+            blendedLocal.scale = glm::mix(sourceLocal.scale, targetLocal.scale, clampedWeight);
+
+            NodeTransformComponents blendedModel;
+            blendedModel.translation = glm::mix(sourceModel.translation, targetModel.translation, clampedWeight);
+            blendedModel.rotation = glm::normalize(glm::slerp(sourceModel.rotation, targetModel.rotation, clampedWeight));
+            blendedModel.scale = glm::mix(sourceModel.scale, targetModel.scale, clampedWeight);
+
+            AnimatedJointPose jointPose;
+            jointPose.localTransform = composeNodeTransform(blendedLocal);
+            jointPose.modelTransform = composeNodeTransform(blendedModel);
+            jointPose.inverseBindMatrix = source.inverseBindMatrix;
+            jointPose.finalSkinningMatrix = jointPose.modelTransform * jointPose.inverseBindMatrix;
+            blended.joints.push_back(jointPose);
+        }
+
+        blended.diagnostics.valid = true;
+        return blended;
+    }
+
+    AnimationCrossfadeState beginCrossfade(
+        const AnimationPlaybackState& currentPlayback,
+        uint32_t targetClipIndex,
+        float durationSeconds)
+    {
+        AnimationCrossfadeState state;
+        state.source = currentPlayback;
+        state.target = currentPlayback;
+        state.target.clipIndex = targetClipIndex;
+        state.target.timeSeconds = 0.0f;
+        state.targetClipIndex = targetClipIndex;
+        state.durationSeconds = std::max(durationSeconds, 0.0001f);
+        state.elapsedSeconds = 0.0f;
+        state.active = currentPlayback.clipIndex != targetClipIndex;
+        return state;
     }
 
     AnimatedSkeletonPose sampleImportedSceneBindPose(

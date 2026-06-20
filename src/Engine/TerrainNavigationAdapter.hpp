@@ -68,8 +68,6 @@ namespace Engine {
         TerrainNavigationBuildDiagnostics diagnostics;
     };
 
-    [[nodiscard]] TerrainNavigationSourceIdentity legacyProceduralTerrainNavigationIdentity(
-        const TerrainSettings& settings);
     [[nodiscard]] std::optional<TerrainNavigationBuildRequest> terrainNavigationRequestFromDatasetChunk(
         const TerrainDataset& dataset,
         TerrainChunkHandle chunk,
@@ -85,15 +83,6 @@ namespace Engine {
         const std::vector<TerrainImportedChunk>& chunks,
         TerrainSourceChunkId chunkId,
         TerrainNavigationBuildSettings settings,
-        TerrainNavigationSourceIdentity identity);
-    [[nodiscard]] std::optional<TerrainNavigationBuildRequest> terrainNavigationRequestFromGeneratedTile(
-        const GeneratedTerrainTileData& generated,
-        uint32_t navigationResolution,
-        TerrainNavigationSourceIdentity identity);
-    [[nodiscard]] std::optional<TerrainNavigationBuildRequest> terrainNavigationRequestFromTerrainSystemTile(
-        const TerrainSystem& terrain,
-        TerrainTileHandle tile,
-        uint32_t navigationResolution,
         TerrainNavigationSourceIdentity identity);
     [[nodiscard]] TerrainNavigationBuildResult buildTerrainNavigationData(
         const TerrainNavigationBuildRequest& request);

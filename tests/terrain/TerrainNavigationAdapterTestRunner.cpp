@@ -121,30 +121,12 @@ namespace {
         return chunk;
     }
 
-    Engine::GeneratedTerrainTileData generatedTile()
+    std::optional<Engine::TerrainNavigationBuildRequest> importedRequest(uint32_t navigationResolution)
     {
-        Engine::GeneratedTerrainTileData tile;
-        tile.coord = {0, 0};
-        tile.origin = {0.0f, 0.0f, 0.0f};
-        tile.size = 4.0f;
-        tile.resolution = 3;
-        tile.heights = {
-            0.0f, 1.0f, 2.0f,
-            1.0f, 2.0f, 3.0f,
-            2.0f, 3.0f, 4.0f,
-        };
-        return tile;
-    }
-
-    Engine::TerrainSettings terrainSettings()
-    {
-        Engine::TerrainSettings settings;
-        settings.createRendererResources = false;
-        settings.chunkSize = 4.0f;
-        settings.resolution = 3;
-        settings.navigationResolution = 5;
-        settings.heightScale = 1.0f;
-        return settings;
+        const std::vector<Engine::TerrainImportedChunk> chunks{importedChunk()};
+        Engine::TerrainNavigationBuildSettings settings;
+        settings.navigationResolution = navigationResolution;
+        return Engine::terrainNavigationRequestFromImportedChunkNeighborhood(chunks, chunks.front().id, settings, identity());
     }
 
     Engine::NavigationCacheManifest manifestFor(
@@ -214,48 +196,10 @@ namespace {
         }
     }
 
-    void legacyTerrainTileMatchesExistingBuildData(TestContext& ctx)
-    {
-        Engine::TerrainSystem terrain(terrainSettings());
-        const Engine::TerrainTileHandle tile = terrain.createTileFromHeights({0, 0}, importedChunk().heights);
-        const std::optional<Engine::NavigationTerrainBuildData> oldBuild = terrain.navigationBuildData(tile, 5);
-        const auto request = Engine::terrainNavigationRequestFromTerrainSystemTile(
-            terrain,
-            tile,
-            5,
-            Engine::legacyProceduralTerrainNavigationIdentity(terrain.settings()));
-        ctx.expect(oldBuild.has_value() && request.has_value(), "legacy terrain request was not built");
-        if (!oldBuild || !request) {
-            return;
-        }
-        const Engine::TerrainNavigationBuildResult result = Engine::buildTerrainNavigationData(*request);
-        ctx.expect(result.success && result.buildData.has_value(), "legacy terrain adapter build failed");
-        if (result.buildData) {
-            ctx.expect(sameBuildData(*oldBuild, *result.buildData), "legacy terrain adapter build differed from existing build data");
-        }
-    }
-
-    void generatedTileMatchesExistingStaticBuildData(TestContext& ctx)
-    {
-        const Engine::GeneratedTerrainTileData generated = generatedTile();
-        const std::optional<Engine::NavigationTerrainBuildData> oldBuild = Engine::TerrainSystem::navigationBuildData(generated, 5);
-        const auto request = Engine::terrainNavigationRequestFromGeneratedTile(generated, 5, identity());
-        ctx.expect(oldBuild.has_value() && request.has_value(), "generated tile request was not built");
-        if (!oldBuild || !request) {
-            return;
-        }
-        const Engine::TerrainNavigationBuildResult result = Engine::buildTerrainNavigationData(*request);
-        ctx.expect(result.success && result.buildData.has_value(), "generated tile adapter build failed");
-        if (result.buildData) {
-            ctx.expect(sameBuildData(*oldBuild, *result.buildData), "generated tile adapter build differed from existing build data");
-        }
-    }
-
     void navigationResolutionReducesBuildGeometry(TestContext& ctx)
     {
-        const Engine::GeneratedTerrainTileData generated = generatedTile();
-        const auto fullRequest = Engine::terrainNavigationRequestFromGeneratedTile(generated, 5, identity());
-        const auto reducedRequest = Engine::terrainNavigationRequestFromGeneratedTile(generated, 3, identity());
+        const auto fullRequest = importedRequest(5);
+        const auto reducedRequest = importedRequest(3);
         ctx.expect(fullRequest.has_value() && reducedRequest.has_value(), "resolution requests were not built");
         if (!fullRequest || !reducedRequest) {
             return;
@@ -316,16 +260,16 @@ namespace {
             chunks.front().id,
             settings,
             identity());
-        const auto legacyRequest = Engine::terrainNavigationRequestFromGeneratedTile(generatedTile(), 5, identity());
-        ctx.expect(request.has_value() && legacyRequest.has_value(), "zero border requests were not built");
-        if (!request || !legacyRequest) {
+        const auto zeroRequest = importedRequest(5);
+        ctx.expect(request.has_value() && zeroRequest.has_value(), "zero border requests were not built");
+        if (!request || !zeroRequest) {
             return;
         }
         const Engine::TerrainNavigationBuildResult border = Engine::buildTerrainNavigationData(*request);
-        const Engine::TerrainNavigationBuildResult legacy = Engine::buildTerrainNavigationData(*legacyRequest);
-        ctx.expect(border.success && legacy.success && border.buildData && legacy.buildData, "zero border builds failed");
-        if (border.buildData && legacy.buildData) {
-            ctx.expect(sameBuildData(*border.buildData, *legacy.buildData), "zero border output differed from legacy output");
+        const Engine::TerrainNavigationBuildResult zero = Engine::buildTerrainNavigationData(*zeroRequest);
+        ctx.expect(border.success && zero.success && border.buildData && zero.buildData, "zero border builds failed");
+        if (border.buildData && zero.buildData) {
+            ctx.expect(sameBuildData(*border.buildData, *zero.buildData), "zero border output differed from zero-padding output");
         }
     }
 
@@ -376,10 +320,13 @@ namespace {
         const auto staleRequest = Engine::terrainNavigationRequestFromDatasetChunk(dataset, {}, 5, identity());
         ctx.expect(!staleRequest.has_value(), "default dataset chunk unexpectedly built request");
 
-        Engine::GeneratedTerrainTileData malformed = generatedTile();
-        malformed.heights.pop_back();
-        ctx.expect(!Engine::terrainNavigationRequestFromGeneratedTile(malformed, 5, identity()).has_value(),
-            "malformed generated tile unexpectedly built request");
+        std::vector<Engine::TerrainImportedChunk> malformedChunks{importedChunk()};
+        malformedChunks.front().heights.pop_back();
+        Engine::TerrainNavigationBuildSettings settings;
+        settings.navigationResolution = 5;
+        ctx.expect(!Engine::terrainNavigationRequestFromImportedChunkNeighborhood(
+                malformedChunks, malformedChunks.front().id, settings, identity()).has_value(),
+            "malformed imported chunk unexpectedly built request");
 
         Engine::TerrainNavigationBuildRequest request;
         request.chunkId = {{901}, {0, 0}};
@@ -395,11 +342,14 @@ namespace {
 
     void adapterBuildDataBuildsDetourTile(TestContext& ctx)
     {
-        Engine::GeneratedTerrainTileData flat = generatedTile();
+        Engine::TerrainImportedChunk flat = importedChunk();
         flat.size = 16.0f;
         flat.resolution = 5;
         flat.heights.assign(25, 0.0f);
-        const auto request = Engine::terrainNavigationRequestFromGeneratedTile(flat, 9, identity());
+        const std::vector<Engine::TerrainImportedChunk> chunks{flat};
+        Engine::TerrainNavigationBuildSettings settings;
+        settings.navigationResolution = 9;
+        const auto request = Engine::terrainNavigationRequestFromImportedChunkNeighborhood(chunks, flat.id, settings, identity());
         ctx.expect(request.has_value(), "detour request was not built");
         if (!request) {
             return;
@@ -419,7 +369,7 @@ namespace {
 
     void blockersRemainExternal(TestContext& ctx)
     {
-        const auto request = Engine::terrainNavigationRequestFromGeneratedTile(generatedTile(), 5, identity());
+        const auto request = importedRequest(5);
         ctx.expect(request.has_value(), "blocker request was not built");
         if (!request) {
             return;
@@ -465,8 +415,6 @@ int main()
     const std::vector<std::pair<std::string, void (*)(TestContext&)>> tests = {
         {"DatasetImportedChunkProducesDeterministicBuildData", datasetImportedChunkProducesDeterministicBuildData},
         {"DatasetProceduralChunkUsesSameAdapterPath", datasetProceduralChunkUsesSameAdapterPath},
-        {"LegacyTerrainTileMatchesExistingBuildData", legacyTerrainTileMatchesExistingBuildData},
-        {"GeneratedTileMatchesExistingStaticBuildData", generatedTileMatchesExistingStaticBuildData},
         {"NavigationResolutionReducesBuildGeometry", navigationResolutionReducesBuildGeometry},
         {"BorderNeighborhoodProducesExpandedGeometry", borderNeighborhoodProducesExpandedGeometry},
         {"ZeroBorderPreservesCompatibilityOutput", zeroBorderPreservesCompatibilityOutput},

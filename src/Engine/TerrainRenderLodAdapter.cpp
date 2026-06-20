@@ -2,14 +2,11 @@
 
 #include <algorithm>
 #include <chrono>
-#include <sstream>
 #include <string_view>
 #include <utility>
 
 namespace Engine {
     namespace {
-        constexpr AssetId LegacyProceduralTerrainSourceId{0x7465727261696e01ull};
-
         std::string cacheStatusLabel(TerrainDerivedCacheStatus status)
         {
             switch (status) {
@@ -91,62 +88,11 @@ namespace Engine {
         }
     }
 
-    TerrainRenderLodSourceIdentity legacyProceduralTerrainRenderLodIdentity(const TerrainSettings& settings)
-    {
-        TerrainRenderLodSourceIdentity identity;
-        identity.sourceId = LegacyProceduralTerrainSourceId;
-        identity.sourceType = TerrainDatasetSourceType::Procedural;
-        identity.importSettings = {"legacy_procedural_terrain", "t4", "lod_adapter"};
-
-        std::ostringstream stream;
-        stream << "chunk=" << settings.chunkSize
-               << ";resolution=" << settings.resolution
-               << ";heightScale=" << settings.heightScale
-               << ";skirt=" << settings.skirtDepth
-               << ";navResolution=" << settings.navigationResolution;
-        for (uint32_t index = 0; index < settings.lodLevels.size(); ++index) {
-            stream << ";lod" << index << "="
-                   << settings.lodLevels[index].startDistance << ','
-                   << settings.lodLevels[index].resolution;
-        }
-        identity.sourceHash = stream.str();
-        return identity;
-    }
-
-    std::optional<TerrainRenderLodBuildRequest> renderLodRequestFromTerrainSystemInput(
-        const TerrainRenderMeshBuildInput& input,
-        TerrainRenderLodSourceIdentity identity,
-        TerrainDerivedCacheSettings cacheSettings)
-    {
-        if (input.cpuResolution < 2 ||
-            input.size <= 0.0f ||
-            input.heights.size() != static_cast<size_t>(input.cpuResolution) * input.cpuResolution) {
-            return std::nullopt;
-        }
-
-        TerrainRenderLodBuildRequest request;
-        request.tile = input.tile;
-        request.chunkId = {identity.sourceId, {input.coord.x, input.coord.z}};
-        request.coord = input.coord;
-        request.generation = input.generation;
-        request.lodIndex = input.lodIndex;
-        request.renderResolution = std::max(input.renderResolution, 2u);
-        request.origin = input.origin;
-        request.size = input.size;
-        request.cpuResolution = input.cpuResolution;
-        request.heights = input.heights;
-        request.skirtDepth = input.skirtDepth;
-        request.identity = std::move(identity);
-        request.cacheSettings = std::move(cacheSettings);
-        return request;
-    }
-
     std::optional<TerrainRenderLodBuildRequest> renderLodRequestFromDatasetChunk(
         const TerrainDataset& dataset,
         TerrainChunkHandle chunk,
         const TerrainLodMeshBuildSettings& lod,
         TerrainRenderLodSourceIdentity identity,
-        TerrainTileHandle tile,
         uint64_t generation,
         TerrainDerivedCacheSettings cacheSettings)
     {
@@ -159,7 +105,6 @@ namespace Engine {
         }
 
         TerrainRenderLodBuildRequest request;
-        request.tile = tile;
         request.chunkId = data->id;
         request.coord = {data->coord.x, data->coord.z};
         request.generation = generation;
@@ -213,8 +158,7 @@ namespace Engine {
         const TerrainRenderLodBuildRequest& request)
     {
         TerrainRenderMeshData mesh;
-        mesh.tile = request.tile;
-        mesh.coord = request.coord;
+        mesh.coord = {request.coord.x, request.coord.z};
         mesh.generation = request.generation;
         mesh.lodIndex = payload.lodIndex;
         mesh.renderResolution = payload.renderResolution;

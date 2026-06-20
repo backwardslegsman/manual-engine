@@ -1689,3 +1689,16 @@ Changed:
 
 Rationale:
 - Open-world terrain chunks should not leave narrow navmesh gaps at tile seams. Border-apron nav baking gives Recast neighbor context without changing terrain chunk ownership, renderer/physics payloads, nav tile identity, or streaming promotion flow.
+
+## 2026-06-20 - Legacy Runtime Removal Pass
+
+Changed:
+- Removed the legacy procedural/runtime compatibility stack from active code, CMake targets, and tests, including procedural world ownership, actor controllers/commands/selection, blocking collision, chunk streaming, spatial registry, object archetypes, world save/override/editor paths, old terrain owner compatibility, legacy authored scene owners, legacy animated model/cache/async owners, and scene-world migration bridge code.
+- Made App startup modern-only around the scene-backed default runtime, open-world streaming validation/rebuild, modern terrain dataset/adapters, scene navigation, scene physics, scene character movement, scene authored/animated adapters, and modern debug UI.
+- Split shared animation pose/playback helpers into modern animation pose headers so `SceneAnimatedModelAdapter` no longer depends on the removed legacy animated owner.
+- Removed graph-cache APIs tied to the deleted world graph path and kept modern navigation connectivity/path stitching as the adjacent-tile contract.
+- Added an active-code static guard in debug visualization tests to reject removed legacy symbol names from `src`, `tests`, and `CMakeLists.txt`.
+- Rewrote active engine overview and system contracts to describe the modern-only architecture.
+
+Rationale:
+- Future roadmap work should not have to distinguish modern systems from vestigial compatibility paths. Removing the old stack makes `Scene`, `TerrainDataset`, streaming, scene physics, scene character movement, and scene navigation the single active architecture.

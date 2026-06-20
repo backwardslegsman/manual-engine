@@ -1,5 +1,9 @@
 # Terrain Rework Roadmap
 
+## Current Runtime Position
+
+The terrain rework has completed its ownership migration. Active runtime terrain code uses `Engine::TerrainDataset`, terrain derived caches, and the terrain render/navigation/physics/material/serialization adapters. The former renderer-aware `TerrainSystem` owner and compatibility helpers have been removed from active code and tests. Historical milestone notes below may mention it as migration context only.
+
 This roadmap defines the first full terrain-system rework for ManualEngine. The target is a chunked terrain runtime where heightmap import is first-class, procedural terrain remains supported, generated assets are cached, and future chunked serialization can be added without replacing the runtime model.
 
 The first implementation pass now covers import, chunking, runtime ownership, derived-data cache identity, render LOD generation, navigation build data, physics collider generation hooks, terrain material metadata, first-pass layered rendering, and serialization preparation. Runtime scene serialization, terrain editing, durable chunk save/load, and App migration to heightmap streaming are design constraints for this roadmap, but they are not part of the first pass.

@@ -9,5 +9,5 @@
 - Transform hierarchy belongs here, not in renderer, importer, or app code.
 - Scene tick phases should be explicit and documented before systems depend on them.
 - Main-thread ownership rules must remain visible. Worker jobs may produce plain data, but live scene, renderer, physics, navigation, and asset-cache mutation should commit through explicit main-thread APIs.
-- Preserve compatibility with existing `World`, `AuthoredScene`, `PartitionedAuthoredScene`, and `AnimatedModel` owners while migration is underway.
+- Scene runtime is the active ownership model. Do not add dependencies on removed procedural world or legacy authored/animated owners.
 - Update `docs/scene_component_roadmap.md` and `docs/system_contracts.md` when public scene contracts change.

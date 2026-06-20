@@ -14,10 +14,6 @@ namespace Engine {
         std::vector<NavigationCacheConnectivityReadResult> results;
     };
 
-    struct NavigationGraphCacheReadJobResult {
-        NavigationCacheGraphReadResult result;
-    };
-
     struct NavigationCacheWriteJobResult {
         NavigationCacheWriteResult result;
     };
@@ -37,12 +33,6 @@ namespace Engine {
         NavigationCacheManifest manifest,
         std::vector<ChunkCoord> coords);
 
-    AsyncJobHandle enqueueNavigationGraphCacheRead(
-        AsyncWorkQueue& queue,
-        NavigationCacheSettings settings,
-        NavigationCacheManifest manifest,
-        ChunkCoord centerChunk);
-
     AsyncJobHandle enqueueNavigationTileCacheWrite(
         AsyncWorkQueue& queue,
         NavigationCacheSettings settings,
@@ -55,9 +45,4 @@ namespace Engine {
         NavigationCacheManifest manifest,
         ChunkNavConnectivity connectivity);
 
-    AsyncJobHandle enqueueNavigationGraphCacheWrite(
-        AsyncWorkQueue& queue,
-        NavigationCacheSettings settings,
-        NavigationCacheManifest manifest,
-        WorldNavigationGraphCacheData graph);
 }

@@ -210,11 +210,9 @@ namespace Engine {
 
     SceneNavigationService::SceneNavigationService(
         const NavigationSystem& navigation,
-        const NavigationConnectivitySystem* connectivity,
-        const WorldNavigationGraph* graph)
+        const NavigationConnectivitySystem* connectivity)
         : navigation_(navigation)
         , connectivity_(connectivity)
-        , graph_(graph)
     {
     }
 

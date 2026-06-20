@@ -14,7 +14,6 @@
 
 namespace Engine {
     class NavigationConnectivitySystem;
-    class WorldNavigationGraph;
 
     enum class NavigationRuntimeStatus {
         Success,
@@ -126,8 +125,7 @@ namespace Engine {
     public:
         explicit SceneNavigationService(
             const NavigationSystem& navigation,
-            const NavigationConnectivitySystem* connectivity = nullptr,
-            const WorldNavigationGraph* graph = nullptr);
+            const NavigationConnectivitySystem* connectivity = nullptr);
 
         [[nodiscard]] NavigationProjectionResult projectPoint(
             glm::vec3 point,
@@ -189,7 +187,6 @@ namespace Engine {
 
         const NavigationSystem& navigation_;
         const NavigationConnectivitySystem* connectivity_ = nullptr;
-        const WorldNavigationGraph* graph_ = nullptr;
         NavigationRuntimeDiagnostics diagnostics_;
         std::vector<NavigationDebugRequest> debugRequests_;
     };

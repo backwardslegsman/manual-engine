@@ -1,6 +1,10 @@
 # Scene And Component Runtime Roadmap
 
-This roadmap consolidates the existing procedural world, authored scene, animated model, renderer, navigation, cache, and async work into a shared scene/component runtime. It is not a greenfield rewrite. Existing systems should be adapted behind stable scene, asset, and component contracts in small steps.
+This roadmap consolidated the former procedural world, authored scene, animated model, renderer, navigation, cache, and async work into a shared scene/component runtime.
+
+## Current Runtime Position
+
+The roadmap is closed as the active runtime architecture. Debug and Release startup use the modern scene-backed stack only: `Scene`, scene scheduler, scene render bridge, scene authored/animated adapters, `TerrainDataset`, open-world streaming, scene navigation, scene physics, and scene character movement. Legacy procedural/runtime compatibility systems have been removed from active code, build targets, public headers, and tests. Historical milestone notes below may mention those systems as migration context only.
 
 Use this document for long-range architectural work that crosses `src/Engine`, `src/Assets`, `src/Renderer`, and `src/App`. Keep `docs/authored_scene_roadmap.md`, `docs/animation_roadmap.md`, and `docs/navigation_roadmap.md` for subsystem-specific detail. Use `docs/open_world_streaming_roadmap.md` for the modern open-world residency plan that combines chunked scene records, heightmap terrain chunks, baked nav tiles, baked physics colliders, asset dependency streaming, async queues, and debug counters.
 

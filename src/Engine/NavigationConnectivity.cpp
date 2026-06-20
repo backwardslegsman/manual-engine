@@ -95,21 +95,6 @@ namespace Engine {
     void NavigationConnectivitySystem::rebuild(
         const std::vector<ChunkCoord>& loadedNavChunks,
         const NavigationSystem& navigation,
-        const TerrainSystem& terrain,
-        const NavAgentSettings& agent)
-    {
-        NavigationConnectivityBuildRequest request;
-        request.chunks = loadedNavChunks;
-        request.clearExisting = true;
-        const NavigationConnectivityBuildHandle handle = beginRebuild(std::move(request));
-        while (hasActiveRebuild(handle)) {
-            stepRebuild(handle, navigation, terrain, agent, std::numeric_limits<uint32_t>::max());
-        }
-    }
-
-    void NavigationConnectivitySystem::rebuild(
-        const std::vector<ChunkCoord>& loadedNavChunks,
-        const NavigationSystem& navigation,
         const NavAgentSettings& agent)
     {
         NavigationConnectivityBuildRequest request;
@@ -124,33 +109,9 @@ namespace Engine {
     void NavigationConnectivitySystem::rebuildChunk(
         ChunkCoord coord,
         const NavigationSystem& navigation,
-        const TerrainSystem& terrain,
-        const NavAgentSettings& agent)
-    {
-        rebuildChunks(std::span<const ChunkCoord>{&coord, 1}, navigation, terrain, agent);
-    }
-
-    void NavigationConnectivitySystem::rebuildChunk(
-        ChunkCoord coord,
-        const NavigationSystem& navigation,
         const NavAgentSettings& agent)
     {
         rebuildChunks(std::span<const ChunkCoord>{&coord, 1}, navigation, agent);
-    }
-
-    void NavigationConnectivitySystem::rebuildChunks(
-        std::span<const ChunkCoord> coords,
-        const NavigationSystem& navigation,
-        const TerrainSystem& terrain,
-        const NavAgentSettings& agent)
-    {
-        NavigationConnectivityBuildRequest request;
-        request.chunks.assign(coords.begin(), coords.end());
-        request.clearExisting = false;
-        const NavigationConnectivityBuildHandle handle = beginRebuild(std::move(request));
-        while (hasActiveRebuild(handle)) {
-            stepRebuild(handle, navigation, terrain, agent, std::numeric_limits<uint32_t>::max());
-        }
     }
 
     void NavigationConnectivitySystem::rebuildChunks(
@@ -187,19 +148,6 @@ namespace Engine {
         rebuild.chunks = std::move(request.chunks);
         activeRebuild_ = std::move(rebuild);
         return activeRebuild_->handle;
-    }
-
-    NavigationConnectivityBuildStepResult NavigationConnectivitySystem::stepRebuild(
-        NavigationConnectivityBuildHandle handle,
-        const NavigationSystem& navigation,
-        const TerrainSystem& terrain,
-        const NavAgentSettings& agent,
-        uint32_t maxSamples)
-    {
-        (void)terrain;
-        NavigationConnectivityBuildStepResult result =
-            stepRebuild(handle, navigation, agent, maxSamples);
-        return result;
     }
 
     NavigationConnectivityBuildStepResult NavigationConnectivitySystem::stepRebuild(
@@ -283,7 +231,7 @@ namespace Engine {
                         ? 0.5f
                         : static_cast<float>(rebuild.sampleIndex) / static_cast<float>(samples - 1);
                     std::optional<ChunkNavPortal> portal =
-                        buildPortalSample(coord, direction, t, *rebuild.bounds, navigation, nullptr, agent, edgeDiagnostics);
+                        buildPortalSample(coord, direction, t, *rebuild.bounds, navigation, agent, edgeDiagnostics);
                     if (portal) {
                         if (shouldMergePortal(portals, portal->position)) {
                             ++edgeDiagnostics.mergedDuplicateCount;
@@ -467,13 +415,11 @@ namespace Engine {
         ChunkCoord coord,
         NavEdgeDirection direction,
         float t,
-        const Renderer::Aabb& bounds,
+            const Renderer::Aabb& bounds,
             const NavigationSystem& navigation,
-            const TerrainSystem* terrain,
             const NavAgentSettings& agent,
             NavigationPortalEdgeDiagnostics& diagnostics) const
     {
-        (void)terrain;
         glm::vec3 sample{};
         switch (direction) {
             case NavEdgeDirection::North:

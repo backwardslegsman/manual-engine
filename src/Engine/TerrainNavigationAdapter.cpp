@@ -3,13 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <sstream>
 #include <utility>
 
 namespace Engine {
     namespace {
-        constexpr AssetId LegacyProceduralTerrainSourceId{0x7465727261696e01ull};
-
         std::optional<float> sampleHeight(
             const glm::vec3& origin,
             float size,
@@ -221,22 +218,6 @@ namespace Engine {
         }
     }
 
-    TerrainNavigationSourceIdentity legacyProceduralTerrainNavigationIdentity(const TerrainSettings& settings)
-    {
-        TerrainNavigationSourceIdentity identity;
-        identity.sourceId = LegacyProceduralTerrainSourceId;
-        identity.sourceType = TerrainDatasetSourceType::Procedural;
-        identity.importSettings = {"legacy_procedural_terrain", "1", "runtime"};
-
-        std::ostringstream stream;
-        stream << "chunk=" << settings.chunkSize
-               << ";resolution=" << settings.resolution
-               << ";heightScale=" << settings.heightScale
-               << ";navResolution=" << settings.navigationResolution;
-        identity.sourceHash = stream.str();
-        return identity;
-    }
-
     std::optional<TerrainNavigationBuildRequest> terrainNavigationRequestFromDatasetChunk(
         const TerrainDataset& dataset,
         TerrainChunkHandle chunk,
@@ -325,67 +306,6 @@ namespace Engine {
             return std::nullopt;
         }
         return buildNeighborhoodRequest(*target, chunks, std::move(settings), std::move(identity));
-    }
-
-    std::optional<TerrainNavigationBuildRequest> terrainNavigationRequestFromGeneratedTile(
-        const GeneratedTerrainTileData& generated,
-        uint32_t navigationResolution,
-        TerrainNavigationSourceIdentity identity)
-    {
-        if (generated.resolution < 2 ||
-            generated.size <= 0.0f ||
-            generated.heights.size() != static_cast<size_t>(generated.resolution) * generated.resolution) {
-            return std::nullopt;
-        }
-
-        TerrainNavigationBuildRequest request;
-        request.chunkId = {identity.sourceId, {generated.coord.x, generated.coord.z}};
-        request.coord = generated.coord;
-        request.origin = generated.origin;
-        request.size = generated.size;
-        request.sourceResolution = generated.resolution;
-        request.navigationResolution = std::max(navigationResolution, 2u);
-        request.heights = generated.heights;
-        request.tileOrigin = generated.origin;
-        request.tileSize = generated.size;
-        request.sampleOrigin = generated.origin;
-        request.sampleSize = generated.size;
-        request.sampleResolution = std::max(navigationResolution, 2u);
-        request.settings.navigationResolution = request.navigationResolution;
-        request.identity = std::move(identity);
-        return request;
-    }
-
-    std::optional<TerrainNavigationBuildRequest> terrainNavigationRequestFromTerrainSystemTile(
-        const TerrainSystem& terrain,
-        TerrainTileHandle tile,
-        uint32_t navigationResolution,
-        TerrainNavigationSourceIdentity identity)
-    {
-        const std::optional<TerrainRenderMeshBuildInput> input = terrain.renderMeshBuildInput(tile, 0);
-        if (!input ||
-            input->cpuResolution < 2 ||
-            input->size <= 0.0f ||
-            input->heights.size() != static_cast<size_t>(input->cpuResolution) * input->cpuResolution) {
-            return std::nullopt;
-        }
-
-        TerrainNavigationBuildRequest request;
-        request.chunkId = {identity.sourceId, {input->coord.x, input->coord.z}};
-        request.coord = input->coord;
-        request.origin = input->origin;
-        request.size = input->size;
-        request.sourceResolution = input->cpuResolution;
-        request.navigationResolution = std::max(navigationResolution, 2u);
-        request.heights = input->heights;
-        request.tileOrigin = input->origin;
-        request.tileSize = input->size;
-        request.sampleOrigin = input->origin;
-        request.sampleSize = input->size;
-        request.sampleResolution = std::max(navigationResolution, 2u);
-        request.settings.navigationResolution = request.navigationResolution;
-        request.identity = std::move(identity);
-        return request;
     }
 
     TerrainNavigationBuildResult buildTerrainNavigationData(const TerrainNavigationBuildRequest& request)

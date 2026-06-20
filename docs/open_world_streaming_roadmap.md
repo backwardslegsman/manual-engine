@@ -16,12 +16,15 @@ The core idea is a set of configurable halos around the active camera or player 
 
 ## Non-Goals
 
-- No immediate removal of legacy compatibility modes.
-- No automatic full-world bake on every startup.
+- No automatic full-world bake on every startup when the saved streaming build is already current.
 - No hidden renderer/nav/physics work from setters.
 - No editor UI, save-game migration, or world-authoring workflow in the first pass.
 - No network replication or multiplayer streaming policy.
 - No guarantee that all streamed systems use the same radius; different systems should remain independently tunable.
+
+## Current Status
+
+The S0-S8 roadmap is implemented and is the active open-world residency path. The former legacy compatibility modes have been removed from active code, so future streaming work should extend the modern scene-backed runtime rather than adding compatibility branches.
 
 ## Residency Model
 

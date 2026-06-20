@@ -1,4 +1,5 @@
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -197,6 +198,71 @@ namespace {
         ctx.expect(contents.find("BlockingCollision") == std::string::npos, "legacy blocking collision is not public debug UI");
     }
 
+    void ActiveCodeDoesNotMentionRemovedLegacySystems(TestContext& ctx)
+    {
+        const std::filesystem::path root{MANUAL_ENGINE_SOURCE_DIR};
+        const std::vector<std::string> forbidden{
+            "WorldObjectHandle",
+            "ActorController",
+            "BlockingCollisionSystem",
+            "TerrainSystem",
+            "ChunkStreamer",
+            "WorldNavigationGraph",
+            "PartitionedAuthoredScene",
+            "SceneWorldMigrationBridge",
+            "GeneratedTerrainTileData",
+            "TerrainTileHandle",
+            "TerrainRenderMeshBuildInput",
+            "GameplayRuntimeMode",
+            "LegacyProcedural",
+            "LegacyAuthored",
+        };
+        const std::vector<std::filesystem::path> roots{
+            root / "src",
+            root / "tests",
+        };
+
+        auto shouldScan = [](const std::filesystem::path& path) {
+            const std::string ext = path.extension().generic_string();
+            return ext == ".cpp" || ext == ".hpp" || ext == ".inl";
+        };
+
+        for (const std::filesystem::path& scanRoot : roots) {
+            for (const std::filesystem::directory_entry& entry :
+                std::filesystem::recursive_directory_iterator(scanRoot)) {
+                if (!entry.is_regular_file() || !shouldScan(entry.path())) {
+                    continue;
+                }
+                if (entry.path().filename() == "DebugVisualizationTestRunner.cpp") {
+                    continue;
+                }
+                std::ifstream input{entry.path()};
+                const std::string contents(
+                    (std::istreambuf_iterator<char>(input)),
+                    std::istreambuf_iterator<char>());
+                for (const std::string& name : forbidden) {
+                    ctx.expect(
+                        contents.find(name) == std::string::npos,
+                        "active code mentions removed legacy symbol " + name + " in " +
+                            entry.path().generic_string());
+                }
+                ctx.expect(
+                    contents.find("AnimatedModel") == std::string::npos ||
+                        contents.find("SceneAnimatedModelAdapter") != std::string::npos ||
+                        contents.find("AnimatedModelPose") != std::string::npos,
+                    "active code mentions legacy AnimatedModel owner in " + entry.path().generic_string());
+            }
+        }
+
+        std::ifstream cmake{root / "CMakeLists.txt"};
+        const std::string cmakeContents(
+            (std::istreambuf_iterator<char>(cmake)),
+            std::istreambuf_iterator<char>());
+        for (const std::string& name : forbidden) {
+            ctx.expect(cmakeContents.find(name) == std::string::npos, "CMake mentions removed legacy symbol " + name);
+        }
+    }
+
     void ClearResetsOutputAndDiagnostics(TestContext& ctx)
     {
         Engine::DebugVisualizationCollector collector;
@@ -231,6 +297,7 @@ int main()
         {"ExpandedLinesCoverPrimitiveShapes", ExpandedLinesCoverPrimitiveShapes},
         {"HeaderDoesNotMentionRendererTypes", HeaderDoesNotMentionRendererTypes},
         {"DebugUiHeaderExposesModernOnlyState", DebugUiHeaderExposesModernOnlyState},
+        {"ActiveCodeDoesNotMentionRemovedLegacySystems", ActiveCodeDoesNotMentionRemovedLegacySystems},
         {"ClearResetsOutputAndDiagnostics", ClearResetsOutputAndDiagnostics},
     };
 

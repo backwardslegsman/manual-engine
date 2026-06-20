@@ -2,13 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
-#include <sstream>
 #include <utility>
 
 namespace Engine {
     namespace {
-        constexpr AssetId LegacyProceduralTerrainSourceId{0x7465727261696e01ull};
-
         [[nodiscard]] bool finite(const glm::vec3& value)
         {
             return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
@@ -82,27 +79,6 @@ namespace Engine {
         }
     }
 
-    TerrainPhysicsSourceIdentity legacyProceduralTerrainPhysicsIdentity(
-        const TerrainSettings& settings,
-        uint32_t colliderResolution)
-    {
-        TerrainPhysicsSourceIdentity identity;
-        identity.sourceId = LegacyProceduralTerrainSourceId;
-        identity.sourceType = TerrainDatasetSourceType::Procedural;
-        identity.importSettings = {"legacy_procedural_terrain", "t6", "physics_collider_adapter"};
-
-        const uint32_t resolvedColliderResolution =
-            colliderResolution > 0 ? colliderResolution : std::max(settings.navigationResolution, 2u);
-        std::ostringstream stream;
-        stream << "chunk=" << settings.chunkSize
-               << ";resolution=" << settings.resolution
-               << ";heightScale=" << settings.heightScale
-               << ";navResolution=" << settings.navigationResolution
-               << ";colliderResolution=" << resolvedColliderResolution;
-        identity.sourceHash = stream.str();
-        return identity;
-    }
-
     std::optional<TerrainPhysicsColliderBuildRequest> terrainPhysicsColliderRequestFromDatasetChunk(
         const TerrainDataset& dataset,
         TerrainChunkHandle chunk,
@@ -126,52 +102,6 @@ namespace Engine {
         request.heights = data->heights;
         request.identity = std::move(identity);
         request.identity.sourceType = data->sourceType;
-        return request;
-    }
-
-    std::optional<TerrainPhysicsColliderBuildRequest> terrainPhysicsColliderRequestFromGeneratedTile(
-        const GeneratedTerrainTileData& generated,
-        uint32_t colliderResolution,
-        TerrainPhysicsSourceIdentity identity)
-    {
-        if (generated.size <= 0.0f || !validHeights(generated.resolution, generated.heights)) {
-            return std::nullopt;
-        }
-
-        TerrainPhysicsColliderBuildRequest request;
-        request.chunkId = {identity.sourceId, {generated.coord.x, generated.coord.z}};
-        request.coord = generated.coord;
-        request.origin = generated.origin;
-        request.size = generated.size;
-        request.sourceResolution = generated.resolution;
-        request.colliderResolution = std::max(colliderResolution, 2u);
-        request.heights = generated.heights;
-        request.identity = std::move(identity);
-        return request;
-    }
-
-    std::optional<TerrainPhysicsColliderBuildRequest> terrainPhysicsColliderRequestFromTerrainSystemTile(
-        const TerrainSystem& terrain,
-        TerrainTileHandle tile,
-        uint32_t colliderResolution,
-        TerrainPhysicsSourceIdentity identity)
-    {
-        const std::optional<TerrainRenderMeshBuildInput> input = terrain.renderMeshBuildInput(tile, 0);
-        if (!input ||
-            input->size <= 0.0f ||
-            !validHeights(input->cpuResolution, input->heights)) {
-            return std::nullopt;
-        }
-
-        TerrainPhysicsColliderBuildRequest request;
-        request.chunkId = {identity.sourceId, {input->coord.x, input->coord.z}};
-        request.coord = input->coord;
-        request.origin = input->origin;
-        request.size = input->size;
-        request.sourceResolution = input->cpuResolution;
-        request.colliderResolution = std::max(colliderResolution, 2u);
-        request.heights = input->heights;
-        request.identity = std::move(identity);
         return request;
     }
 

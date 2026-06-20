@@ -23,49 +23,32 @@ add_executable(manual_engine
     src/App/main.cpp
     src/Assets/Assimp/Importer.cpp
     src/Assets/HeightmapImporter.cpp
-    src/Engine/ActorCommand.cpp
-    src/Engine/ActorController.cpp
-    src/Engine/ActorSelection.cpp
-    src/Engine/AnimatedModel.cpp
-    src/Engine/AnimatedModelAsync.cpp
-    src/Engine/AnimatedModelCache.cpp
-    src/Engine/AnimatedModelPose.cpp
-    src/Engine/AuthoredScene.cpp
-    src/Engine/AuthoredSceneAsync.cpp
-    src/Engine/AsyncWorkQueue.cpp
+   src/Engine/AnimatedModelPose.cpp
+   src/Engine/AsyncWorkQueue.cpp
     src/Engine/AssetCache.cpp
     src/Engine/AssetRegistry.cpp
     src/Engine/Biome.cpp
-    src/Engine/BlockingCollision.cpp
-    src/Engine/ChunkStreamer.cpp
-    src/Engine/ChunkTypes.cpp
+   src/Engine/ChunkTypes.cpp
     src/Engine/DebugVisualization.cpp
     src/Engine/EventQueue.cpp
     src/Engine/FixedStepLoop.cpp
     src/Engine/FrameBudget.cpp
     src/Engine/InputMapping.cpp
     src/Engine/ImportedSceneResources.cpp
-    src/Engine/InteractionHandlerSystem.cpp
-    src/Engine/InteractionSystem.cpp
-    src/Engine/NavigationConnectivity.cpp
+   src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationCache.cpp
     src/Engine/NavigationCacheAsync.cpp
     src/Engine/NavigationProfile.cpp
     src/Engine/NavigationRuntime.cpp
     src/Engine/NavigationSceneGeometry.cpp
-    src/Engine/ObjectArchetype.cpp
-    src/Engine/ObjectId.cpp
-    src/Engine/Navigation.cpp
+   src/Engine/Navigation.cpp
     src/Engine/OpenWorldStreaming.cpp
     src/Engine/OpenWorldStreamingAssets.cpp
     src/Engine/OpenWorldStreamingBake.cpp
     src/Engine/OpenWorldStreamingRuntime.cpp
     src/Engine/OpenWorldStreamingSceneChunks.cpp
     src/Engine/OrbitCamera.cpp
-    src/Engine/PersistentObjectEditor.cpp
-    src/Engine/Picking.cpp
-    src/Engine/ProceduralChunkContent.cpp
-    src/Engine/Physics/ScenePhysics.cpp
+   src/Engine/Physics/ScenePhysics.cpp
     src/Engine/Reflection.cpp
     src/Engine/SceneBehaviorHooks.cpp
     src/Engine/SceneCharacterMovement.cpp
@@ -77,12 +60,8 @@ add_executable(manual_engine
     src/Engine/Scene/Scene.cpp
     src/Engine/Scene/SceneRenderBridge.cpp
     src/Engine/SceneSerialization.cpp
-    src/Engine/SceneWorldMigrationBridge.cpp
-    src/Engine/SpatialRegistry.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/TerrainDataset.cpp
-    src/Engine/TerrainDatasetCompatibility.cpp
-    src/Engine/TerrainDerivedCache.cpp
+   src/Engine/TerrainDataset.cpp
+   src/Engine/TerrainDerivedCache.cpp
     src/Engine/TerrainDerivedCacheAsync.cpp
     src/Engine/TerrainImport.cpp
     src/Engine/TerrainMaterialMetadata.cpp
@@ -92,11 +71,7 @@ add_executable(manual_engine
     src/Engine/TerrainRenderLodAdapter.cpp
     src/Engine/TerrainSampleMaterials.cpp
     src/Engine/TerrainSerializationPrep.cpp
-    src/Engine/World.cpp
-    src/Engine/WorldNavigationGraph.cpp
-    src/Engine/WorldObjectOverrides.cpp
-    src/Engine/WorldState.cpp
-    src/Engine/input.cpp
+   src/Engine/input.cpp
     src/Renderer/DebugUi.cpp
     src/Renderer/Scene.cpp
     src/Renderer/Texture.cpp
@@ -133,43 +108,6 @@ target_link_libraries(manual_engine
         yaml-cpp::yaml-cpp
 )
 
-add_executable(manual_engine_navigation_tests
-    tests/navigation/NavigationTestRunner.cpp
-    tests/navigation/RendererStubs.cpp
-    src/Engine/ActorController.cpp
-    src/Engine/AsyncWorkQueue.cpp
-    src/Engine/Biome.cpp
-    src/Engine/BlockingCollision.cpp
-    src/Engine/ChunkStreamer.cpp
-    src/Engine/ChunkTypes.cpp
-    src/Engine/EventQueue.cpp
-    src/Engine/FrameBudget.cpp
-    src/Engine/NavigationCache.cpp
-    src/Engine/NavigationCacheAsync.cpp
-    src/Engine/NavigationConnectivity.cpp
-    src/Engine/NavigationProfile.cpp
-    src/Engine/ObjectId.cpp
-    src/Engine/Navigation.cpp
-    src/Engine/SpatialRegistry.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/World.cpp
-    src/Engine/WorldNavigationGraph.cpp
-)
-
-target_include_directories(manual_engine_navigation_tests
-    PRIVATE
-        src
-)
-
-target_link_libraries(manual_engine_navigation_tests
-    PRIVATE
-        glm::glm
-        RecastNavigation::Recast
-        RecastNavigation::Detour
-        yaml-cpp::yaml-cpp
-)
-
-add_test(NAME manual_engine_navigation_tests COMMAND manual_engine_navigation_tests)
 
 add_executable(manual_engine_navigation_runtime_tests
     tests/navigation/NavigationRuntimeTestRunner.cpp
@@ -180,7 +118,6 @@ add_executable(manual_engine_navigation_runtime_tests
     src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationRuntime.cpp
     src/Engine/Scene/Scene.cpp
-    src/Engine/Terrain.cpp
 )
 
 target_include_directories(manual_engine_navigation_runtime_tests
@@ -313,8 +250,7 @@ add_executable(manual_engine_open_world_streaming_tests
     src/Engine/Reflection.cpp
     src/Engine/Scene/Scene.cpp
     src/Engine/SceneSerialization.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/TerrainDataset.cpp
+   src/Engine/TerrainDataset.cpp
     src/Engine/TerrainDerivedCache.cpp
     src/Engine/TerrainImport.cpp
     src/Engine/TerrainNavigationAdapter.cpp
@@ -367,8 +303,7 @@ add_executable(manual_engine_open_world_streaming_runtime_tests
     src/Engine/Reflection.cpp
     src/Engine/Scene/Scene.cpp
     src/Engine/SceneSerialization.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/TerrainDataset.cpp
+   src/Engine/TerrainDataset.cpp
     src/Engine/TerrainDerivedCache.cpp
     src/Engine/TerrainImport.cpp
     src/Engine/TerrainNavigationAdapter.cpp
@@ -437,11 +372,8 @@ add_test(NAME manual_engine_open_world_scene_chunk_streaming_tests COMMAND manua
 
 add_executable(manual_engine_terrain_dataset_tests
     tests/terrain/TerrainDatasetTestRunner.cpp
-    tests/navigation/RendererStubs.cpp
     src/Engine/Biome.cpp
-    src/Engine/Terrain.cpp
     src/Engine/TerrainDataset.cpp
-    src/Engine/TerrainDatasetCompatibility.cpp
 )
 
 target_include_directories(manual_engine_terrain_dataset_tests
@@ -481,8 +413,7 @@ add_executable(manual_engine_terrain_render_lod_adapter_tests
     tests/terrain/TerrainRenderLodAdapterTestRunner.cpp
     tests/navigation/RendererStubs.cpp
     src/Engine/Biome.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/TerrainDataset.cpp
+   src/Engine/TerrainDataset.cpp
     src/Engine/TerrainDerivedCache.cpp
     src/Engine/TerrainRenderLodAdapter.cpp
 )
@@ -507,8 +438,7 @@ add_executable(manual_engine_terrain_navigation_adapter_tests
     src/Engine/ChunkTypes.cpp
     src/Engine/Navigation.cpp
     src/Engine/NavigationCache.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/TerrainDataset.cpp
+   src/Engine/TerrainDataset.cpp
     src/Engine/TerrainNavigationAdapter.cpp
 )
 
@@ -533,8 +463,7 @@ add_executable(manual_engine_terrain_physics_collider_adapter_tests
     src/Engine/Biome.cpp
     src/Engine/Physics/ScenePhysics.cpp
     src/Engine/Scene/Scene.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/TerrainDataset.cpp
+   src/Engine/TerrainDataset.cpp
     src/Engine/TerrainPhysicsColliderAdapter.cpp
 )
 
@@ -715,8 +644,7 @@ add_executable(manual_engine_scene_reflection_tests
     src/Engine/Scene/Scene.cpp
     src/Engine/Scene/SceneRenderBridge.cpp
     src/Engine/SceneCharacterMovement.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/SceneReflection.cpp
+   src/Engine/SceneReflection.cpp
     src/Engine/TerrainDataset.cpp
 )
 
@@ -754,8 +682,7 @@ add_executable(manual_engine_scene_behavior_hooks_tests
     src/Engine/Scene/SceneRenderBridge.cpp
     src/Engine/SceneBehaviorHooks.cpp
     src/Engine/SceneCharacterMovement.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/SceneReflection.cpp
+   src/Engine/SceneReflection.cpp
     src/Engine/TerrainDataset.cpp
 )
 
@@ -794,8 +721,7 @@ add_executable(manual_engine_scene_lua_scripting_tests
     src/Engine/SceneBehaviorHooks.cpp
     src/Engine/SceneCharacterMovement.cpp
     src/Engine/SceneLuaScripting.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/SceneReflection.cpp
+   src/Engine/SceneReflection.cpp
     src/Engine/TerrainDataset.cpp
 )
 
@@ -850,8 +776,7 @@ add_executable(manual_engine_scene_terrain_alignment_tests
     src/Engine/NavigationRuntime.cpp
     src/Engine/Physics/ScenePhysics.cpp
     src/Engine/Scene/Scene.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/TerrainDataset.cpp
+   src/Engine/TerrainDataset.cpp
     src/Engine/TerrainNavigationAdapter.cpp
     src/Engine/TerrainPhysicsColliderAdapter.cpp
     src/Engine/TerrainSerializationPrep.cpp
@@ -884,8 +809,7 @@ add_executable(manual_engine_scene_character_movement_tests
     src/Engine/Physics/ScenePhysics.cpp
     src/Engine/Scene/Scene.cpp
     src/Engine/SceneCharacterMovement.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/TerrainDataset.cpp
+   src/Engine/TerrainDataset.cpp
     src/Engine/TerrainNavigationAdapter.cpp
     src/Engine/TerrainPhysicsColliderAdapter.cpp
 )
@@ -906,43 +830,6 @@ target_link_libraries(manual_engine_scene_character_movement_tests
 
 add_test(NAME manual_engine_scene_character_movement_tests COMMAND manual_engine_scene_character_movement_tests)
 
-add_executable(manual_engine_scene_world_migration_tests
-    tests/scene/SceneWorldMigrationTestRunner.cpp
-    tests/navigation/RendererStubs.cpp
-    src/Engine/Biome.cpp
-    src/Engine/ChunkTypes.cpp
-    src/Engine/Navigation.cpp
-    src/Engine/NavigationConnectivity.cpp
-    src/Engine/NavigationRuntime.cpp
-    src/Engine/ObjectId.cpp
-    src/Engine/Physics/ScenePhysics.cpp
-    src/Engine/Reflection.cpp
-    src/Engine/Scene/Scene.cpp
-    src/Engine/SceneCharacterMovement.cpp
-    src/Engine/SceneSerialization.cpp
-    src/Engine/SceneWorldMigrationBridge.cpp
-    src/Engine/Terrain.cpp
-    src/Engine/TerrainDataset.cpp
-    src/Engine/TerrainPhysicsColliderAdapter.cpp
-    src/Engine/TerrainSerializationPrep.cpp
-    src/Engine/World.cpp
-)
-
-target_include_directories(manual_engine_scene_world_migration_tests
-    PRIVATE
-        src
-)
-
-target_link_libraries(manual_engine_scene_world_migration_tests
-    PRIVATE
-        glm::glm
-        Jolt::Jolt
-        RecastNavigation::Recast
-        RecastNavigation::Detour
-        yaml-cpp::yaml-cpp
-)
-
-add_test(NAME manual_engine_scene_world_migration_tests COMMAND manual_engine_scene_world_migration_tests)
 
 add_executable(manual_engine_authored_scene_adapter_tests
     tests/scene/AuthoredSceneAdapterTestRunner.cpp
@@ -974,9 +861,7 @@ add_executable(manual_engine_animated_scene_adapter_tests
     tests/scene/AnimatedSceneAdapterTestRunner.cpp
     tests/authored_scene/RendererOwnershipStubs.cpp
     src/Assets/Assimp/Importer.cpp
-    src/Engine/AnimatedModel.cpp
-    src/Engine/AnimatedModelCache.cpp
-    src/Engine/AnimatedModelPose.cpp
+   src/Engine/AnimatedModelPose.cpp
     src/Engine/AssetCache.cpp
     src/Engine/ImportedSceneResources.cpp
     src/Engine/Scene/AnimatedSceneAdapter.cpp
@@ -999,35 +884,6 @@ target_link_libraries(manual_engine_animated_scene_adapter_tests
 
 add_test(NAME manual_engine_animated_scene_adapter_tests COMMAND manual_engine_animated_scene_adapter_tests)
 
-add_executable(manual_engine_authored_scene_tests
-    tests/authored_scene/AuthoredSceneTestRunner.cpp
-    tests/authored_scene/RendererOwnershipStubs.cpp
-    src/Assets/Assimp/Importer.cpp
-    src/Engine/AnimatedModel.cpp
-    src/Engine/AnimatedModelAsync.cpp
-    src/Engine/AnimatedModelCache.cpp
-    src/Engine/AnimatedModelPose.cpp
-    src/Engine/AssetCache.cpp
-    src/Engine/AuthoredScene.cpp
-    src/Engine/AuthoredSceneAsync.cpp
-    src/Engine/AsyncWorkQueue.cpp
-    src/Engine/FrameBudget.cpp
-    src/Engine/ImportedSceneResources.cpp
-)
-
-target_include_directories(manual_engine_authored_scene_tests
-    PRIVATE
-        src
-)
-
-target_link_libraries(manual_engine_authored_scene_tests
-    PRIVATE
-        assimp::assimp
-        glm::glm
-        yaml-cpp::yaml-cpp
-)
-
-add_test(NAME manual_engine_authored_scene_tests COMMAND manual_engine_authored_scene_tests)
 
 add_executable(manual_engine_texture_tests
     tests/renderer/TextureTestRunner.cpp
@@ -1049,46 +905,6 @@ target_link_libraries(manual_engine_texture_tests
 
 add_test(NAME manual_engine_texture_tests COMMAND manual_engine_texture_tests)
 
-add_executable(manual_engine_authored_scene_smoke_tests
-    tests/authored_scene/AuthoredSceneRendererSmoke.cpp
-    src/Assets/Assimp/Importer.cpp
-    src/Engine/AssetCache.cpp
-    src/Engine/AnimatedModel.cpp
-    src/Engine/AnimatedModelAsync.cpp
-    src/Engine/AnimatedModelCache.cpp
-    src/Engine/AnimatedModelPose.cpp
-    src/Engine/AuthoredScene.cpp
-    src/Engine/AuthoredSceneAsync.cpp
-    src/Engine/AsyncWorkQueue.cpp
-    src/Engine/FrameBudget.cpp
-    src/Engine/ImportedSceneResources.cpp
-    src/Renderer/Scene.cpp
-    src/Renderer/Texture.cpp
-    src/Renderer/core.cpp
-    src/Renderer/VertexLayouts.cpp
-)
-
-target_include_directories(manual_engine_authored_scene_smoke_tests
-    PRIVATE
-        src
-        ${Stb_INCLUDE_DIR}
-)
-
-target_compile_definitions(manual_engine_authored_scene_smoke_tests
-    PRIVATE
-        MANUAL_ENGINE_ENABLE_DEBUG_TOOLS=0
-)
-
-target_link_libraries(manual_engine_authored_scene_smoke_tests
-    PRIVATE
-        SDL3::SDL3
-        assimp::assimp
-        bgfx::bgfx
-        glm::glm
-        yaml-cpp::yaml-cpp
-)
-
-add_test(NAME manual_engine_authored_scene_smoke_tests COMMAND manual_engine_authored_scene_smoke_tests)
 
 set(SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/src")
 set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/dx11")
@@ -1218,4 +1034,3 @@ add_custom_target(manual_engine_shaders
 )
 
 add_dependencies(manual_engine manual_engine_shaders)
-add_dependencies(manual_engine_authored_scene_smoke_tests manual_engine_shaders)

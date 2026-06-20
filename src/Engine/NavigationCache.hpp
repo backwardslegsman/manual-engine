@@ -8,7 +8,6 @@
 #include "Engine/AssetRegistry.hpp"
 #include "Engine/Navigation.hpp"
 #include "Engine/NavigationConnectivity.hpp"
-#include "Engine/WorldNavigationGraph.hpp"
 
 namespace Engine {
     struct NavigationCacheSettings {
@@ -54,9 +53,6 @@ namespace Engine {
         uint32_t connectivityHits = 0;
         uint32_t connectivityMisses = 0;
         uint32_t connectivityWrites = 0;
-        uint32_t graphHits = 0;
-        uint32_t graphMisses = 0;
-        uint32_t graphWrites = 0;
         std::filesystem::path lastPath;
         std::string lastMessage;
     };
@@ -64,7 +60,6 @@ namespace Engine {
     enum class NavigationCacheKind {
         Tile,
         Connectivity,
-        Graph,
     };
 
     enum class NavigationCacheOperationStatus {
@@ -94,10 +89,6 @@ namespace Engine {
 
     struct NavigationCacheConnectivityReadResult : NavigationCacheOperationResult {
         std::optional<ChunkNavConnectivity> connectivity;
-    };
-
-    struct NavigationCacheGraphReadResult : NavigationCacheOperationResult {
-        std::optional<WorldNavigationGraphCacheData> graph;
     };
 
     using NavigationCacheWriteResult = NavigationCacheOperationResult;
@@ -157,15 +148,6 @@ namespace Engine {
             const NavigationCacheSettings& settings,
             const NavigationCacheManifest& manifest,
             const ChunkNavConnectivity& connectivity);
-        static NavigationCacheGraphReadResult readGraphCache(
-            const NavigationCacheSettings& settings,
-            const NavigationCacheManifest& manifest,
-            ChunkCoord centerChunk);
-        static NavigationCacheWriteResult writeGraphCache(
-            const NavigationCacheSettings& settings,
-            const NavigationCacheManifest& manifest,
-            const WorldNavigationGraphCacheData& graph);
-
         // Merge worker-safe helper results into the facade's debug stats. Must
         // be called from the owning/main thread.
         void recordReadResult(const NavigationCacheOperationResult& result);
@@ -177,15 +159,11 @@ namespace Engine {
         std::optional<ChunkNavConnectivity> loadConnectivity(ChunkCoord coord);
         bool writeConnectivity(const ChunkNavConnectivity& connectivity);
 
-        std::optional<WorldNavigationGraphCacheData> loadGraph(ChunkCoord centerChunk);
-        bool writeGraph(const WorldNavigationGraphCacheData& graph);
-
     private:
         std::filesystem::path cacheRoot() const;
         std::filesystem::path manifestPath() const;
         std::filesystem::path tilePath(ChunkCoord coord) const;
         std::filesystem::path connectivityPath(ChunkCoord coord) const;
-        std::filesystem::path graphPath(ChunkCoord centerChunk) const;
         void setLast(std::filesystem::path path, std::string message);
 
         NavigationCacheSettings settings_;

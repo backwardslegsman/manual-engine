@@ -12,7 +12,6 @@
 
 #include "Engine/ChunkTypes.hpp"
 #include "Engine/Navigation.hpp"
-#include "Engine/Terrain.hpp"
 
 namespace Engine {
     enum class NavEdgeDirection : uint32_t {
@@ -121,37 +120,16 @@ namespace Engine {
         void rebuild(
             const std::vector<ChunkCoord>& loadedNavChunks,
             const NavigationSystem& navigation,
-            const TerrainSystem& terrain,
-            const NavAgentSettings& agent);
-        void rebuild(
-            const std::vector<ChunkCoord>& loadedNavChunks,
-            const NavigationSystem& navigation,
             const NavAgentSettings& agent);
         void rebuildChunk(
             ChunkCoord coord,
             const NavigationSystem& navigation,
-            const TerrainSystem& terrain,
-            const NavAgentSettings& agent);
-        void rebuildChunk(
-            ChunkCoord coord,
-            const NavigationSystem& navigation,
-            const NavAgentSettings& agent);
-        void rebuildChunks(
-            std::span<const ChunkCoord> coords,
-            const NavigationSystem& navigation,
-            const TerrainSystem& terrain,
             const NavAgentSettings& agent);
         void rebuildChunks(
             std::span<const ChunkCoord> coords,
             const NavigationSystem& navigation,
             const NavAgentSettings& agent);
         NavigationConnectivityBuildHandle beginRebuild(NavigationConnectivityBuildRequest request);
-        NavigationConnectivityBuildStepResult stepRebuild(
-            NavigationConnectivityBuildHandle handle,
-            const NavigationSystem& navigation,
-            const TerrainSystem& terrain,
-            const NavAgentSettings& agent,
-            uint32_t maxSamples);
         NavigationConnectivityBuildStepResult stepRebuild(
             NavigationConnectivityBuildHandle handle,
             const NavigationSystem& navigation,
@@ -180,7 +158,6 @@ namespace Engine {
             float t,
             const Renderer::Aabb& bounds,
             const NavigationSystem& navigation,
-            const TerrainSystem* terrain,
             const NavAgentSettings& agent,
             NavigationPortalEdgeDiagnostics& diagnostics) const;
         bool shouldMergePortal(const std::vector<ChunkNavPortal>& portals, const glm::vec3& position) const;

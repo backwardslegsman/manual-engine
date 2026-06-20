@@ -112,21 +112,9 @@ namespace Engine {
         return !(lhs == rhs);
     }
 
-    [[nodiscard]] TerrainPhysicsSourceIdentity legacyProceduralTerrainPhysicsIdentity(
-        const TerrainSettings& settings,
-        uint32_t colliderResolution = 0);
     [[nodiscard]] std::optional<TerrainPhysicsColliderBuildRequest> terrainPhysicsColliderRequestFromDatasetChunk(
         const TerrainDataset& dataset,
         TerrainChunkHandle chunk,
-        uint32_t colliderResolution,
-        TerrainPhysicsSourceIdentity identity);
-    [[nodiscard]] std::optional<TerrainPhysicsColliderBuildRequest> terrainPhysicsColliderRequestFromGeneratedTile(
-        const GeneratedTerrainTileData& generated,
-        uint32_t colliderResolution,
-        TerrainPhysicsSourceIdentity identity);
-    [[nodiscard]] std::optional<TerrainPhysicsColliderBuildRequest> terrainPhysicsColliderRequestFromTerrainSystemTile(
-        const TerrainSystem& terrain,
-        TerrainTileHandle tile,
         uint32_t colliderResolution,
         TerrainPhysicsSourceIdentity identity);
     [[nodiscard]] TerrainPhysicsColliderBuildResult buildTerrainPhysicsCollider(
