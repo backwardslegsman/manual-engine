@@ -4,8 +4,6 @@
 #include <cmath>
 #include <utility>
 
-#include "Renderer/Scene.hpp"
-
 namespace Engine {
     namespace {
         [[nodiscard]] uint32_t categoryIndex(DebugVisualizationCategory category)
@@ -420,38 +418,96 @@ namespace Engine {
         }
     }
 
-    std::vector<Renderer::DebugLinePrimitive> toRendererDebugLines(
+    std::vector<DebugVisualizationExpandedLine> expandDebugVisualizationLines(
         const DebugVisualizationSnapshot& snapshot)
     {
-        std::vector<Renderer::DebugLinePrimitive> lines;
-        lines.reserve(snapshot.lines.size() + snapshot.shapes.size() * 12);
+        std::vector<DebugVisualizationExpandedLine> lines;
+        lines.reserve(snapshot.lines.size() + snapshot.shapes.size() * 48);
+        const auto pushLine = [&](const glm::vec3& a,
+                                  const glm::vec3& b,
+                                  uint32_t color,
+                                  DebugVisualizationCategory category,
+                                  DebugVisualizationSeverity severity,
+                                  const std::string& source,
+                                  const std::string& label) {
+            lines.push_back({a, b, color, category, severity, source, label});
+        };
+
         for (const DebugVisualizationLine& line : snapshot.lines) {
-            lines.push_back({line.a, line.b, line.color});
+            pushLine(line.a, line.b, line.color, line.category, line.severity, line.source, line.label);
         }
 
         for (const DebugVisualizationShape& shape : snapshot.shapes) {
-            if (shape.type != DebugVisualizationPrimitiveType::Aabb) {
-                continue;
-            }
-            const glm::vec3& mn = shape.bounds.min;
-            const glm::vec3& mx = shape.bounds.max;
-            const glm::vec3 corners[8] = {
-                {mn.x, mn.y, mn.z},
-                {mx.x, mn.y, mn.z},
-                {mx.x, mn.y, mx.z},
-                {mn.x, mn.y, mx.z},
-                {mn.x, mx.y, mn.z},
-                {mx.x, mx.y, mn.z},
-                {mx.x, mx.y, mx.z},
-                {mn.x, mx.y, mx.z},
-            };
-            constexpr int edges[12][2] = {
-                {0, 1}, {1, 2}, {2, 3}, {3, 0},
-                {4, 5}, {5, 6}, {6, 7}, {7, 4},
-                {0, 4}, {1, 5}, {2, 6}, {3, 7},
-            };
-            for (const auto& edge : edges) {
-                lines.push_back({corners[edge[0]], corners[edge[1]], shape.color});
+            if (shape.type == DebugVisualizationPrimitiveType::Aabb) {
+                const glm::vec3& mn = shape.bounds.min;
+                const glm::vec3& mx = shape.bounds.max;
+                const glm::vec3 corners[8] = {
+                    {mn.x, mn.y, mn.z},
+                    {mx.x, mn.y, mn.z},
+                    {mx.x, mn.y, mx.z},
+                    {mn.x, mn.y, mx.z},
+                    {mn.x, mx.y, mn.z},
+                    {mx.x, mx.y, mn.z},
+                    {mx.x, mx.y, mx.z},
+                    {mn.x, mx.y, mx.z},
+                };
+                constexpr int edges[12][2] = {
+                    {0, 1}, {1, 2}, {2, 3}, {3, 0},
+                    {4, 5}, {5, 6}, {6, 7}, {7, 4},
+                    {0, 4}, {1, 5}, {2, 6}, {3, 7},
+                };
+                for (const auto& edge : edges) {
+                    pushLine(
+                        corners[edge[0]],
+                        corners[edge[1]],
+                        shape.color,
+                        shape.category,
+                        shape.severity,
+                        shape.source,
+                        shape.label);
+                }
+            } else if (shape.type == DebugVisualizationPrimitiveType::Sphere) {
+                constexpr int Segments = 16;
+                constexpr float TwoPi = 6.28318530717958647692f;
+                for (int axis = 0; axis < 3; ++axis) {
+                    for (int segment = 0; segment < Segments; ++segment) {
+                        const float a0 = TwoPi * static_cast<float>(segment) / static_cast<float>(Segments);
+                        const float a1 = TwoPi * static_cast<float>(segment + 1) / static_cast<float>(Segments);
+                        glm::vec3 p0 = shape.position;
+                        glm::vec3 p1 = shape.position;
+                        if (axis == 0) {
+                            p0 += glm::vec3{0.0f, std::cos(a0), std::sin(a0)} * shape.radius;
+                            p1 += glm::vec3{0.0f, std::cos(a1), std::sin(a1)} * shape.radius;
+                        } else if (axis == 1) {
+                            p0 += glm::vec3{std::cos(a0), 0.0f, std::sin(a0)} * shape.radius;
+                            p1 += glm::vec3{std::cos(a1), 0.0f, std::sin(a1)} * shape.radius;
+                        } else {
+                            p0 += glm::vec3{std::cos(a0), std::sin(a0), 0.0f} * shape.radius;
+                            p1 += glm::vec3{std::cos(a1), std::sin(a1), 0.0f} * shape.radius;
+                        }
+                        pushLine(p0, p1, shape.color, shape.category, shape.severity, shape.source, shape.label);
+                    }
+                }
+            } else if (shape.type == DebugVisualizationPrimitiveType::Capsule) {
+                constexpr int Segments = 16;
+                constexpr float TwoPi = 6.28318530717958647692f;
+                const glm::vec3 axis = glm::length(shape.end - shape.position) > 0.0001f
+                    ? glm::normalize(shape.end - shape.position)
+                    : glm::vec3{0.0f, 1.0f, 0.0f};
+                const glm::vec3 helper = std::abs(axis.y) < 0.95f ? glm::vec3{0.0f, 1.0f, 0.0f} : glm::vec3{1.0f, 0.0f, 0.0f};
+                const glm::vec3 right = glm::normalize(glm::cross(helper, axis));
+                const glm::vec3 forward = glm::normalize(glm::cross(axis, right));
+                for (int segment = 0; segment < Segments; ++segment) {
+                    const float a0 = TwoPi * static_cast<float>(segment) / static_cast<float>(Segments);
+                    const float a1 = TwoPi * static_cast<float>(segment + 1) / static_cast<float>(Segments);
+                    const glm::vec3 r0 = (std::cos(a0) * right + std::sin(a0) * forward) * shape.radius;
+                    const glm::vec3 r1 = (std::cos(a1) * right + std::sin(a1) * forward) * shape.radius;
+                    pushLine(shape.position + r0, shape.position + r1, shape.color, shape.category, shape.severity, shape.source, shape.label);
+                    pushLine(shape.end + r0, shape.end + r1, shape.color, shape.category, shape.severity, shape.source, shape.label);
+                    if (segment % 4 == 0) {
+                        pushLine(shape.position + r0, shape.end + r0, shape.color, shape.category, shape.severity, shape.source, shape.label);
+                    }
+                }
             }
         }
         return lines;

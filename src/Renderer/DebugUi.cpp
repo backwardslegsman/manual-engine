@@ -342,6 +342,7 @@ namespace Renderer::DebugUi {
         ImGui::Checkbox("Distance culling", &settings.enableDistanceCulling);
         ImGui::SliderFloat("Prop max distance", &settings.propMaxDrawDistance, 0.0f, 200.0f);
         ImGui::SliderFloat("Terrain max distance", &settings.terrainMaxDrawDistance, 0.0f, 300.0f);
+        ImGui::Checkbox("Experimental scene character movement", &settings.sceneCharacterExperimental);
         ImGui::Separator();
         ImGui::Text("Debug Draw");
         ImGui::Checkbox("Debug draw enabled", &debugDraw.enabled);

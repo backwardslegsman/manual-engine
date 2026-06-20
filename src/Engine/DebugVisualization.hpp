@@ -9,10 +9,6 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
-namespace Renderer {
-    struct DebugLinePrimitive;
-}
-
 namespace Engine {
     enum class DebugVisualizationCategory : uint32_t {
         SceneTransforms,
@@ -107,6 +103,16 @@ namespace Engine {
         glm::vec3 a{0.0f};
         glm::vec3 b{0.0f};
         uint32_t color = 0xffffffff;
+        std::string source;
+        std::string label;
+    };
+
+    struct DebugVisualizationExpandedLine {
+        glm::vec3 a{0.0f};
+        glm::vec3 b{0.0f};
+        uint32_t color = 0xffffffff;
+        DebugVisualizationCategory category = DebugVisualizationCategory::SceneTransforms;
+        DebugVisualizationSeverity severity = DebugVisualizationSeverity::Info;
         std::string source;
         std::string label;
     };
@@ -247,6 +253,6 @@ namespace Engine {
         std::vector<DebugVisualizationReportRow> reportRows_;
     };
 
-    [[nodiscard]] std::vector<Renderer::DebugLinePrimitive> toRendererDebugLines(
+    [[nodiscard]] std::vector<DebugVisualizationExpandedLine> expandDebugVisualizationLines(
         const DebugVisualizationSnapshot& snapshot);
 }

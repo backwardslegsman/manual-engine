@@ -39,9 +39,12 @@
 #include "Engine/Scene/RendererSceneRenderBackend.hpp"
 #include "Engine/Scene/Scene.hpp"
 #include "Engine/Scene/SceneRenderBridge.hpp"
+#include "Engine/SceneCharacterMovement.hpp"
+#include "Engine/SceneWorldMigrationBridge.hpp"
 #include "Engine/Biome.hpp"
 #include "Engine/BlockingCollision.hpp"
 #include "Engine/ChunkStreamer.hpp"
+#include "Engine/DebugVisualization.hpp"
 #include "Engine/EventQueue.hpp"
 #include "Engine/FixedStepLoop.hpp"
 #include "Engine/FrameBudget.hpp"
@@ -53,6 +56,7 @@
 #include "Engine/NavigationCache.hpp"
 #include "Engine/NavigationConnectivity.hpp"
 #include "Engine/NavigationProfile.hpp"
+#include "Engine/NavigationRuntime.hpp"
 #include "Engine/ObjectArchetype.hpp"
 #include "Engine/OrbitCamera.hpp"
 #include "Engine/PersistentObjectEditor.hpp"
@@ -63,6 +67,7 @@
 #include "Engine/TerrainMaterialRenderAdapter.hpp"
 #include "Engine/TerrainSampleMaterials.hpp"
 #include "Engine/TerrainNavigationAdapter.hpp"
+#include "Engine/TerrainPhysicsColliderAdapter.hpp"
 #include "Engine/TerrainRenderLodAdapter.hpp"
 #include "Engine/World.hpp"
 #include "Engine/WorldNavigationGraph.hpp"
@@ -198,6 +203,28 @@ namespace {
     struct DebugPrimitiveBudget {
         const Renderer::DebugDrawSettings& settings;
         Renderer::DebugDrawStats& stats;
+        Engine::DebugVisualizationCollector& collector;
+
+        [[nodiscard]] Engine::DebugVisualizationCategory categoryFor(
+            const Renderer::DebugPrimitiveCategoryStats& category) const
+        {
+            if (&category == &stats.navMeshEdges) {
+                return Engine::DebugVisualizationCategory::Navigation;
+            }
+            if (&category == &stats.worldGraphEdges) {
+                return Engine::DebugVisualizationCategory::Navigation;
+            }
+            if (&category == &stats.terrainSlopeWarnings) {
+                return Engine::DebugVisualizationCategory::Terrain;
+            }
+            if (&category == &stats.collisionBounds) {
+                return Engine::DebugVisualizationCategory::SceneBounds;
+            }
+            if (&category == &stats.chunkBorders) {
+                return Engine::DebugVisualizationCategory::Terrain;
+            }
+            return Engine::DebugVisualizationCategory::Performance;
+        }
 
         bool consume(Renderer::DebugPrimitiveCategoryStats& category, uint32_t maxSubmitted, uint32_t lineCount = 1)
         {
@@ -215,37 +242,46 @@ namespace {
 
         void addLine(const glm::vec3& a, const glm::vec3& b, uint32_t color)
         {
-            Renderer::addDebugLine(a, b, color);
+            (void)collector.addLine(Engine::DebugVisualizationCategory::Performance, a, b, color);
         }
 
         void addLine(Renderer::DebugPrimitiveCategoryStats& category, uint32_t maxSubmitted, const glm::vec3& a, const glm::vec3& b, uint32_t color)
         {
             if (consume(category, maxSubmitted)) {
-                Renderer::addDebugLine(a, b, color);
+                (void)collector.addLine(categoryFor(category), a, b, color);
             }
         }
 
         void addAabb(const Renderer::Aabb& bounds, uint32_t color)
         {
-            Renderer::addDebugAabb(bounds, color);
+            (void)collector.addAabb(
+                Engine::DebugVisualizationCategory::SceneBounds,
+                {bounds.min, bounds.max},
+                color);
         }
 
         void addAabb(Renderer::DebugPrimitiveCategoryStats& category, uint32_t maxSubmitted, const Renderer::Aabb& bounds, uint32_t color)
         {
             if (consume(category, maxSubmitted, 12)) {
-                Renderer::addDebugAabb(bounds, color);
+                (void)collector.addAabb(categoryFor(category), {bounds.min, bounds.max}, color);
             }
         }
 
         void addXZRect(float minX, float minZ, float maxX, float maxZ, float y, uint32_t color)
         {
-            Renderer::addDebugXZRect(minX, minZ, maxX, maxZ, y, color);
+            (void)collector.addLine(Engine::DebugVisualizationCategory::Terrain, {minX, y, minZ}, {maxX, y, minZ}, color);
+            (void)collector.addLine(Engine::DebugVisualizationCategory::Terrain, {maxX, y, minZ}, {maxX, y, maxZ}, color);
+            (void)collector.addLine(Engine::DebugVisualizationCategory::Terrain, {maxX, y, maxZ}, {minX, y, maxZ}, color);
+            (void)collector.addLine(Engine::DebugVisualizationCategory::Terrain, {minX, y, maxZ}, {minX, y, minZ}, color);
         }
 
         void addXZRect(Renderer::DebugPrimitiveCategoryStats& category, uint32_t maxSubmitted, float minX, float minZ, float maxX, float maxZ, float y, uint32_t color)
         {
             if (consume(category, maxSubmitted, 4)) {
-                Renderer::addDebugXZRect(minX, minZ, maxX, maxZ, y, color);
+                (void)collector.addLine(categoryFor(category), {minX, y, minZ}, {maxX, y, minZ}, color);
+                (void)collector.addLine(categoryFor(category), {maxX, y, minZ}, {maxX, y, maxZ}, color);
+                (void)collector.addLine(categoryFor(category), {maxX, y, maxZ}, {minX, y, maxZ}, color);
+                (void)collector.addLine(categoryFor(category), {minX, y, maxZ}, {minX, y, minZ}, color);
             }
         }
     };
@@ -573,6 +609,11 @@ namespace {
         return static_cast<uint16_t>(std::max(value, 1));
     }
 
+    enum class GameplayRuntimeMode {
+        LegacyProcedural,
+        SceneCharacterExperimental,
+    };
+
     void resizeBackbufferIfNeeded(SDL_Window* window, int& currentWidth, int& currentHeight)
     {
         int width = currentWidth;
@@ -604,6 +645,7 @@ namespace {
     }
 
     bool pressedAction(const Engine::EventQueue& events, std::string_view actionName);
+    glm::vec2 axis2Action(const Engine::EventQueue& events, std::string_view actionName);
     Renderer::DebugUi::CameraDebugStats makeCameraDebugStats(const Engine::OrbitCameraController& camera);
 
 #include "App/AuthoredRuntime.inl"
@@ -1299,6 +1341,22 @@ namespace {
         });
     }
 
+    glm::vec2 axis2Action(const Engine::EventQueue& events, std::string_view actionName)
+    {
+        glm::vec2 axis{};
+        for (const Engine::InputActionEvent& event : events.inputActions()) {
+            if (event.action == actionName &&
+                event.payloadType == Engine::InputActionPayloadType::Axis2 &&
+                event.phase == Engine::InputActionPhase::Held) {
+                axis += event.axis2Value;
+            }
+        }
+        if (glm::dot(axis, axis) > 1.0f) {
+            axis = glm::normalize(axis);
+        }
+        return axis;
+    }
+
     const char* cameraModeName(Engine::CameraMode mode)
     {
         switch (mode) {
@@ -1628,7 +1686,11 @@ namespace {
             return;
         }
         Renderer::DebugDrawStats& debugStats = Renderer::debugDrawStats();
-        DebugPrimitiveBudget debugBudget{settings, debugStats};
+        Engine::DebugVisualizationSettings collectorSettings = Engine::defaultDebugVisualizationSettings();
+        collectorSettings.enabled = settings.enabled;
+        collectorSettings.maxPrimitives = settings.maxDebugLines;
+        Engine::DebugVisualizationCollector debugCollector{collectorSettings};
+        DebugPrimitiveBudget debugBudget{settings, debugStats, debugCollector};
 
         constexpr uint32_t SelectedColor = debugColorAbgr(255, 220, 40);
         constexpr uint32_t CollisionColor = debugColorAbgr(255, 64, 64);
@@ -1787,7 +1849,45 @@ namespace {
         }
 
         if (settings.cameraFrustum) {
-            Renderer::addDebugFrustum(glm::inverse(renderView.viewProjection), FrustumColor);
+            const glm::mat4 inverseViewProjection = glm::inverse(renderView.viewProjection);
+            const glm::vec4 ndcCorners[] = {
+                {-1.0f, -1.0f, -1.0f, 1.0f},
+                { 1.0f, -1.0f, -1.0f, 1.0f},
+                { 1.0f,  1.0f, -1.0f, 1.0f},
+                {-1.0f,  1.0f, -1.0f, 1.0f},
+                {-1.0f, -1.0f,  1.0f, 1.0f},
+                { 1.0f, -1.0f,  1.0f, 1.0f},
+                { 1.0f,  1.0f,  1.0f, 1.0f},
+                {-1.0f,  1.0f,  1.0f, 1.0f},
+            };
+            glm::vec3 corners[8]{};
+            bool validFrustum = true;
+            for (uint32_t index = 0; index < 8; ++index) {
+                const glm::vec4 world = inverseViewProjection * ndcCorners[index];
+                if (std::abs(world.w) <= 0.00001f || !std::isfinite(world.w)) {
+                    validFrustum = false;
+                    break;
+                }
+                corners[index] = glm::vec3{world} / world.w;
+                if (!std::isfinite(corners[index].x) || !std::isfinite(corners[index].y) || !std::isfinite(corners[index].z)) {
+                    validFrustum = false;
+                    break;
+                }
+            }
+            if (validFrustum) {
+                constexpr uint32_t edges[][2] = {
+                    {0, 1}, {1, 2}, {2, 3}, {3, 0},
+                    {4, 5}, {5, 6}, {6, 7}, {7, 4},
+                    {0, 4}, {1, 5}, {2, 6}, {3, 7},
+                };
+                for (const auto& edge : edges) {
+                    (void)debugCollector.addLine(
+                        Engine::DebugVisualizationCategory::SceneBounds,
+                        corners[edge[0]],
+                        corners[edge[1]],
+                        FrustumColor);
+                }
+            }
         }
 
         if (settings.worldNavigationGraphNodes) {
@@ -1975,6 +2075,15 @@ namespace {
                 );
             }
         }
+
+        const std::vector<Engine::DebugVisualizationExpandedLine> expandedLines =
+            Engine::expandDebugVisualizationLines(debugCollector.snapshot());
+        std::vector<Renderer::DebugLinePrimitive> rendererLines;
+        rendererLines.reserve(expandedLines.size());
+        for (const Engine::DebugVisualizationExpandedLine& line : expandedLines) {
+            rendererLines.push_back({line.a, line.b, line.color});
+        }
+        Renderer::addDebugLines(rendererLines);
     }
 }
 
@@ -2167,6 +2276,19 @@ int main(int argc, char** argv)
     Engine::NavigationSystem navigation(navBuildSettings);
     Engine::NavigationConnectivitySystem navigationConnectivity;
     Engine::WorldNavigationGraph worldNavigationGraph({SampleWorldGraphRadius, SampleChunkSize});
+    GameplayRuntimeMode gameplayRuntimeMode = GameplayRuntimeMode::LegacyProcedural;
+    bool sceneExperimentalRuntimeReady = false;
+    Engine::Scene experimentalScene;
+    Engine::ScenePhysicsWorld experimentalPhysics{experimentalScene};
+    Engine::SceneNavigationService experimentalNavigation{navigation, &navigationConnectivity, &worldNavigationGraph};
+    Engine::SceneCharacterMovementSystem experimentalCharacters{experimentalScene, experimentalPhysics};
+    experimentalCharacters.setNavigationService(&experimentalNavigation);
+    Engine::SceneWorldMigrationBridge experimentalWorldBridge;
+    Engine::TerrainPhysicsColliderAdapter experimentalTerrainColliders;
+    (void)experimentalPhysics.registerPhysicsSystems();
+    (void)experimentalCharacters.registerMovementSystem();
+    (void)experimentalScene.load();
+    (void)experimentalScene.start();
     Engine::NavigationCacheSettings navigationCacheSettings;
     const Engine::NavigationCacheManifest navigationCacheManifest = Engine::NavigationCache::buildManifest(
         navigationCacheSettings,
@@ -2274,6 +2396,66 @@ int main(int argc, char** argv)
     std::vector<glm::vec3> lastFormationDestinations;
     std::vector<glm::vec3> lastFailedFormationDestinations;
     Engine::ChunkStreamer chunkStreamer({SampleChunkSize, SampleChunkLoadRadius});
+    const Engine::TerrainPhysicsSourceIdentity terrainPhysicsIdentity =
+        Engine::legacyProceduralTerrainPhysicsIdentity(terrainSettings);
+    const auto terrainChunkIdForCoord = [&](Engine::ChunkCoord coord) {
+        return Engine::TerrainSourceChunkId{
+            terrainPhysicsIdentity.sourceId,
+            Engine::TerrainSourceChunkCoord{coord.x, coord.z},
+        };
+    };
+    const auto ensureExperimentalTerrainCollider = [&](Engine::TerrainTileHandle terrainTile) {
+        if (terrainTile.id == UINT32_MAX) {
+            return;
+        }
+        const std::optional<Engine::TerrainPhysicsColliderBuildRequest> request =
+            Engine::terrainPhysicsColliderRequestFromTerrainSystemTile(
+                terrain,
+                terrainTile,
+                terrainSettings.navigationResolution,
+                terrainPhysicsIdentity);
+        if (!request || experimentalTerrainColliders.colliderForChunk(request->chunkId)) {
+            return;
+        }
+        Engine::TerrainPhysicsColliderBuildResult build = Engine::buildTerrainPhysicsCollider(*request);
+        if (!build.success || !build.payload) {
+            return;
+        }
+        Engine::TerrainPhysicsColliderCreateDescriptor descriptor;
+        descriptor.debugName = "experimental terrain " +
+            std::to_string(request->coord.x) + "," +
+            std::to_string(request->coord.z);
+        (void)experimentalTerrainColliders.createStaticCollider(
+            experimentalScene,
+            experimentalPhysics,
+            *build.payload,
+            descriptor);
+    };
+    const auto syncExperimentalTerrainCollidersForLoadedChunks = [&]() {
+        chunkStreamer.forEachLoadedChunkContent(
+            [&](Engine::TerrainTileHandle terrainTile, const std::vector<Engine::WorldObjectHandle>&, Renderer::RenderGroupHandle) {
+                ensureExperimentalTerrainCollider(terrainTile);
+            });
+    };
+    const auto ensureExperimentalPropBlocker = [&](Engine::WorldObjectHandle object) {
+        if (!world.isValid(object) ||
+            !world.collisionEnabled(object)) {
+            return;
+        }
+        const Engine::SceneActorHandle actor = experimentalWorldBridge.mapObject(experimentalScene, world, object);
+        if (!Engine::isValid(actor)) {
+            return;
+        }
+        (void)experimentalWorldBridge.createStaticBoxColliderForObject(experimentalPhysics, world, object);
+    };
+    const auto syncExperimentalPropBlockersForLoadedChunks = [&]() {
+        chunkStreamer.forEachLoadedChunkContent(
+            [&](Engine::TerrainTileHandle, const std::vector<Engine::WorldObjectHandle>& objects, Renderer::RenderGroupHandle) {
+                for (Engine::WorldObjectHandle object : objects) {
+                    ensureExperimentalPropBlocker(object);
+                }
+            });
+    };
     Engine::WorldObjectOverrides objectOverrides;
     const Engine::ProceduralChunkContentConfig chunkContentConfig =
         Engine::ProceduralChunkContentConfig::sampleOpenWorldConfig(objectArchetypes, &biomes, SampleChunkSize);
@@ -2770,6 +2952,12 @@ int main(int argc, char** argv)
                             cleanupPendingChunkCommit(pending);
                             return;
                         }
+                        if (gameplayRuntimeMode == GameplayRuntimeMode::SceneCharacterExperimental) {
+                            ensureExperimentalTerrainCollider(pending->content.terrain);
+                            for (Engine::WorldObjectHandle object : pending->content.objects) {
+                                ensureExperimentalPropBlocker(object);
+                            }
+                        }
                         pending->registered = true;
                         asyncStreaming.recordTiming(
                             pending->generated.terrainGenerationMs,
@@ -2824,6 +3012,10 @@ int main(int argc, char** argv)
                     case ChunkUnloadPhase::RemoveNavigation: {
                         navigation.destroyTile(pending->coord);
                         navigationChunks.erase(pending->coord);
+                        (void)experimentalTerrainColliders.destroyColliderForChunk(
+                            experimentalScene,
+                            experimentalPhysics,
+                            terrainChunkIdForCoord(pending->coord));
                         if (auto navIt = runtimeNavTiles.find(pending->coord); navIt != runtimeNavTiles.end()) {
                             asyncWork.cancel(navIt->second.pendingJob);
                             runtimeNavTiles.erase(navIt);
@@ -2838,6 +3030,11 @@ int main(int argc, char** argv)
                         for (; pending->nextObjectIndex < end; ++pending->nextObjectIndex) {
                             const Engine::WorldObjectHandle object = pending->content.objects[pending->nextObjectIndex];
                             spatialRegistry.remove(object);
+                            (void)experimentalWorldBridge.unmapObject(
+                                experimentalScene,
+                                &experimentalPhysics,
+                                &experimentalCharacters,
+                                object);
                             world.destroyObjectAndRendererInstance(object);
                         }
                         if (pending->nextObjectIndex >= pending->content.objects.size()) {
@@ -4154,6 +4351,41 @@ int main(int argc, char** argv)
     createDemoActor(1, {-1.8f, 0.0f, 0.0f});
     createDemoActor(2, {0.0f, 0.0f, 1.8f});
 
+    const auto rebuildExperimentalSceneGameplay = [&]() {
+        experimentalWorldBridge.clear(experimentalScene, &experimentalPhysics, &experimentalCharacters);
+        sceneExperimentalRuntimeReady = false;
+
+        const auto mapCharacter = [&](Engine::WorldObjectHandle object, const char* debugName) {
+            const Engine::SceneActorHandle actor = experimentalWorldBridge.mapObject(experimentalScene, world, object);
+            if (!Engine::isValid(actor)) {
+                return;
+            }
+            Engine::SceneCharacterDescriptor descriptor;
+            descriptor.actor = actor;
+            descriptor.radius = 0.45f;
+            descriptor.height = 1.8f;
+            descriptor.maxSpeed = 6.0f;
+            descriptor.debugName = debugName;
+            (void)experimentalWorldBridge.bindCharacter(experimentalCharacters, object, descriptor);
+        };
+
+        mapCharacter(playerObject, "experimental.player");
+        for (size_t index = 0; index < demoActorObjects.size(); ++index) {
+            mapCharacter(demoActorObjects[index], ("experimental.squad." + std::to_string(index)).c_str());
+        }
+        syncExperimentalTerrainCollidersForLoadedChunks();
+        syncExperimentalPropBlockersForLoadedChunks();
+        sceneExperimentalRuntimeReady = experimentalWorldBridge.diagnostics().characterBindingCount > 0;
+        if (sceneExperimentalRuntimeReady) {
+            SDL_Log(
+                "Experimental scene character runtime mapped %u object(s), %u character(s).",
+                experimentalWorldBridge.diagnostics().mappedObjectCount,
+                experimentalWorldBridge.diagnostics().characterBindingCount);
+        } else {
+            SDL_Log("Experimental scene character runtime could not map current procedural actors.");
+        }
+    };
+
     world.syncRenderState();
 
     const auto finishPendingChunkUnloadNow = [&](const std::shared_ptr<PendingChunkUnload>& pending) {
@@ -4176,6 +4408,11 @@ int main(int argc, char** argv)
             for (; pending->nextObjectIndex < pending->content.objects.size(); ++pending->nextObjectIndex) {
                 const Engine::WorldObjectHandle object = pending->content.objects[pending->nextObjectIndex];
                 spatialRegistry.remove(object);
+                (void)experimentalWorldBridge.unmapObject(
+                    experimentalScene,
+                    &experimentalPhysics,
+                    &experimentalCharacters,
+                    object);
                 world.destroyObjectAndRendererInstance(object);
             }
         }
@@ -4198,6 +4435,7 @@ int main(int argc, char** argv)
     };
 
     const auto clearPendingChunkWork = [&]() {
+        experimentalTerrainColliders.releaseAll(experimentalScene, experimentalPhysics);
         for (const auto& [_, handle] : asyncStreaming.pendingLoads) {
             asyncWork.cancel(handle);
         }
@@ -4384,6 +4622,32 @@ int main(int argc, char** argv)
             inputMapping.publishEvents(input, events);
         });
         playerNavAgent = toEngineAgentSettings(navigationDebugControls.agent);
+        const GameplayRuntimeMode requestedGameplayRuntimeMode = debugSettings.sceneCharacterExperimental
+            ? GameplayRuntimeMode::SceneCharacterExperimental
+            : GameplayRuntimeMode::LegacyProcedural;
+        if (requestedGameplayRuntimeMode != gameplayRuntimeMode) {
+            gameplayRuntimeMode = requestedGameplayRuntimeMode;
+            lastWorldRoute = {};
+            lastGroupCommandSuccessCount = 0;
+            lastGroupCommandFailureCount = 0;
+            lastGroupCommandFailureSummary.clear();
+            lastFormationDestinations.clear();
+            lastFailedFormationDestinations.clear();
+            if (gameplayRuntimeMode == GameplayRuntimeMode::SceneCharacterExperimental) {
+                rebuildExperimentalSceneGameplay();
+                worldSaveControls.status = sceneExperimentalRuntimeReady
+                    ? "Experimental scene character movement enabled."
+                    : "Experimental scene character movement failed to initialize.";
+            } else {
+                experimentalTerrainColliders.releaseAll(experimentalScene, experimentalPhysics);
+                experimentalWorldBridge.clear(experimentalScene, &experimentalPhysics, &experimentalCharacters);
+                sceneExperimentalRuntimeReady = false;
+                worldSaveControls.status = "Legacy procedural actor movement enabled.";
+            }
+        }
+        debugSettings.sceneMode = gameplayRuntimeMode == GameplayRuntimeMode::SceneCharacterExperimental
+            ? "Procedural + scene characters (experimental)"
+            : "Procedural";
         if (pressedAction(events, "player.set_destination")) {
             destinationClickTracking = true;
             destinationClickPressPosition = input.mousePosition();
@@ -4397,12 +4661,30 @@ int main(int argc, char** argv)
             }
             destinationClickTracking = false;
         }
+        const auto sceneCharacterForLegacyActor = [&](Engine::ActorHandle actor) -> std::optional<Engine::SceneCharacterHandle> {
+            const std::optional<Engine::ActorState> state = actors.state(actor);
+            if (!state) {
+                return std::nullopt;
+            }
+            const std::optional<Engine::SceneActorHandle> sceneActor = experimentalWorldBridge.actorForObject(state->object);
+            if (!sceneActor) {
+                return std::nullopt;
+            }
+            return experimentalCharacters.characterForActor(*sceneActor);
+        };
+        const auto clearSceneCharacterPath = [&](Engine::ActorHandle actor) {
+            if (const std::optional<Engine::SceneCharacterHandle> character = sceneCharacterForLegacyActor(actor)) {
+                (void)experimentalCharacters.clearPath(*character);
+            }
+        };
         if (pressedAction(events, "player.cancel_destination")) {
             if (actorSelection.selectedActors().empty()) {
                 actors.cancelPath(playerActor);
+                clearSceneCharacterPath(playerActor);
             } else {
                 for (Engine::ActorHandle actor : actorSelection.selectedActors()) {
                     actors.cancelPath(actor);
+                    clearSceneCharacterPath(actor);
                 }
             }
             lastGroupCommandStatus = "Destination cancelled.";
@@ -4416,10 +4698,12 @@ int main(int argc, char** argv)
         if (pressedAction(events, "player.stop")) {
             if (actorSelection.selectedActors().empty()) {
                 actors.cancelPath(playerActor);
+                clearSceneCharacterPath(playerActor);
                 lastGroupCommandStatus = "Stopped player actor.";
             } else {
                 for (Engine::ActorHandle actor : actorSelection.selectedActors()) {
                     actors.cancelPath(actor);
+                    clearSceneCharacterPath(actor);
                 }
                 lastGroupCommandStatus = std::string{"Stopped "} +
                     std::to_string(actorSelection.selectedActors().size()) +
@@ -4560,21 +4844,24 @@ int main(int argc, char** argv)
         frameTimings.fixedUpdateMs = measureMilliseconds([&]() {
             while (loop.shouldRunFixedUpdate()) {
                 world.fixedUpdate(loop.fixedDeltaSeconds());
-                actors.fixedUpdate(
-                    playerActor,
-                    events,
-                    terrain,
-                    world,
-                    spatialRegistry,
-                    blockingCollision,
-                    navigation,
-                    playerNavAgent,
-                    loop.fixedDeltaSeconds());
-                Engine::EventQueue actorNoInputEvents;
-                for (Engine::ActorHandle actor : demoActors) {
+                if (gameplayRuntimeMode == GameplayRuntimeMode::SceneCharacterExperimental && sceneExperimentalRuntimeReady) {
+                    if (const std::optional<Engine::SceneCharacterHandle> character = sceneCharacterForLegacyActor(playerActor)) {
+                        const glm::vec2 axis = axis2Action(events, "player.move");
+                        Engine::SceneCharacterMoveInput moveInput;
+                        moveInput.direction = {axis.x, 0.0f, axis.y};
+                        moveInput.speedScale = glm::length(axis) > 0.0f ? 1.0f : 0.0f;
+                        if (moveInput.speedScale > 0.0f) {
+                            moveInput.faceDirection = moveInput.direction;
+                        }
+                        (void)experimentalCharacters.setMoveInput(*character, moveInput);
+                    }
+                    experimentalWorldBridge.syncWorldToScene(experimentalScene, world);
+                    experimentalScene.tickFixed(loop.fixedDeltaSeconds());
+                    experimentalWorldBridge.syncSceneToWorld(experimentalScene, world);
+                } else {
                     actors.fixedUpdate(
-                        actor,
-                        actorNoInputEvents,
+                        playerActor,
+                        events,
                         terrain,
                         world,
                         spatialRegistry,
@@ -4582,6 +4869,19 @@ int main(int argc, char** argv)
                         navigation,
                         playerNavAgent,
                         loop.fixedDeltaSeconds());
+                    Engine::EventQueue actorNoInputEvents;
+                    for (Engine::ActorHandle actor : demoActors) {
+                        actors.fixedUpdate(
+                            actor,
+                            actorNoInputEvents,
+                            terrain,
+                            world,
+                            spatialRegistry,
+                            blockingCollision,
+                            navigation,
+                            playerNavAgent,
+                            loop.fixedDeltaSeconds());
+                    }
                 }
                 updateSpatialRegistryForLoadedObjects();
                 if (const std::optional<glm::vec3> playerPosition = world.position(playerObject)) {
@@ -4668,46 +4968,82 @@ int main(int argc, char** argv)
                         destination.y = *height;
                     }
 
-                    const Engine::WorldNavRoute route = actors.setRouteDestination(
-                        commandedActors[index],
-                        destination,
-                        worldNavigationGraph,
-                        navigation,
-                        playerNavAgent,
-                        world);
-                    if (index == 0) {
-                        lastWorldRoute = route;
-                    }
-                    if (route.status == Engine::WorldNavRouteStatus::Success) {
-                        ++lastGroupCommandSuccessCount;
-                        lastFormationDestinations.push_back(destination);
-                    } else {
-                        const Engine::NavQueryResult localPath = actors.setPathDestination(
-                            commandedActors[index],
-                            destination,
-                            navigation,
-                            playerNavAgent,
-                            world);
-                        if (localPath.status == Engine::NavQueryStatus::Success) {
+                    if (gameplayRuntimeMode == GameplayRuntimeMode::SceneCharacterExperimental) {
+                        const std::optional<Engine::SceneCharacterHandle> character =
+                            sceneCharacterForLegacyActor(commandedActors[index]);
+                        if (!character) {
+                            ++lastGroupCommandFailureCount;
+                            lastFailedFormationDestinations.push_back(destination);
+                            if (lastGroupCommandFailureSummary.empty()) {
+                                lastGroupCommandFailureSummary = "Scene move failed: selected actor is not mapped to a scene character.";
+                            }
+                            continue;
+                        }
+                        Engine::SceneCharacterPathRequest request;
+                        request.goal = destination;
+                        request.agent.radius = playerNavAgent.radius;
+                        request.agent.height = playerNavAgent.height;
+                        request.agent.maxSlopeDegrees = playerNavAgent.maxSlopeDegrees;
+                        request.agent.maxClimb = playerNavAgent.maxClimb;
+                        request.filter.allowPartialPath = false;
+                        request.filter.requireLoadedTiles = true;
+                        if (experimentalCharacters.requestPathTo(*character, request)) {
                             ++lastGroupCommandSuccessCount;
                             lastFormationDestinations.push_back(destination);
                         } else {
                             ++lastGroupCommandFailureCount;
                             lastFailedFormationDestinations.push_back(destination);
                             if (lastGroupCommandFailureSummary.empty()) {
-                                lastGroupCommandFailureSummary =
-                                    std::string{"Route failed for actor "} +
-                                    std::to_string(commandedActors[index].id) +
-                                    ": " +
-                                    worldRouteStatusName(route.status) +
-                                    (route.message.empty() ? "" : ". " + route.message);
+                                const std::optional<Engine::SceneCharacterState> state = experimentalCharacters.state(*character);
+                                lastGroupCommandFailureSummary = state && !state->lastMessage.empty()
+                                    ? state->lastMessage
+                                    : "Scene move failed: no loaded local path.";
+                            }
+                        }
+                    } else {
+                        const Engine::WorldNavRoute route = actors.setRouteDestination(
+                            commandedActors[index],
+                            destination,
+                            worldNavigationGraph,
+                            navigation,
+                            playerNavAgent,
+                            world);
+                        if (index == 0) {
+                            lastWorldRoute = route;
+                        }
+                        if (route.status == Engine::WorldNavRouteStatus::Success) {
+                            ++lastGroupCommandSuccessCount;
+                            lastFormationDestinations.push_back(destination);
+                        } else {
+                            const Engine::NavQueryResult localPath = actors.setPathDestination(
+                                commandedActors[index],
+                                destination,
+                                navigation,
+                                playerNavAgent,
+                                world);
+                            if (localPath.status == Engine::NavQueryStatus::Success) {
+                                ++lastGroupCommandSuccessCount;
+                                lastFormationDestinations.push_back(destination);
+                            } else {
+                                ++lastGroupCommandFailureCount;
+                                lastFailedFormationDestinations.push_back(destination);
+                                if (lastGroupCommandFailureSummary.empty()) {
+                                    lastGroupCommandFailureSummary =
+                                        std::string{"Route failed for actor "} +
+                                        std::to_string(commandedActors[index].id) +
+                                        ": " +
+                                        worldRouteStatusName(route.status) +
+                                        (route.message.empty() ? "" : ". " + route.message);
+                                }
                             }
                         }
                     }
                 }
 
                 lastGroupCommandStatus =
-                    std::string{"Move command: "} +
+                    std::string{gameplayRuntimeMode == GameplayRuntimeMode::SceneCharacterExperimental
+                        ? "Scene move command: "
+                        : "Move command: "} +
                     std::to_string(lastGroupCommandSuccessCount) +
                     " command(s), " +
                     std::to_string(lastGroupCommandFailureCount) +
@@ -5335,6 +5671,9 @@ int main(int argc, char** argv)
                         spatialRegistry.insert(object, *position);
                     }
                 }
+                if (gameplayRuntimeMode == GameplayRuntimeMode::SceneCharacterExperimental) {
+                    rebuildExperimentalSceneGameplay();
+                }
                 processNavigationDirty();
                 world.syncRenderState();
                 debugSelection = {};
@@ -5456,6 +5795,11 @@ int main(int argc, char** argv)
     }
 
     clearPendingChunkWork();
+    experimentalWorldBridge.clear(experimentalScene, &experimentalPhysics, &experimentalCharacters);
+    (void)experimentalCharacters.unregisterMovementSystem();
+    (void)experimentalPhysics.unregisterPhysicsSystems();
+    (void)experimentalScene.stop();
+    (void)experimentalScene.unload();
     asyncWork.shutdown();
     navigation.clear();
     navigationChunks.clear();

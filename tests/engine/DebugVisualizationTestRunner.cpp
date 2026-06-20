@@ -1,11 +1,11 @@
 #include <cmath>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "Engine/DebugVisualization.hpp"
-#include "Renderer/Scene.hpp"
 
 namespace {
     struct TestFailure {
@@ -141,16 +141,31 @@ namespace {
         ctx.expect(std::string{Engine::debugVisualizationSeverityName(Engine::DebugVisualizationSeverity::Error)} == "Error", "severity names are stable");
     }
 
-    void RendererLineConversionExpandsAabb(TestContext& ctx)
+    void ExpandedLinesCoverPrimitiveShapes(TestContext& ctx)
     {
         Engine::DebugVisualizationCollector collector;
         (void)collector.addLine(Engine::DebugVisualizationCategory::SceneTransforms, {0, 0, 0}, {1, 0, 0}, 0xff0000ff);
         (void)collector.addAabb(Engine::DebugVisualizationCategory::SceneBounds, {{0, 0, 0}, {1, 1, 1}}, 0xff00ff00);
+        (void)collector.addSphere(Engine::DebugVisualizationCategory::Physics, {0, 0, 0}, 1.0f, 0xff00ffff);
+        (void)collector.addCapsule(Engine::DebugVisualizationCategory::CharacterMovement, {0, 0, 0}, {0, 2, 0}, 0.25f, 0xffff00ff);
+        (void)collector.addTransformAxes(Engine::DebugVisualizationCategory::SceneTransforms, glm::mat4{1.0f}, 1.0f);
 
-        const std::vector<Renderer::DebugLinePrimitive> lines = Engine::toRendererDebugLines(collector.snapshot());
-        ctx.expect(lines.size() == 13, "one line plus aabb wireframe produces 13 renderer lines");
+        const std::vector<Engine::DebugVisualizationExpandedLine> lines =
+            Engine::expandDebugVisualizationLines(collector.snapshot());
+        ctx.expect(lines.size() == 100, "line, aabb, sphere, capsule, and axes expand deterministically");
         ctx.expect(near(lines[0].a, {0, 0, 0}) && near(lines[0].b, {1, 0, 0}), "direct line converted first");
-        ctx.expect(lines[0].abgr == 0xff0000ff, "direct line color preserved");
+        ctx.expect(lines[0].color == 0xff0000ff, "direct line color preserved");
+        ctx.expect(lines[1].category == Engine::DebugVisualizationCategory::SceneTransforms, "transform axes preserve category");
+        ctx.expect(lines[16].category == Engine::DebugVisualizationCategory::Physics, "sphere expanded after aabb");
+    }
+
+    void HeaderDoesNotMentionRendererTypes(TestContext& ctx)
+    {
+        std::ifstream input{std::string{MANUAL_ENGINE_SOURCE_DIR} + "/src/Engine/DebugVisualization.hpp"};
+        std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        ctx.expect(!contents.empty(), "debug visualization header readable");
+        ctx.expect(contents.find("Renderer::") == std::string::npos, "debug visualization header does not expose Renderer types");
+        ctx.expect(contents.find("DebugLinePrimitive") == std::string::npos, "debug visualization header does not expose renderer line primitives");
     }
 
     void ClearResetsOutputAndDiagnostics(TestContext& ctx)
@@ -184,7 +199,8 @@ int main()
         {"DeterministicOrderingIsStable", DeterministicOrderingIsStable},
         {"ReportRowsPreserveSeverityAndLabels", ReportRowsPreserveSeverityAndLabels},
         {"PrimitiveTypesStorePlainDataOnly", PrimitiveTypesStorePlainDataOnly},
-        {"RendererLineConversionExpandsAabb", RendererLineConversionExpandsAabb},
+        {"ExpandedLinesCoverPrimitiveShapes", ExpandedLinesCoverPrimitiveShapes},
+        {"HeaderDoesNotMentionRendererTypes", HeaderDoesNotMentionRendererTypes},
         {"ClearResetsOutputAndDiagnostics", ClearResetsOutputAndDiagnostics},
     };
 

@@ -1497,3 +1497,15 @@ Changed:
 
 Rationale:
 - Debug visualization now has a bounded Engine request boundary that future scene, terrain, navigation, physics, animation, asset, behavior, and Lua producers can use without depending on ImGui, bgfx, App-local state, or serialized payloads.
+
+## 2026-06-19 - Final Scene Roadmap Migration Cleanup
+
+Changed:
+- Removed the Renderer type dependency from the public `Engine::DebugVisualization` header and replaced renderer-line conversion with plain Engine expanded debug line output for line, AABB, sphere, capsule, and transform-axis requests.
+- Routed procedural App debug primitive generation through `DebugVisualizationCollector` before final Renderer submission, leaving Renderer as the draw consumer rather than the category/budget owner.
+- Added `Engine::SceneWorldMigrationBridge` as a transitional runtime-only bridge from `WorldObjectHandle` to `SceneActorHandle`, optional scene character bindings, optional static scene-physics box colliders, and bidirectional transform sync.
+- Added an opt-in experimental procedural scene-character movement mode in the App debug panel while preserving legacy `ActorController`/`BlockingCollisionSystem` as the default runtime.
+- Added `manual_engine_scene_world_migration_tests` and expanded debug visualization tests for renderer-independent headers and geometric line expansion.
+
+Rationale:
+- The scene roadmap needed a final closure pass that unified debug visualization ownership and created a safe parallel path for procedural gameplay migration without changing current default behavior.

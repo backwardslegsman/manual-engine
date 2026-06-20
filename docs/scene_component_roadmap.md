@@ -1306,3 +1306,15 @@ Exit criteria:
 7. Add hooks and Lua after access boundaries are proven.
 
 Avoid converting `src/App/main.cpp` into the owner of the new architecture. App should compose services, choose demo modes, and display diagnostics; reusable behavior belongs under `src/Engine`, `src/Assets`, or `src/Renderer`.
+
+## Final Migration And Cleanup Checkpoint
+
+Status: initial closure pass implemented. `Engine::DebugVisualizationCollector` is now renderer-independent at the public header boundary and expands line, AABB, sphere, capsule, and transform-axis requests into plain Engine line records before App submits them to Renderer. The procedural App debug producer routes its line, bounds, XZ-rect, and frustum requests through the collector before final renderer submission.
+
+`Engine::SceneWorldMigrationBridge` adds a transitional runtime-only bridge from legacy `WorldObjectHandle` records to `SceneActorHandle` records, optional scene character bindings, optional static scene-physics box colliders, and bidirectional transform sync. The procedural sample exposes an opt-in experimental scene-character movement mode while keeping legacy `ActorController` and `BlockingCollisionSystem` as the default path.
+
+Completion notes:
+
+- Phase 16 is closed as a shared debug request boundary. Future subsystem-specific producer helpers can add richer reports without reintroducing Renderer/App ownership of diagnostic data.
+- Scene-backed procedural movement is experimental and local-path oriented. Hierarchical route parity, App save migration, automatic terrain/prop collider streaming, and default runtime switching remain future gameplay migration work.
+- Runtime bridge mappings, scene character handles, scene physics handles, debug requests, and opaque handles remain transient and must not be serialized.
