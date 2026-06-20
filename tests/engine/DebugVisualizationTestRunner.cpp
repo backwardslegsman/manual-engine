@@ -168,6 +168,33 @@ namespace {
         ctx.expect(contents.find("DebugLinePrimitive") == std::string::npos, "debug visualization header does not expose renderer line primitives");
     }
 
+    void DebugUiHeaderExposesModernOnlyState(TestContext& ctx)
+    {
+        std::ifstream input{std::string{MANUAL_ENGINE_SOURCE_DIR} + "/src/Renderer/DebugUi.hpp"};
+        std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        ctx.expect(!contents.empty(), "debug UI header readable");
+        ctx.expect(contents.find("ModernDebugUiState") != std::string::npos, "modern debug UI aggregate is exposed");
+        ctx.expect(contents.find("PerformanceDebugStats") != std::string::npos, "modern performance stats are exposed");
+        ctx.expect(contents.find("ModernSceneDebugStats") != std::string::npos, "modern scene stats are exposed");
+        ctx.expect(contents.find("ModernTerrainDebugStats") != std::string::npos, "modern terrain stats are exposed");
+        ctx.expect(contents.find("ModernNavigationDebugStats") != std::string::npos, "modern navigation stats are exposed");
+        ctx.expect(contents.find("ModernPhysicsDebugStats") != std::string::npos, "modern physics stats are exposed");
+        ctx.expect(contents.find("ModernCharacterDebugStats") != std::string::npos, "modern character stats are exposed");
+        ctx.expect(contents.find("DebugVisualizationDebugStats") != std::string::npos, "modern debug visualization stats are exposed");
+        ctx.expect(contents.find("WorldSave") == std::string::npos, "legacy world save debug UI is not public");
+        ctx.expect(contents.find("Biome") == std::string::npos, "legacy biome debug UI is not public");
+        ctx.expect(contents.find("DebugPicking") == std::string::npos, "legacy picking debug UI is not public");
+        ctx.expect(contents.find("InteractionDebug") == std::string::npos, "legacy interaction debug UI is not public");
+        ctx.expect(contents.find("PlayerActor") == std::string::npos, "legacy player actor debug UI is not public");
+        ctx.expect(contents.find("SpatialRegistry") == std::string::npos, "legacy spatial registry debug UI is not public");
+        ctx.expect(contents.find("struct NavigationDebugControls") == std::string::npos, "legacy navigation controls are not public");
+        ctx.expect(contents.find("struct NavigationDebugStats") == std::string::npos, "legacy navigation stats are not public");
+        ctx.expect(contents.find("struct TerrainLodDebugStats") == std::string::npos, "legacy terrain LOD stats are not public");
+        ctx.expect(contents.find("ActorController") == std::string::npos, "legacy actor controller is not public debug UI");
+        ctx.expect(contents.find("ChunkStreamer") == std::string::npos, "legacy chunk streamer is not public debug UI");
+        ctx.expect(contents.find("BlockingCollision") == std::string::npos, "legacy blocking collision is not public debug UI");
+    }
+
     void ClearResetsOutputAndDiagnostics(TestContext& ctx)
     {
         Engine::DebugVisualizationCollector collector;
@@ -201,6 +228,7 @@ int main()
         {"PrimitiveTypesStorePlainDataOnly", PrimitiveTypesStorePlainDataOnly},
         {"ExpandedLinesCoverPrimitiveShapes", ExpandedLinesCoverPrimitiveShapes},
         {"HeaderDoesNotMentionRendererTypes", HeaderDoesNotMentionRendererTypes},
+        {"DebugUiHeaderExposesModernOnlyState", DebugUiHeaderExposesModernOnlyState},
         {"ClearResetsOutputAndDiagnostics", ClearResetsOutputAndDiagnostics},
     };
 

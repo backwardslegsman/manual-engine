@@ -1,28 +1,43 @@
     enum class AppSceneMode {
-        Procedural,
-        Authored,
+        ModernDefault,
+        LegacyProcedural,
+        LegacyAuthored,
     };
 
     constexpr const char* DefaultSponzaScenePath = "assets/main_sponza/NewSponza_Main_glTF_003.gltf";
     constexpr const char* DemoAuthoredSceneFixturePath = "tests/assets/fixtures/authored_scene_fixture.gltf";
     constexpr const char* DemoAnimatedModelFixturePath = "tests/assets/fixtures/skinned_animation_fixture.gltf";
+    constexpr const char* DefaultHeightmapPath = "assets/heightmaps/47_648_-122_332_13_505_505_16bit.png";
+    constexpr const char* DefaultKayKitStaticFbxPath =
+        "assets/KayKit_Adventurers_2.0_FREE/Assets/fbx/sword_1handed.fbx";
+    constexpr const char* DefaultKayKitStaticGltfPath =
+        "assets/KayKit_Adventurers_2.0_FREE/Assets/gltf/shield_round.gltf";
     constexpr const char* ReleaseKayKitAnimatedModelPath =
         "assets/KayKit_Adventurers_2.0_FREE/Animations/gltf/Rig_Medium/Rig_Medium_MovementBasic.glb";
+    constexpr const char* DefaultKayKitAnimatedFbxPath =
+        "assets/KayKit_Adventurers_2.0_FREE/Animations/fbx/Rig_Medium/Rig_Medium_MovementBasic.fbx";
     constexpr const char* ReleaseKayKitKnightTexturePath =
         "assets/KayKit_Adventurers_2.0_FREE/Characters/gltf/knight_texture.png";
 
     struct AppSceneSelection {
-        AppSceneMode mode = BuildDebugToolsEnabled ? AppSceneMode::Procedural : AppSceneMode::Authored;
+        AppSceneMode mode = AppSceneMode::ModernDefault;
         std::filesystem::path authoredPath = DefaultSponzaScenePath;
-        std::filesystem::path animatedModelPath =
-            BuildDebugToolsEnabled ? DemoAnimatedModelFixturePath : ReleaseKayKitAnimatedModelPath;
+        std::filesystem::path animatedModelPath = ReleaseKayKitAnimatedModelPath;
         bool authoredPathExplicit = false;
         bool animatedModelPathExplicit = false;
     };
 
     std::string_view sceneModeName(AppSceneMode mode)
     {
-        return mode == AppSceneMode::Authored ? "Authored" : "Procedural";
+        switch (mode) {
+            case AppSceneMode::ModernDefault:
+                return "ModernDefault";
+            case AppSceneMode::LegacyProcedural:
+                return "LegacyProcedural";
+            case AppSceneMode::LegacyAuthored:
+                return "LegacyAuthored";
+        }
+        return "Unknown";
     }
 
     AppSceneSelection parseSceneSelection(int argc, char** argv)
@@ -32,10 +47,12 @@
             const std::string_view argument = argv[index] ? std::string_view{argv[index]} : std::string_view{};
             if (argument == "--scene" && index + 1 < argc) {
                 const std::string_view value = argv[++index] ? std::string_view{argv[index]} : std::string_view{};
-                if (value == "authored") {
-                    selection.mode = AppSceneMode::Authored;
-                } else if (value == "procedural") {
-                    selection.mode = AppSceneMode::Procedural;
+                if (value == "modern" || value == "default" || value == "modern-default") {
+                    selection.mode = AppSceneMode::ModernDefault;
+                } else if (value == "legacy-authored" || value == "authored") {
+                    selection.mode = AppSceneMode::LegacyAuthored;
+                } else if (value == "legacy-procedural" || value == "procedural") {
+                    selection.mode = AppSceneMode::LegacyProcedural;
                 } else {
                     SDL_Log("Invalid --scene value '%.*s'; using %s.",
                         static_cast<int>(value.size()),
@@ -336,6 +353,845 @@
             asyncPhase = AsyncPhase::Idle;
         }
     };
+
+    struct ModernTerrainChunkRuntime {
+        Engine::TerrainChunkHandle chunk;
+        Engine::ChunkCoord coord;
+        Renderer::TerrainHandle rendererTerrain;
+        Engine::NavigationTileHandle navigationTile;
+        Engine::TerrainPhysicsColliderHandle physicsCollider;
+    };
+
+    struct ModernAuthoredAssetRuntime {
+        Engine::SceneAuthoredAdapterResult result;
+        std::filesystem::path path;
+        std::string label;
+    };
+
+    struct ModernAnimatedAssetRuntime {
+        Engine::SceneAnimatedAdapterResult result;
+        std::filesystem::path path;
+        std::string label;
+    };
+
+    struct ModernDefaultSceneRuntime {
+        Engine::Scene scene;
+        Engine::SceneRenderBridge renderBridge{scene};
+        Engine::RendererSceneRenderBackend renderBackend;
+        Engine::ScenePhysicsWorld physics{scene};
+        Engine::NavigationSystem navigation;
+        Engine::SceneNavigationService navigationService{navigation};
+        Engine::SceneNavigationGeometryRegistry sceneNavigationGeometry;
+        Engine::SceneCharacterMovementSystem characters{scene, physics};
+        Engine::SceneAnimatedModelAdapter animatedAdapter{scene, renderBridge};
+        Engine::TerrainDataset terrain;
+        Engine::TerrainPhysicsColliderAdapter terrainPhysics;
+        Engine::TerrainMaterialRenderBinding terrainMaterial;
+        Engine::TerrainSourceHandle terrainSource;
+        Engine::SceneActorHandle playerActor;
+        Engine::SceneCharacterHandle playerCharacter;
+        std::vector<ModernTerrainChunkRuntime> terrainChunks;
+        std::vector<ModernAuthoredAssetRuntime> authoredAssets;
+        std::vector<ModernAnimatedAssetRuntime> animatedAssets;
+        std::vector<Engine::ScenePhysicsBodyHandle> authoredPhysicsBodies;
+        Engine::CachedTexture terrainFallbackTexture;
+        Renderer::MaterialHandle terrainFallbackMaterial;
+        Renderer::Aabb bounds{{-64.0f, -8.0f, -64.0f}, {64.0f, 32.0f, 64.0f}};
+        glm::vec3 focus{0.0f, 0.0f, 0.0f};
+        std::string status = "Modern scene not loaded.";
+        uint32_t terrainRendererCount = 0;
+        uint32_t terrainNavTileCount = 0;
+        uint32_t terrainPhysicsColliderCount = 0;
+        uint32_t authoredNavigationSourceCount = 0;
+        uint32_t authoredPhysicsBodyCount = 0;
+        uint32_t navigationCacheHitCount = 0;
+        uint32_t navigationCacheMissCount = 0;
+        uint32_t navigationCacheStaleCount = 0;
+        uint32_t navigationCacheWriteCount = 0;
+        uint32_t staticAssetCount = 0;
+        uint32_t animatedAssetCount = 0;
+        uint32_t warningCount = 0;
+        bool loadedHeightmap = false;
+        bool schedulerStarted = false;
+
+        void shutdown(Engine::AssetCache& assetCache)
+        {
+            if (scene.lifecycleState() == Engine::SceneLifecycleState::Started) {
+                scene.stop();
+            }
+            renderBridge.releaseRendererResources(renderBackend);
+            for (Engine::ScenePhysicsBodyHandle body : authoredPhysicsBodies) {
+                physics.destroyBody(body);
+            }
+            authoredPhysicsBodies.clear();
+            terrainPhysics.releaseAll(scene, physics);
+            for (ModernTerrainChunkRuntime& chunk : terrainChunks) {
+                Renderer::destroyTerrainTile(chunk.rendererTerrain);
+                navigation.destroyTile(chunk.coord);
+                chunk = {};
+            }
+            terrainChunks.clear();
+            for (ModernAnimatedAssetRuntime& asset : animatedAssets) {
+                animatedAdapter.releaseResources(asset.result.resources, assetCache);
+            }
+            animatedAssets.clear();
+            for (ModernAuthoredAssetRuntime& asset : authoredAssets) {
+                Engine::releaseSceneAuthoredAdapterResources(asset.result.resources, assetCache);
+            }
+            authoredAssets.clear();
+            animatedAdapter.unregisterVariableAnimationSystem();
+            renderBridge.unregisterPreRenderSystem();
+            physics.unregisterPhysicsSystems();
+            characters.unregisterMovementSystem();
+            Engine::releaseTerrainMaterialResources(assetCache, terrainMaterial);
+            assetCache.release(terrainFallbackTexture);
+            if (scene.lifecycleState() == Engine::SceneLifecycleState::Loaded) {
+                scene.unload();
+            }
+            schedulerStarted = false;
+        }
+    };
+
+    void includePoint(Renderer::Aabb& bounds, const glm::vec3& point)
+    {
+        bounds.min = glm::min(bounds.min, point);
+        bounds.max = glm::max(bounds.max, point);
+    }
+
+    void includeBounds(Renderer::Aabb& bounds, const Renderer::Aabb& other)
+    {
+        includePoint(bounds, other.min);
+        includePoint(bounds, other.max);
+    }
+
+    uint64_t modernHashText(std::string_view text, uint64_t hash = 14695981039346656037ull)
+    {
+        for (const char value : text) {
+            hash ^= static_cast<uint8_t>(value);
+            hash *= 1099511628211ull;
+        }
+        return hash;
+    }
+
+    Engine::AssetId modernAssetIdForPath(const std::filesystem::path& path, std::string_view salt)
+    {
+        uint64_t hash = modernHashText(path.lexically_normal().generic_string());
+        hash = modernHashText(salt, hash);
+        return {hash == 0 ? 1 : hash};
+    }
+
+    Engine::TerrainRenderLodSourceIdentity modernTerrainRenderIdentity(
+        const Engine::TerrainSourceDescriptor& descriptor)
+    {
+        return {
+            descriptor.sourceId,
+            descriptor.debugName + ".render",
+            descriptor.settings,
+            descriptor.type,
+        };
+    }
+
+    Engine::TerrainNavigationSourceIdentity modernTerrainNavigationIdentity(
+        const Engine::TerrainSourceDescriptor& descriptor)
+    {
+        return {
+            descriptor.sourceId,
+            descriptor.debugName + ".navigation",
+            descriptor.settings,
+            descriptor.type,
+        };
+    }
+
+    Engine::TerrainPhysicsSourceIdentity modernTerrainPhysicsIdentity(
+        const Engine::TerrainSourceDescriptor& descriptor)
+    {
+        return {
+            descriptor.sourceId,
+            descriptor.debugName + ".physics",
+            descriptor.settings,
+            descriptor.type,
+        };
+    }
+
+    std::string modernTerrainSourceTypeName(Engine::TerrainDatasetSourceType type)
+    {
+        switch (type) {
+            case Engine::TerrainDatasetSourceType::HeightmapImported:
+                return "heightmap_imported";
+            case Engine::TerrainDatasetSourceType::Procedural:
+                return "procedural";
+            case Engine::TerrainDatasetSourceType::Generated:
+                return "generated";
+        }
+        return "unknown";
+    }
+
+    uint64_t modernHashFloat(float value, uint64_t hash)
+    {
+        return modernHashText(std::to_string(value), hash);
+    }
+
+    std::string modernSceneGeometryHash(ModernDefaultSceneRuntime& runtime)
+    {
+        uint64_t hash = modernHashText("modern_scene_nav_geometry_slope_v1");
+        for (const ModernAuthoredAssetRuntime& asset : runtime.authoredAssets) {
+            hash = modernHashText(asset.path.lexically_normal().generic_string(), hash);
+            hash = modernHashText(Engine::NavigationCache::hashFile(asset.path), hash);
+            hash = modernHashText(asset.label, hash);
+            hash = modernHashText(std::to_string(asset.result.diagnostics.createdNavigationSourceCount), hash);
+            for (const Engine::SceneAuthoredNodeBinding& node : asset.result.nodes) {
+                for (Engine::SceneNavigationSourceHandle source : node.navigationSources) {
+                    const std::optional<Engine::SceneNavigationSourceDescriptor> descriptor =
+                        runtime.sceneNavigationGeometry.descriptor(source);
+                    if (!descriptor) {
+                        continue;
+                    }
+                    hash = modernHashText(descriptor->debugName, hash);
+                    hash = modernHashText(std::to_string(static_cast<uint32_t>(descriptor->type)), hash);
+                    hash = modernHashText(std::to_string(static_cast<uint32_t>(descriptor->role)), hash);
+                    hash = modernHashText(std::to_string(descriptor->vertices.size()), hash);
+                    hash = modernHashText(std::to_string(descriptor->indices.size()), hash);
+                    for (const glm::vec3& vertex : descriptor->vertices) {
+                        hash = modernHashFloat(vertex.x, hash);
+                        hash = modernHashFloat(vertex.y, hash);
+                        hash = modernHashFloat(vertex.z, hash);
+                    }
+                    if (descriptor->actor.has_value()) {
+                        const std::optional<glm::mat4> world = runtime.scene.worldMatrix(*descriptor->actor);
+                        if (world) {
+                            for (int column = 0; column < 4; ++column) {
+                                for (int row = 0; row < 4; ++row) {
+                                    hash = modernHashFloat((*world)[column][row], hash);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return std::to_string(hash == 0 ? 1 : hash);
+    }
+
+    void placeSceneRoots(
+        Engine::Scene& scene,
+        const std::vector<Engine::SceneAuthoredNodeBinding>& nodes,
+        const glm::vec3& translation,
+        float scale)
+    {
+        for (const Engine::SceneAuthoredNodeBinding& binding : nodes) {
+            if (!scene.contains(binding.actor) || scene.parent(binding.actor).has_value()) {
+                continue;
+            }
+            std::optional<Engine::SceneTransform> transform = scene.localTransform(binding.actor);
+            if (!transform) {
+                continue;
+            }
+            transform->translation += translation;
+            transform->scale *= scale;
+            scene.setLocalTransform(binding.actor, *transform);
+        }
+    }
+
+    void placeSceneRoots(
+        Engine::Scene& scene,
+        const std::vector<Engine::SceneAnimatedNodeBinding>& nodes,
+        const glm::vec3& translation,
+        float scale)
+    {
+        for (const Engine::SceneAnimatedNodeBinding& binding : nodes) {
+            if (!scene.contains(binding.actor) || scene.parent(binding.actor).has_value()) {
+                continue;
+            }
+            std::optional<Engine::SceneTransform> transform = scene.localTransform(binding.actor);
+            if (!transform) {
+                continue;
+            }
+            transform->translation += translation;
+            transform->scale *= scale;
+            scene.setLocalTransform(binding.actor, *transform);
+        }
+    }
+
+    void createModernAuthoredPhysics(
+        ModernDefaultSceneRuntime& runtime,
+        const Engine::SceneAuthoredAdapterResult& result,
+        std::string_view label)
+    {
+        for (const Engine::SceneAuthoredNodeBinding& binding : result.nodes) {
+            for (Engine::SceneNavigationSourceHandle source : binding.navigationSources) {
+                const std::optional<Engine::SceneNavigationSourceDescriptor> descriptor =
+                    runtime.sceneNavigationGeometry.descriptor(source);
+                if (!descriptor ||
+                    descriptor->vertices.empty() ||
+                    descriptor->indices.size() < 3 ||
+                    !descriptor->actor.has_value()) {
+                    ++runtime.warningCount;
+                    continue;
+                }
+
+                Engine::ScenePhysicsBodyDescriptor bodyDescriptor;
+                bodyDescriptor.actor = *descriptor->actor;
+                bodyDescriptor.motionType = Engine::ScenePhysicsMotionType::Static;
+                bodyDescriptor.enabled = true;
+                const Engine::ScenePhysicsBodyHandle body = runtime.physics.createBody(bodyDescriptor);
+                if (!Engine::isValid(body)) {
+                    ++runtime.warningCount;
+                    continue;
+                }
+
+                Engine::ScenePhysicsShapeDescriptor shape;
+                shape.type = Engine::ScenePhysicsShapeType::StaticTriangleMesh;
+                shape.triangleMesh.vertices = descriptor->vertices;
+                shape.triangleMesh.indices = descriptor->indices;
+                const Engine::SceneColliderHandle collider = runtime.physics.attachCollider(body, shape);
+                if (!Engine::isValid(collider)) {
+                    runtime.physics.destroyBody(body);
+                    ++runtime.warningCount;
+                    continue;
+                }
+
+                runtime.authoredPhysicsBodies.push_back(body);
+                ++runtime.authoredPhysicsBodyCount;
+            }
+        }
+
+        if (result.diagnostics.createdNavigationSourceCount > 0) {
+            SDL_Log("Modern static asset '%.*s' registered %u nav sources and %u total authored physics bodies.",
+                static_cast<int>(label.size()),
+                label.data(),
+                result.diagnostics.createdNavigationSourceCount,
+                runtime.authoredPhysicsBodyCount);
+        }
+    }
+
+    bool addModernAuthoredAsset(
+        ModernDefaultSceneRuntime& runtime,
+        Engine::AssetCache& assetCache,
+        const std::filesystem::path& path,
+        std::string label,
+        const glm::vec3& translation,
+        float scale)
+    {
+        const std::filesystem::path resolvedPath = resolveAuthoredScenePath(path);
+        if (!std::filesystem::exists(resolvedPath)) {
+            SDL_Log("Modern scene static asset missing: %s", resolvedPath.generic_string().c_str());
+            ++runtime.warningCount;
+            return false;
+        }
+        const Assets::Assimp::ImportedScene imported = Assets::Assimp::importScene(resolvedPath);
+        if (!imported.success) {
+            SDL_Log("Modern scene static asset import failed: %s: %s",
+                resolvedPath.generic_string().c_str(),
+                imported.error.c_str());
+            ++runtime.warningCount;
+            return false;
+        }
+
+        Engine::SceneAuthoredAdapterSettings settings;
+        settings.loadTextures = true;
+        settings.renderLayer = Renderer::RenderLayer::Props;
+        settings.materialNamePrefix = "ModernStatic." + label;
+        settings.textureDebugNamePrefix = "ModernStatic." + label;
+        settings.navigationGeometry = &runtime.sceneNavigationGeometry;
+        settings.registerNavigationSources = true;
+        Engine::SceneAuthoredAdapterResult result = Engine::adaptImportedSceneToScene(
+            imported,
+            resolvedPath,
+            assetCache,
+            runtime.scene,
+            runtime.renderBridge,
+            settings);
+        if (!result.success) {
+            SDL_Log("Modern scene static asset adaptation failed: %s: %s",
+                resolvedPath.generic_string().c_str(),
+                result.message.c_str());
+            Engine::releaseSceneAuthoredAdapterResources(result.resources, assetCache);
+            ++runtime.warningCount;
+            return false;
+        }
+
+        placeSceneRoots(runtime.scene, result.nodes, translation, scale);
+        runtime.authoredNavigationSourceCount += result.diagnostics.createdNavigationSourceCount;
+        createModernAuthoredPhysics(runtime, result, label);
+        runtime.staticAssetCount += 1;
+        runtime.warningCount += static_cast<uint32_t>(result.diagnostics.warnings.size());
+        runtime.authoredAssets.push_back({std::move(result), resolvedPath, std::move(label)});
+        return true;
+    }
+
+    bool addModernAnimatedAsset(
+        ModernDefaultSceneRuntime& runtime,
+        Engine::AssetCache& assetCache,
+        const std::filesystem::path& path,
+        std::string label,
+        const glm::vec3& translation,
+        float scale)
+    {
+        const std::filesystem::path resolvedPath = resolveAuthoredScenePath(path);
+        if (!std::filesystem::exists(resolvedPath)) {
+            SDL_Log("Modern scene animated asset missing: %s", resolvedPath.generic_string().c_str());
+            ++runtime.warningCount;
+            return false;
+        }
+        const Assets::Assimp::ImportedScene imported = Assets::Assimp::importScene(resolvedPath);
+        if (!imported.success) {
+            SDL_Log("Modern scene animated asset import failed: %s: %s",
+                resolvedPath.generic_string().c_str(),
+                imported.error.c_str());
+            ++runtime.warningCount;
+            return false;
+        }
+
+        Engine::SceneAnimatedAdapterSettings settings;
+        settings.loadTextures = true;
+        settings.renderLayer = Renderer::RenderLayer::Props;
+        settings.allowRootFallbackSkinnedBindings = true;
+        settings.materialNamePrefix = "ModernAnimated." + label;
+        settings.textureDebugNamePrefix = "ModernAnimated." + label;
+        Engine::SceneAnimatedAdapterResult result = runtime.animatedAdapter.adaptImportedScene(
+            imported,
+            resolvedPath,
+            assetCache,
+            settings);
+        if (!result.success) {
+            SDL_Log("Modern scene animated asset adaptation failed: %s: %s",
+                resolvedPath.generic_string().c_str(),
+                result.message.c_str());
+            runtime.animatedAdapter.releaseResources(result.resources, assetCache);
+            ++runtime.warningCount;
+            return false;
+        }
+
+        placeSceneRoots(runtime.scene, result.nodes, translation, scale);
+        runtime.animatedAssetCount += 1;
+        runtime.warningCount += static_cast<uint32_t>(result.diagnostics.warnings.size());
+        runtime.animatedAssets.push_back({std::move(result), resolvedPath, std::move(label)});
+        return true;
+    }
+
+    glm::vec3 modernTerrainRelativePosition(
+        const ModernDefaultSceneRuntime& runtime,
+        const glm::vec3& focus,
+        const glm::vec3& offset)
+    {
+        glm::vec3 position{focus.x + offset.x, focus.y, focus.z + offset.z};
+        position.y = runtime.terrain.sampleHeight(position.x, position.z).value_or(focus.y) + offset.y;
+        return position;
+    }
+
+    Engine::TerrainSourceDescriptor modernFallbackTerrainSourceDescriptor()
+    {
+        Engine::TerrainSourceDescriptor descriptor;
+        descriptor.sourceId = {0x5445525241494e1ull};
+        descriptor.type = Engine::TerrainDatasetSourceType::Procedural;
+        descriptor.bounds = {{-96.0f, -16.0f, -96.0f}, {96.0f, 32.0f, 96.0f}};
+        descriptor.defaultChunkSize = 64.0f;
+        descriptor.defaultResolution = 33;
+        descriptor.debugName = "modern.default.procedural_fallback";
+        descriptor.procedural.origin = {-96.0f, 0.0f, 96.0f};
+        descriptor.procedural.chunkSize = descriptor.defaultChunkSize;
+        descriptor.procedural.resolution = descriptor.defaultResolution;
+        descriptor.procedural.heightScale = 8.0f;
+        return descriptor;
+    }
+
+    bool addModernTerrainChunk(
+        ModernDefaultSceneRuntime& runtime,
+        Engine::TerrainChunkHandle chunk,
+        const Engine::TerrainSourceDescriptor& source,
+        Renderer::MaterialHandle terrainMaterial)
+    {
+        const std::optional<Engine::TerrainChunkData> data = runtime.terrain.chunk(chunk);
+        if (!data) {
+            return false;
+        }
+
+        Engine::TerrainLodMeshBuildSettings lod;
+        lod.lodIndex = 0;
+        lod.renderResolution = std::min<uint32_t>(data->resolution, 33);
+        lod.skirtDepth = 2.0f;
+        const std::optional<Engine::TerrainRenderLodBuildRequest> renderRequest =
+            Engine::renderLodRequestFromDatasetChunk(
+                runtime.terrain,
+                chunk,
+                lod,
+                modernTerrainRenderIdentity(source));
+        if (!renderRequest) {
+            ++runtime.warningCount;
+            return false;
+        }
+        const Engine::TerrainRenderLodBuildResult renderResult = Engine::buildTerrainRenderLod(*renderRequest);
+        if (!renderResult.success || !renderResult.build.success) {
+            SDL_Log("Modern terrain render LOD failed for chunk %d,%d: %s",
+                data->coord.x,
+                data->coord.z,
+                renderResult.diagnostics.message.c_str());
+            ++runtime.warningCount;
+            return false;
+        }
+
+        Renderer::TerrainHandle rendererTerrain = Renderer::createTerrainTile(
+            renderResult.build.mesh.vertices,
+            renderResult.build.mesh.indices,
+            terrainMaterial);
+        Renderer::setTerrainRenderLayer(rendererTerrain, Renderer::RenderLayer::Terrain);
+        Renderer::setTerrainMaxDrawDistance(rendererTerrain, 500.0f);
+        if (runtime.terrainMaterial.materialSet.id != UINT32_MAX) {
+            Renderer::setTerrainMaterialSet(rendererTerrain, runtime.terrainMaterial.materialSet);
+        }
+
+        Engine::NavigationTileHandle navTile;
+
+        const std::optional<Engine::TerrainPhysicsColliderBuildRequest> physicsRequest =
+            Engine::terrainPhysicsColliderRequestFromDatasetChunk(
+                runtime.terrain,
+                chunk,
+                17,
+                modernTerrainPhysicsIdentity(source));
+        Engine::TerrainPhysicsColliderHandle physicsCollider;
+        if (physicsRequest) {
+            Engine::TerrainPhysicsColliderBuildResult physicsData =
+                Engine::buildTerrainPhysicsCollider(*physicsRequest);
+            if (physicsData.success && physicsData.payload) {
+                Engine::TerrainPhysicsColliderCreateDescriptor descriptor;
+                descriptor.debugName = "modern terrain " +
+                    std::to_string(data->coord.x) + "," + std::to_string(data->coord.z);
+                physicsCollider = runtime.terrainPhysics.createStaticCollider(
+                    runtime.scene,
+                    runtime.physics,
+                    *physicsData.payload,
+                    descriptor);
+                if (Engine::isValid(physicsCollider)) {
+                    ++runtime.terrainPhysicsColliderCount;
+                }
+            } else {
+                ++runtime.warningCount;
+            }
+        }
+
+        if (const std::optional<Engine::TerrainDatasetBounds> bounds = runtime.terrain.chunkWorldBounds(chunk)) {
+            includeBounds(runtime.bounds, {bounds->min, bounds->max});
+        }
+        ++runtime.terrainRendererCount;
+        runtime.terrainChunks.push_back({
+            chunk,
+            {data->coord.x, data->coord.z},
+            rendererTerrain,
+            navTile,
+            physicsCollider,
+        });
+        return true;
+    }
+
+    bool loadModernHeightmapTerrain(
+        ModernDefaultSceneRuntime& runtime,
+        Engine::AssetCache& assetCache)
+    {
+        runtime.terrainFallbackTexture = assetCache.acquireSolidTexture(82, 124, 72, 255);
+        runtime.terrainFallbackMaterial =
+            createMaterial("modern.terrain.fallback", runtime.terrainFallbackTexture.handle);
+
+        const std::array<Engine::TerrainSampleBiomeMaterialInput, 1> terrainMaterials{{
+            {"heightmap", {82, 124, 72, 255}},
+        }};
+        const Engine::TerrainMaterialSet materialSet =
+            Engine::makeSampleProceduralTerrainMaterialSet(terrainMaterials, {82, 124, 72, 255});
+        Engine::TerrainMaterialRenderCreateResult materialResult =
+            Engine::createTerrainMaterialResources(assetCache, materialSet);
+        if (materialResult.success) {
+            runtime.terrainMaterial = std::move(materialResult.binding);
+        } else {
+            ++runtime.warningCount;
+        }
+
+        Engine::TerrainSourceDescriptor source;
+        std::vector<Engine::TerrainImportedChunk> chunksToLoad;
+        const std::filesystem::path heightmapPath = resolveAuthoredScenePath(DefaultHeightmapPath);
+        if (std::filesystem::exists(heightmapPath)) {
+            Engine::TerrainHeightmapImportSettings settings;
+            settings.sourcePath = heightmapPath;
+            settings.sourceIdOverride = modernAssetIdForPath(heightmapPath, "modern_heightmap");
+            settings.sampleSpacing = 1.0f;
+            settings.heightScale = 80.0f;
+            settings.heightOffset = 0.0f;
+            settings.sourceOrigin = {-256.0f, 0.0f, 256.0f};
+            settings.chunkWorldSize = 64.0f;
+            settings.chunkResolution = 33;
+            Engine::TerrainHeightmapTerrainImportResult imported = Engine::importHeightmapTerrain(settings);
+            if (imported.success) {
+                source.sourceId = imported.metadata.sourceId;
+                source.type = Engine::TerrainDatasetSourceType::HeightmapImported;
+                source.bounds = {imported.metadata.worldMin, imported.metadata.worldMax};
+                source.defaultChunkSize = settings.chunkWorldSize;
+                source.defaultResolution = settings.chunkResolution;
+                source.settings = imported.metadata.importSettings;
+                source.debugName = "modern.default.heightmap";
+
+                int32_t maxX = 0;
+                int32_t maxZ = 0;
+                for (const Engine::TerrainImportedChunk& chunk : imported.chunks) {
+                    maxX = std::max(maxX, chunk.coord.x);
+                    maxZ = std::max(maxZ, chunk.coord.z);
+                }
+                const int32_t centerX = maxX / 2;
+                const int32_t centerZ = maxZ / 2;
+                for (const Engine::TerrainImportedChunk& chunk : imported.chunks) {
+                    if (std::abs(chunk.coord.x - centerX) <= 1 &&
+                        std::abs(chunk.coord.z - centerZ) <= 1) {
+                        chunksToLoad.push_back(chunk);
+                    }
+                }
+                runtime.loadedHeightmap = !chunksToLoad.empty();
+                runtime.warningCount += static_cast<uint32_t>(imported.warnings.size());
+            } else {
+                SDL_Log("Modern heightmap terrain import failed: %s", imported.message.c_str());
+                ++runtime.warningCount;
+            }
+        }
+
+        if (!runtime.loadedHeightmap) {
+            source = modernFallbackTerrainSourceDescriptor();
+        }
+
+        runtime.terrainSource = runtime.terrain.registerSource(source);
+        if (!Engine::isValid(runtime.terrainSource)) {
+            runtime.status = "Failed to register modern terrain source.";
+            return false;
+        }
+
+        if (runtime.loadedHeightmap) {
+            for (const Engine::TerrainImportedChunk& chunk : chunksToLoad) {
+                const Engine::TerrainChunkHandle handle =
+                    runtime.terrain.loadImportedChunk(runtime.terrainSource, chunk);
+                if (Engine::isValid(handle)) {
+                    addModernTerrainChunk(runtime, handle, source, runtime.terrainFallbackMaterial);
+                }
+            }
+        } else {
+            for (int32_t z = -1; z <= 1; ++z) {
+                for (int32_t x = -1; x <= 1; ++x) {
+                    const Engine::TerrainChunkHandle handle =
+                        runtime.terrain.loadProceduralChunk(runtime.terrainSource, {x, z});
+                    if (Engine::isValid(handle)) {
+                        addModernTerrainChunk(runtime, handle, source, runtime.terrainFallbackMaterial);
+                    }
+                }
+            }
+        }
+
+        return !runtime.terrainChunks.empty();
+    }
+
+    void rebuildModernNavigationWithSceneGeometry(
+        ModernDefaultSceneRuntime& runtime,
+        const Engine::TerrainSourceDescriptor& source)
+    {
+        runtime.terrainNavTileCount = 0;
+        runtime.navigationCacheHitCount = 0;
+        runtime.navigationCacheMissCount = 0;
+        runtime.navigationCacheStaleCount = 0;
+        runtime.navigationCacheWriteCount = 0;
+
+        Engine::NavAgentSettings agent;
+        Engine::SceneNavigationGeometryBuildSettings geometrySettings;
+        geometrySettings.maxWalkableSlopeDegrees = agent.maxSlopeDegrees;
+        geometrySettings.tileBoundsPadding = agent.radius;
+
+        Engine::NavigationCacheSettings cacheSettings;
+        cacheSettings.worldId = "modern_default_scene";
+        const Engine::TerrainNavigationSourceIdentity terrainIdentity = modernTerrainNavigationIdentity(source);
+        Engine::NavigationCacheManifest cacheManifest = Engine::NavigationCache::buildManifest(
+            cacheSettings,
+            source.defaultChunkSize,
+            0,
+            17,
+            runtime.navigation.settings(),
+            agent,
+            "modern_default",
+            {},
+            {},
+            terrainIdentity.sourceId,
+            terrainIdentity.sourceHash,
+            terrainIdentity.importSettings,
+            modernTerrainSourceTypeName(terrainIdentity.sourceType),
+            Engine::TerrainNavigationAdapterVersion,
+            modernSceneGeometryHash(runtime),
+            geometrySettings.maxWalkableSlopeDegrees,
+            geometrySettings.tileBoundsPadding,
+            "modern_scene_nav_geometry_slope_v1");
+        Engine::NavigationCache cache(cacheSettings, cacheManifest);
+        cache.ensureManifest();
+
+        for (ModernTerrainChunkRuntime& chunkRuntime : runtime.terrainChunks) {
+            runtime.navigation.destroyTile(chunkRuntime.coord);
+            chunkRuntime.navigationTile = {};
+
+            const Engine::NavigationCacheTileReadResult cached =
+                Engine::NavigationCache::readTileCache(cacheSettings, cacheManifest, chunkRuntime.coord);
+            if (cached.status == Engine::NavigationCacheOperationStatus::Hit && cached.tile) {
+                chunkRuntime.navigationTile = runtime.navigation.loadTerrainTileFromCache(*cached.tile);
+                if (chunkRuntime.navigationTile.id != UINT32_MAX) {
+                    ++runtime.terrainNavTileCount;
+                    ++runtime.navigationCacheHitCount;
+                    continue;
+                }
+            }
+            if (cached.status == Engine::NavigationCacheOperationStatus::Stale ||
+                cached.status == Engine::NavigationCacheOperationStatus::Corrupt) {
+                ++runtime.navigationCacheStaleCount;
+            } else {
+                ++runtime.navigationCacheMissCount;
+            }
+
+            const std::optional<Engine::TerrainNavigationBuildRequest> navRequest =
+                Engine::terrainNavigationRequestFromDatasetChunk(
+                    runtime.terrain,
+                    chunkRuntime.chunk,
+                    17,
+                    terrainIdentity);
+            if (!navRequest) {
+                ++runtime.warningCount;
+                continue;
+            }
+
+            Engine::TerrainNavigationBuildResult terrainNav = Engine::buildTerrainNavigationData(*navRequest);
+            if (!terrainNav.success || !terrainNav.buildData) {
+                ++runtime.warningCount;
+                continue;
+            }
+
+            Engine::SceneNavigationBuildRequest sceneRequest;
+            sceneRequest.coord = chunkRuntime.coord;
+            sceneRequest.bounds = terrainNav.buildData->bounds;
+            sceneRequest.captureDebug = BuildDebugToolsEnabled;
+            const std::optional<Engine::NavigationTerrainBuildData> combined =
+                runtime.sceneNavigationGeometry.buildNavigationData(
+                    runtime.scene,
+                    sceneRequest,
+                    &*terrainNav.buildData,
+                    geometrySettings);
+            if (!combined) {
+                ++runtime.warningCount;
+                continue;
+            }
+
+            const Engine::NavigationTileBuildResult built =
+                Engine::NavigationSystem::buildTerrainTileData(*combined, agent, runtime.navigation.settings());
+            if (built.status == Engine::NavQueryStatus::Success && built.tileData) {
+                chunkRuntime.navigationTile = runtime.navigation.loadTerrainTileFromCache(*built.tileData, built.diagnostics);
+                ++runtime.terrainNavTileCount;
+                const Engine::NavigationCacheWriteResult write =
+                    Engine::NavigationCache::writeTileCache(cacheSettings, cacheManifest, *built.tileData);
+                if (write.status == Engine::NavigationCacheOperationStatus::WriteSuccess) {
+                    ++runtime.navigationCacheWriteCount;
+                }
+            } else {
+                ++runtime.warningCount;
+            }
+        }
+    }
+
+    std::unique_ptr<ModernDefaultSceneRuntime> startModernDefaultSceneRuntime(Engine::AssetCache& assetCache)
+    {
+        auto runtime = std::make_unique<ModernDefaultSceneRuntime>();
+        runtime->characters.setNavigationService(&runtime->navigationService);
+        runtime->bounds = {{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()},
+            {-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()}};
+
+        (void)loadModernHeightmapTerrain(*runtime, assetCache);
+        const std::optional<Engine::TerrainSourceDescriptor> terrainSource =
+            runtime->terrain.sourceMetadata(runtime->terrainSource);
+
+        glm::vec3 focus{
+            (runtime->bounds.min.x + runtime->bounds.max.x) * 0.5f,
+            0.0f,
+            (runtime->bounds.min.z + runtime->bounds.max.z) * 0.5f,
+        };
+        focus.y = runtime->terrain.sampleHeight(focus.x, focus.z).value_or(0.0f);
+        runtime->focus = focus;
+
+        (void)addModernAuthoredAsset(
+            *runtime,
+            assetCache,
+            DefaultSponzaScenePath,
+            "sponza_gltf",
+            modernTerrainRelativePosition(*runtime, focus, {0.0f, 2.0f, 0.0f}),
+            0.25f);
+        (void)addModernAuthoredAsset(
+            *runtime,
+            assetCache,
+            DefaultKayKitStaticFbxPath,
+            "kaykit_static_fbx",
+            modernTerrainRelativePosition(*runtime, focus, {-18.0f, 4.0f, -18.0f}),
+            2.5f);
+        (void)addModernAuthoredAsset(
+            *runtime,
+            assetCache,
+            DefaultKayKitStaticGltfPath,
+            "kaykit_static_gltf",
+            modernTerrainRelativePosition(*runtime, focus, {18.0f, 4.0f, -18.0f}),
+            2.5f);
+        (void)addModernAnimatedAsset(
+            *runtime,
+            assetCache,
+            ReleaseKayKitAnimatedModelPath,
+            "kaykit_skinned_gltf",
+            modernTerrainRelativePosition(*runtime, focus, {-22.0f, 6.0f, 24.0f}),
+            3.0f);
+        (void)addModernAnimatedAsset(
+            *runtime,
+            assetCache,
+            DefaultKayKitAnimatedFbxPath,
+            "kaykit_skinned_fbx",
+            modernTerrainRelativePosition(*runtime, focus, {22.0f, 6.0f, 24.0f}),
+            3.0f);
+
+        runtime->scene.updateWorldTransforms();
+        if (terrainSource) {
+            rebuildModernNavigationWithSceneGeometry(*runtime, *terrainSource);
+        }
+
+        runtime->playerActor = runtime->scene.createActor({0x4d4f4445524e01ull});
+        Engine::SceneTransform playerTransform;
+        playerTransform.translation = modernTerrainRelativePosition(*runtime, focus, {0.0f, 4.0f, -30.0f});
+        runtime->scene.setLocalTransform(runtime->playerActor, playerTransform);
+        Engine::SceneCharacterDescriptor character;
+        character.actor = runtime->playerActor;
+        character.radius = 0.45f;
+        character.height = 1.8f;
+        character.maxSpeed = 7.0f;
+        character.debugName = "modern.player";
+        runtime->playerCharacter = runtime->characters.createCharacter(character);
+        if (!Engine::isValid(runtime->playerCharacter)) {
+            ++runtime->warningCount;
+        }
+
+        if (!Engine::isValid(runtime->physics.registerPhysicsSystems())) {
+            ++runtime->warningCount;
+        }
+        if (!Engine::isValid(runtime->characters.registerMovementSystem())) {
+            ++runtime->warningCount;
+        }
+        if (!Engine::isValid(runtime->animatedAdapter.registerVariableAnimationSystem())) {
+            ++runtime->warningCount;
+        }
+        if (!Engine::isValid(runtime->renderBridge.registerPreRenderSystem(runtime->renderBackend))) {
+            ++runtime->warningCount;
+        }
+        runtime->scene.load();
+        runtime->scene.start();
+        runtime->schedulerStarted = runtime->scene.lifecycleState() == Engine::SceneLifecycleState::Started;
+        runtime->status = "Modern default scene: terrain " +
+            std::string{runtime->loadedHeightmap ? "heightmap" : "procedural fallback"} +
+            ", terrain chunks " + std::to_string(runtime->terrainChunks.size()) +
+            ", authored nav sources " + std::to_string(runtime->authoredNavigationSourceCount) +
+            ", authored physics bodies " + std::to_string(runtime->authoredPhysicsBodyCount) +
+            ", static assets " + std::to_string(runtime->staticAssetCount) +
+            ", animated assets " + std::to_string(runtime->animatedAssetCount) +
+            ", warnings " + std::to_string(runtime->warningCount);
+        SDL_Log("%s", runtime->status.c_str());
+        return runtime;
+    }
 
     std::string_view animatedAsyncPhaseName(AnimatedSampleRuntime::AsyncPhase phase);
 
@@ -758,95 +1614,16 @@
         Renderer::DebugUi::RendererDebugSettings& settings,
         const AnimatedSampleRuntime& runtime)
     {
-        settings.hasAnimationDiagnostics = true;
-        settings.animationLoaded = runtime.loaded;
-        settings.animationEnabled = runtime.enabled;
-        settings.animationPlaying = runtime.playback.playing;
-        settings.animationLooping = runtime.playback.loop;
-        settings.animationPath = runtime.sourcePath.generic_string();
-        settings.animationStatus = runtime.status;
-        settings.animationAsyncPhase = std::string{animatedAsyncPhaseName(runtime.asyncPhase)};
-        settings.animationAsyncMessage = runtime.asyncMessage;
-        settings.animationCacheStatus = Engine::animatedModelCacheStatusName(runtime.cacheStatus);
-        settings.animationCacheIdentity = runtime.cacheManifest.identityHash;
-        settings.animationCacheMessage = runtime.loaded ? runtime.model.diagnostics().cacheMessage : runtime.asyncMessage;
-        settings.animationAsyncQueued = runtime.asyncJobsQueued;
-        settings.animationAsyncCompleted = runtime.asyncJobsCompleted;
-        settings.animationAsyncFailed = runtime.asyncJobsFailed;
-        settings.animationAsyncPending = runtime.asyncJobsQueued > runtime.asyncJobsCompleted
-            ? runtime.asyncJobsQueued - runtime.asyncJobsCompleted
-            : 0;
-        settings.animationCacheReadMs = runtime.cacheReadMs;
-        settings.animationImportMs = runtime.importMs;
-        settings.animationCacheWriteMs = runtime.cacheWriteMs;
-        settings.animationClipCount = runtime.loaded ? runtime.model.clipCount() : 0;
-        settings.animationClipIndex = runtime.crossfade.active
-            ? runtime.crossfade.targetClipIndex
-            : runtime.playback.clipIndex;
-        settings.animationJointCount = runtime.loaded ? runtime.model.jointCount() : 0;
-        settings.animationSkinnedInstanceCount = runtime.loaded ? runtime.model.skinnedInstanceCount() : 0;
-        settings.animationCreatedSkinnedMeshCount = runtime.loaded
-            ? runtime.model.diagnostics().createdSkinnedMeshCount
-            : 0;
-        settings.animationTextureFallbackCount = runtime.loaded
-            ? runtime.model.diagnostics().fallbackTextureCount
-            : 0;
-        settings.animationWarningCount = runtime.loaded
-            ? static_cast<uint32_t>(runtime.model.diagnostics().warnings.size())
-            : 0;
-        settings.animationLastWarning = runtime.loaded && !runtime.model.diagnostics().warnings.empty()
-            ? runtime.model.diagnostics().warnings.back()
-            : std::string{};
-        settings.animationSampledFrameCount = runtime.sampledFrameCount;
-        settings.animationFailedPoseUpdateCount = runtime.failedPoseUpdateCount;
-        settings.animationCompletedCrossfadeCount = runtime.completedCrossfadeCount;
-        settings.animationTimeSeconds = runtime.playback.timeSeconds;
-        settings.animationClipDurationSeconds = runtime.loaded
-            ? runtime.model.clipDuration(settings.animationClipIndex)
-            : 0.0f;
-        settings.animationPlaybackSpeed = runtime.playback.speed;
-        settings.animationCrossfadeActive = runtime.crossfade.active;
-        settings.animationCrossfadeTargetClipIndex = runtime.crossfade.targetClipIndex;
-        settings.animationCrossfadeElapsedSeconds = runtime.crossfade.elapsedSeconds;
-        settings.animationCrossfadeDurationSeconds = runtime.crossfade.durationSeconds;
-        settings.animationCrossfadeWeight = runtime.crossfade.durationSeconds > 0.0f
-            ? std::clamp(runtime.crossfade.elapsedSeconds / runtime.crossfade.durationSeconds, 0.0f, 1.0f)
-            : 0.0f;
+        (void)settings;
+        (void)runtime;
     }
 
     void applyAnimatedDebugSettings(
         AnimatedSampleRuntime& runtime,
         const Renderer::DebugUi::RendererDebugSettings& settings)
     {
-        if (!runtime.loaded || !settings.hasAnimationDiagnostics) {
-            return;
-        }
-
-        runtime.enabled = settings.animationEnabled && runtime.model.skinnedInstanceCount() > 0 && runtime.model.clipCount() > 0;
-        runtime.playback.playing = settings.animationPlaying;
-        runtime.playback.loop = settings.animationLooping;
-        runtime.playback.speed = settings.animationPlaybackSpeed;
-        if (runtime.model.clipCount() > 0) {
-            const uint32_t requestedClip = std::min(settings.animationClipIndex, runtime.model.clipCount() - 1);
-            if (requestedClip != runtime.playback.clipIndex &&
-                (!runtime.crossfade.active || requestedClip != runtime.crossfade.targetClipIndex)) {
-                runtime.crossfade = Engine::beginCrossfade(
-                    runtime.playback,
-                    requestedClip,
-                    Engine::DefaultAnimationCrossfadeSeconds);
-            }
-            const float duration = runtime.model.clipDuration(runtime.playback.clipIndex);
-            runtime.playback.timeSeconds = std::clamp(settings.animationTimeSeconds, 0.0f, std::max(duration, 0.0f));
-            if (runtime.crossfade.active) {
-                runtime.crossfade.source.playing = runtime.playback.playing;
-                runtime.crossfade.source.loop = runtime.playback.loop;
-                runtime.crossfade.source.speed = runtime.playback.speed;
-                runtime.crossfade.source.timeSeconds = runtime.playback.timeSeconds;
-                runtime.crossfade.target.playing = runtime.playback.playing;
-                runtime.crossfade.target.loop = runtime.playback.loop;
-                runtime.crossfade.target.speed = runtime.playback.speed;
-            }
-        }
+        (void)runtime;
+        (void)settings;
     }
 
     std::string_view authoredAsyncPhaseName(AuthoredRuntime::AsyncPhase phase)
@@ -903,46 +1680,9 @@
         const std::filesystem::path& path,
         const Engine::AuthoredSceneDiagnostics& diagnostics)
     {
-        const Engine::AuthoredSceneDiagnosticsSummary summary =
-            Engine::summarizeAuthoredSceneDiagnostics(diagnostics);
-        settings.hasAuthoredSceneDiagnostics = true;
-        settings.authoredScenePath = path.generic_string();
-        settings.authoredSourceFormat = summary.sourceFormatName;
-        settings.authoredCacheStatus = Engine::cacheStatusName(summary.cacheStatus);
-        settings.authoredCacheMessage = summary.cacheMessage;
-        settings.authoredAsyncPhase = summary.asyncPhase.empty() ? "n/a" : summary.asyncPhase;
-        settings.authoredAsyncMessage = summary.asyncMessage;
-        settings.authoredImportedNodes = summary.importedNodeCount;
-        settings.authoredImportedMeshes = summary.importedMeshCount;
-        settings.authoredImportedPrimitives = summary.importedPrimitiveCount;
-        settings.authoredImportedMaterials = summary.importedMaterialCount;
-        settings.authoredImportedTextures = summary.importedTextureCount;
-        settings.authoredImportedLights = summary.importedLightCount;
-        settings.authoredCreatedMeshes = summary.createdMeshCount;
-        settings.authoredCreatedMaterials = summary.createdMaterialCount;
-        settings.authoredCreatedInstances = summary.createdInstanceCount;
-        settings.authoredCreatedLights = summary.createdLightCount;
-        settings.authoredTextureLoaded = summary.textureLoadSuccessCount;
-        settings.authoredTextureFailed = summary.textureLoadFailureCount;
-        settings.authoredTextureFallback = summary.fallbackTextureCount;
-        settings.authoredTextureBytes = summary.textureEstimatedBytes;
-        settings.authoredTotalSectors = summary.totalSectorCount;
-        settings.authoredLoadedSectors = summary.loadedSectorCount;
-        settings.authoredPendingLoadSectors = summary.pendingLoadSectorCount;
-        settings.authoredPendingUnloadSectors = summary.pendingUnloadSectorCount;
-        settings.authoredFailedSectors = summary.failedSectorCount;
-        settings.authoredSectorBytes = summary.sectorEstimatedBytes;
-        settings.authoredActiveLights = summary.activeAuthoredLightCount;
-        settings.authoredDisabledZeroLights = summary.disabledZeroIntensityLightCount;
-        settings.authoredSkippedOverBudgetLights = summary.skippedOverBudgetLightCount;
-        settings.authoredWarnings = summary.warningCount;
-        settings.authoredCacheReadMs = summary.asyncCacheReadMs;
-        settings.authoredImportMs = summary.asyncImportMs;
-        settings.authoredCacheWriteMs = summary.asyncCacheWriteMs;
-        settings.authoredAsyncQueued = summary.asyncJobsQueued;
-        settings.authoredAsyncCompleted = summary.asyncJobsCompleted;
-        settings.authoredAsyncFailed = summary.asyncJobsFailed;
-        settings.authoredAsyncPending = summary.asyncPendingJobs;
+        (void)settings;
+        (void)path;
+        (void)diagnostics;
     }
 
     Renderer::Aabb authoredBoundsOrFallback(const Engine::AuthoredSceneBounds& bounds)

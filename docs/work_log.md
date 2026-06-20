@@ -1509,3 +1509,36 @@ Changed:
 
 Rationale:
 - The scene roadmap needed a final closure pass that unified debug visualization ownership and created a safe parallel path for procedural gameplay migration without changing current default behavior.
+
+## 2026-06-19 - Modern Default Scene Startup
+
+Changed:
+- Switched Debug and Release startup defaults to a modern scene-backed runtime using `Engine::Scene`, scene scheduler systems, scene render bridge, scene authored/animated adapters, `TerrainDataset`, terrain render/navigation/physics adapters, `ScenePhysicsWorld`, `SceneNavigationService`, and `SceneCharacterMovementSystem`.
+- Kept the legacy procedural and legacy authored App paths available only through explicit compatibility scene selections.
+- Added a strict modern terrain startup path that imports the real heightmap asset into a bounded visible `TerrainDataset` patch, falls back to procedural dataset chunks when needed, renders terrain through `TerrainRenderLodAdapter` plus direct renderer terrain handles, and explicitly creates nav tiles and scene physics terrain colliders.
+- Added modern default glTF/FBX coverage with Sponza/KayKit static assets and KayKit skinned animated samples through the scene adapters.
+- Updated system contracts, engine overview, and the scene roadmap to document the new default ownership boundary.
+
+Rationale:
+- The default samples now exercise the modern scene, terrain, physics, navigation, render bridge, and animation composition path directly instead of validating it only through opt-in or release-only paths.
+
+## 2026-06-20 - Cached Modern Scene Navigation Tiles
+
+Changed:
+- Added per-tile scene navigation geometry filtering by padded world-space triangle bounds and configurable walkable slope while preserving terrain base build data.
+- Extended navigation cache manifests with scene-geometry source identity, slope threshold, tile padding, and generator version fields.
+- Updated modern default startup navigation to read/write cached Detour tile bytes for terrain plus filtered static scene geometry and report cache hit/miss/stale/write counts.
+
+Rationale:
+- Modern startup should not rebuild all Sponza/static scene navigation geometry every launch, and Recast should only see triangles that can affect the requested tile and pass the configured walkable-slope policy.
+
+## 2026-06-20 - Modern Debug UI Cleanup
+
+Changed:
+- Replaced the public Renderer debug UI data surface with modern runtime aggregates for performance, render controls, scene scheduler/render bridge diagnostics, `TerrainDataset`, modern navigation/cache/filtering, scene physics, scene character movement, and debug visualization.
+- Removed legacy-only debug UI structs and visible tabs for `World`, `TerrainSystem`, `ChunkStreamer`, `ActorController`, `BlockingCollisionSystem`, biome editing, picking, groups, world graph routing, and legacy save/edit controls.
+- Routed modern debug draw enqueue through modern scene/terrain/navigation/physics/character producers, kept debug draw out of release builds, and wired modern navigation cache clear/rebuild actions.
+- Added header-boundary coverage ensuring public Debug UI headers expose modern state and no legacy-only UI names.
+
+Rationale:
+- The default runtime is now modern scene-backed, so debug UI should target modern diagnostics and public service APIs instead of keeping stale legacy control surfaces that no longer affect the active scene.

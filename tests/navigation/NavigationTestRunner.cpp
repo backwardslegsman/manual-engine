@@ -1556,6 +1556,42 @@ namespace {
         ctx.expect(!read.graph.has_value(), "stale graph returned payload");
     }
 
+    void navigationCacheIdentityIncludesSceneGeometryInputs(TestContext& ctx)
+    {
+        Engine::NavigationCacheSettings settings = testCacheSettings("scene_geometry_identity");
+        Engine::NavBuildSettings build;
+        Engine::NavAgentSettings agent;
+        const auto manifestFor = [&](std::string sceneHash, float slope, float padding) {
+            return Engine::NavigationCache::buildManifest(
+                settings,
+                ChunkSize,
+                4,
+                Resolution,
+                build,
+                agent,
+                "test_profile",
+                {},
+                {},
+                {123},
+                "terrain_hash",
+                {"terrain", "1", "default"},
+                "heightmap_imported",
+                "terrain_navigation_adapter_t5_v1",
+                std::move(sceneHash),
+                slope,
+                padding,
+                "modern_scene_nav_geometry_slope_v1");
+        };
+
+        const Engine::NavigationCacheManifest base = manifestFor("scene_hash_a", 45.0f, 0.45f);
+        ctx.expect(base.identityHash != manifestFor("scene_hash_b", 45.0f, 0.45f).identityHash,
+            "scene geometry hash did not affect nav cache identity");
+        ctx.expect(base.identityHash != manifestFor("scene_hash_a", 30.0f, 0.45f).identityHash,
+            "scene geometry slope did not affect nav cache identity");
+        ctx.expect(base.identityHash != manifestFor("scene_hash_a", 45.0f, 1.0f).identityHash,
+            "scene geometry tile padding did not affect nav cache identity");
+    }
+
     void worldNavigationGraphWorkerBuildMatchesRebuild(TestContext& ctx)
     {
         Engine::TerrainSystem terrain = makeTerrain();
@@ -1888,6 +1924,7 @@ int main()
         {"NavigationCacheCorruptTileIsSafe", navigationCacheCorruptTileIsSafe},
         {"NavigationCacheConnectivityIdentityMismatchIsStale", navigationCacheConnectivityIdentityMismatchIsStale},
         {"NavigationCacheGraphIdentityMismatchIsStale", navigationCacheGraphIdentityMismatchIsStale},
+        {"NavigationCacheIdentityIncludesSceneGeometryInputs", navigationCacheIdentityIncludesSceneGeometryInputs},
         {"WorldNavigationGraphWorkerBuildMatchesRebuild", worldNavigationGraphWorkerBuildMatchesRebuild},
         {"WorldNavigationGraphWorkerBuildRadiusZero", worldNavigationGraphWorkerBuildRadiusZero},
         {"NavigationCpuProfileReport", navigationCpuProfileReport},

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -262,6 +263,10 @@ namespace Engine {
             node["terrain_source_hash"] = manifest.terrainSourceHash;
             node["terrain_source_type"] = manifest.terrainSourceType;
             node["terrain_navigation_adapter_version"] = manifest.terrainNavigationAdapterVersion;
+            node["scene_geometry_hash"] = manifest.sceneGeometryHash;
+            node["scene_geometry_max_slope_degrees"] = manifest.sceneGeometryMaxSlopeDegrees;
+            node["scene_geometry_tile_bounds_padding"] = manifest.sceneGeometryTileBoundsPadding;
+            node["scene_geometry_adapter_version"] = manifest.sceneGeometryAdapterVersion;
             node["terrain_import_settings"]["pipeline"] = manifest.terrainImportSettings.pipeline;
             node["terrain_import_settings"]["version"] = manifest.terrainImportSettings.version;
             node["terrain_import_settings"]["options_hash"] = manifest.terrainImportSettings.optionsHash;
@@ -342,7 +347,11 @@ namespace Engine {
         std::string terrainSourceHash,
         AssetImportSettingsKey terrainImportSettings,
         std::string terrainSourceType,
-        std::string terrainNavigationAdapterVersion)
+        std::string terrainNavigationAdapterVersion,
+        std::string sceneGeometryHash,
+        float sceneGeometryMaxSlopeDegrees,
+        float sceneGeometryTileBoundsPadding,
+        std::string sceneGeometryAdapterVersion)
     {
         NavigationCacheManifest manifest;
         manifest.worldId = settings.worldId;
@@ -360,6 +369,14 @@ namespace Engine {
         manifest.terrainImportSettings = std::move(terrainImportSettings);
         manifest.terrainSourceType = std::move(terrainSourceType);
         manifest.terrainNavigationAdapterVersion = std::move(terrainNavigationAdapterVersion);
+        manifest.sceneGeometryHash = std::move(sceneGeometryHash);
+        manifest.sceneGeometryMaxSlopeDegrees = std::isfinite(sceneGeometryMaxSlopeDegrees)
+            ? std::clamp(sceneGeometryMaxSlopeDegrees, 0.0f, 90.0f)
+            : 45.0f;
+        manifest.sceneGeometryTileBoundsPadding = std::isfinite(sceneGeometryTileBoundsPadding)
+            ? std::max(sceneGeometryTileBoundsPadding, 0.0f)
+            : 0.45f;
+        manifest.sceneGeometryAdapterVersion = std::move(sceneGeometryAdapterVersion);
 
         std::ostringstream identity;
         identity << manifest.worldId << '|'
@@ -377,6 +394,10 @@ namespace Engine {
                  << manifest.terrainImportSettings.optionsHash << '|'
                  << manifest.terrainSourceType << '|'
                  << manifest.terrainNavigationAdapterVersion << '|'
+                 << manifest.sceneGeometryHash << '|'
+                 << manifest.sceneGeometryMaxSlopeDegrees << '|'
+                 << manifest.sceneGeometryTileBoundsPadding << '|'
+                 << manifest.sceneGeometryAdapterVersion << '|'
                  << manifest.generatorVersion << '|';
         appendHashInput(identity, manifest.build);
         appendHashInput(identity, manifest.agent);

@@ -36,6 +36,10 @@ namespace Engine {
         AssetImportSettingsKey terrainImportSettings;
         std::string terrainSourceType = "unknown";
         std::string terrainNavigationAdapterVersion = "terrain_navigation_adapter_t5_v1";
+        std::string sceneGeometryHash;
+        float sceneGeometryMaxSlopeDegrees = 45.0f;
+        float sceneGeometryTileBoundsPadding = 0.45f;
+        std::string sceneGeometryAdapterVersion = "none";
         std::string generatorVersion = "navigation_phase_12_v6_async_runtime_tiles";
         std::string identityHash;
     };
@@ -119,7 +123,11 @@ namespace Engine {
             std::string terrainSourceHash = {},
             AssetImportSettingsKey terrainImportSettings = {},
             std::string terrainSourceType = "unknown",
-            std::string terrainNavigationAdapterVersion = "terrain_navigation_adapter_t5_v1");
+            std::string terrainNavigationAdapterVersion = "terrain_navigation_adapter_t5_v1",
+            std::string sceneGeometryHash = {},
+            float sceneGeometryMaxSlopeDegrees = 45.0f,
+            float sceneGeometryTileBoundsPadding = 0.45f,
+            std::string sceneGeometryAdapterVersion = "none");
         static std::string hashFile(const std::filesystem::path& path);
 
         const NavigationCacheManifest& manifest() const;

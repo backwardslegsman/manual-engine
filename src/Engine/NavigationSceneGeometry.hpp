@@ -55,6 +55,11 @@ namespace Engine {
         bool captureDebug = false;
     };
 
+    struct SceneNavigationGeometryBuildSettings {
+        float maxWalkableSlopeDegrees = 45.0f;
+        float tileBoundsPadding = 0.45f;
+    };
+
     enum class SceneNavigationDebugRequestType {
         SourceBounds,
         IncludedTriangles,
@@ -88,6 +93,11 @@ namespace Engine {
         uint32_t walkableTriangleCount = 0;
         uint32_t blockerVertexCount = 0;
         uint32_t blockerTriangleCount = 0;
+        uint32_t consideredTriangleCount = 0;
+        uint32_t boundsCulledTriangleCount = 0;
+        uint32_t slopeCulledTriangleCount = 0;
+        uint32_t degenerateTriangleCount = 0;
+        uint32_t appendedTriangleCount = 0;
         uint32_t dirtySourceCount = 0;
         uint32_t dirtyChunkCount = 0;
         uint32_t debugRequestCount = 0;
@@ -147,7 +157,8 @@ namespace Engine {
         [[nodiscard]] std::optional<NavigationTerrainBuildData> buildNavigationData(
             Scene& scene,
             const SceneNavigationBuildRequest& request,
-            const NavigationTerrainBuildData* terrainBase = nullptr);
+            const NavigationTerrainBuildData* terrainBase = nullptr,
+            const SceneNavigationGeometryBuildSettings& settings = {});
 
         [[nodiscard]] SceneNavigationGeometryDiagnostics diagnostics() const;
         [[nodiscard]] std::vector<SceneNavigationDebugRequest> debugRequests() const;

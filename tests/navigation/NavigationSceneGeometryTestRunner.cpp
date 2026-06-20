@@ -115,6 +115,51 @@ namespace {
         return descriptor;
     }
 
+    Engine::SceneNavigationSourceDescriptor steepTriangleSource()
+    {
+        Engine::SceneNavigationSourceDescriptor descriptor;
+        descriptor.role = Engine::SceneNavigationSourceRole::Walkable;
+        descriptor.debugName = "steep triangle";
+        descriptor.vertices = {
+            {1.0f, 0.0f, 1.0f},
+            {1.0f, 4.0f, 1.2f},
+            {4.0f, 0.0f, 1.0f},
+        };
+        descriptor.indices = {0, 1, 2};
+        descriptor.localBounds = {{{1.0f, 0.0f, 1.0f}, {4.0f, 4.0f, 1.2f}}};
+        return descriptor;
+    }
+
+    Engine::SceneNavigationSourceDescriptor outsideTriangleSource()
+    {
+        Engine::SceneNavigationSourceDescriptor descriptor;
+        descriptor.role = Engine::SceneNavigationSourceRole::Walkable;
+        descriptor.debugName = "outside triangle";
+        descriptor.vertices = {
+            {40.0f, 0.0f, 40.0f},
+            {42.0f, 0.0f, 40.0f},
+            {40.0f, 0.0f, 42.0f},
+        };
+        descriptor.indices = {0, 2, 1};
+        descriptor.localBounds = {{{0.0f, 0.0f, 0.0f}, {42.0f, 0.0f, 42.0f}}};
+        return descriptor;
+    }
+
+    Engine::SceneNavigationSourceDescriptor paddingIntersectingTriangleSource()
+    {
+        Engine::SceneNavigationSourceDescriptor descriptor;
+        descriptor.role = Engine::SceneNavigationSourceRole::Walkable;
+        descriptor.debugName = "padding triangle";
+        descriptor.vertices = {
+            {ChunkSize + 0.2f, 0.0f, 1.0f},
+            {ChunkSize + 1.0f, 0.0f, 1.0f},
+            {ChunkSize + 0.2f, 0.0f, 2.0f},
+        };
+        descriptor.indices = {0, 2, 1};
+        descriptor.localBounds = {{{ChunkSize + 0.2f, 0.0f, 1.0f}, {ChunkSize + 1.0f, 0.0f, 2.0f}}};
+        return descriptor;
+    }
+
     Engine::NavigationTerrainBuildData terrainBase()
     {
         Engine::NavigationTerrainBuildData data;
@@ -179,8 +224,14 @@ namespace {
 
         ctx.expect(snapshot.has_value(), "transformed snapshot failed");
         if (snapshot) {
-            ctx.expect(nearVec3(snapshot->vertices[0], {2.0f, 0.0f, 3.0f}), "root transformed vertex was wrong");
-            ctx.expect(nearVec3(snapshot->vertices[1], {2.0f, 0.0f, -29.0f}), "rotated/scaled vertex was wrong");
+            const bool hasRootVertex = std::ranges::any_of(snapshot->vertices, [](const glm::vec3& vertex) {
+                return nearVec3(vertex, {2.0f, 0.0f, 3.0f});
+            });
+            const bool hasRotatedVertex = std::ranges::any_of(snapshot->vertices, [](const glm::vec3& vertex) {
+                return nearVec3(vertex, {2.0f, 0.0f, -29.0f});
+            });
+            ctx.expect(hasRootVertex, "root transformed vertex was missing");
+            ctx.expect(hasRotatedVertex, "rotated/scaled vertex was missing");
         }
     }
 
@@ -264,6 +315,60 @@ namespace {
             ctx.expect(snapshot->vertices.size() == 8, "merged walkable vertex count was wrong");
             ctx.expect(snapshot->indices.size() == 12, "merged walkable index count was wrong");
             ctx.expect(snapshot->indices[6] == 4, "scene source indices were not offset after terrain");
+        }
+    }
+
+    void slopeAndBoundsFiltering(TestContext& ctx)
+    {
+        Engine::Scene scene;
+        Engine::SceneNavigationGeometryRegistry registry;
+        [[maybe_unused]] const Engine::SceneNavigationSourceHandle flat = registry.registerSource(planeSource());
+        [[maybe_unused]] const Engine::SceneNavigationSourceHandle steep = registry.registerSource(steepTriangleSource());
+        [[maybe_unused]] const Engine::SceneNavigationSourceHandle outside = registry.registerSource(outsideTriangleSource());
+
+        Engine::SceneNavigationGeometryBuildSettings settings;
+        settings.maxWalkableSlopeDegrees = 30.0f;
+        settings.tileBoundsPadding = 0.0f;
+        const std::optional<Engine::NavigationTerrainBuildData> snapshot =
+            registry.buildNavigationData(scene, buildRequest(), nullptr, settings);
+
+        ctx.expect(snapshot.has_value(), "filtered snapshot failed");
+        if (snapshot) {
+            ctx.expect(snapshot->vertices.size() == 4, "filtered snapshot should keep only compact flat plane vertices");
+            ctx.expect(snapshot->indices.size() == 6, "filtered snapshot should keep only flat plane triangles");
+        }
+
+        const Engine::SceneNavigationGeometryDiagnostics diagnostics = registry.diagnostics();
+        ctx.expect(diagnostics.consideredTriangleCount == 4, "considered triangle count was wrong");
+        ctx.expect(diagnostics.slopeCulledTriangleCount == 1, "steep triangle was not slope culled");
+        ctx.expect(diagnostics.boundsCulledTriangleCount == 1, "outside triangle was not bounds culled");
+        ctx.expect(diagnostics.appendedTriangleCount == 2, "appended triangle count was wrong");
+    }
+
+    void paddedTileBoundsIncludeIntersectingTriangle(TestContext& ctx)
+    {
+        Engine::Scene scene;
+        Engine::SceneNavigationGeometryRegistry registry;
+        [[maybe_unused]] const Engine::SceneNavigationSourceHandle source =
+            registry.registerSource(paddingIntersectingTriangleSource());
+
+        Engine::SceneNavigationGeometryBuildSettings noPadding;
+        noPadding.tileBoundsPadding = 0.0f;
+        const std::optional<Engine::NavigationTerrainBuildData> withoutPadding =
+            registry.buildNavigationData(scene, buildRequest(), nullptr, noPadding);
+        ctx.expect(withoutPadding.has_value(), "no-padding snapshot failed");
+        if (withoutPadding) {
+            ctx.expect(withoutPadding->indices.empty(), "triangle outside unpadded tile should be culled");
+        }
+
+        Engine::SceneNavigationGeometryBuildSettings withPadding;
+        withPadding.tileBoundsPadding = 0.5f;
+        const std::optional<Engine::NavigationTerrainBuildData> padded =
+            registry.buildNavigationData(scene, buildRequest(), nullptr, withPadding);
+        ctx.expect(padded.has_value(), "padded snapshot failed");
+        if (padded) {
+            ctx.expect(padded->vertices.size() == 3, "padded bounds should include triangle vertices");
+            ctx.expect(padded->indices.size() == 3, "padded bounds should include triangle indices");
         }
     }
 
@@ -385,6 +490,8 @@ int main()
         {"DisabledAndInvalidSourcesAreSkipped", disabledAndInvalidSourcesAreSkipped},
         {"BlockerSourceProducesBlockingGeometry", blockerSourceProducesBlockingGeometry},
         {"TerrainAndSceneSourcesMerge", terrainAndSceneSourcesMerge},
+        {"SlopeAndBoundsFiltering", slopeAndBoundsFiltering},
+        {"PaddedTileBoundsIncludeIntersectingTriangle", paddedTileBoundsIncludeIntersectingTriangle},
         {"DirtyTrackingMarksExpectedChunks", dirtyTrackingMarksExpectedChunks},
         {"UnregisterBeforeSnapshotMarksDirtyChunks", unregisterBeforeSnapshotMarksDirtyChunks},
         {"AuthoredAdapterRegistersNavSourcesWhenOptedIn", authoredAdapterRegistersNavSourcesWhenOptedIn},

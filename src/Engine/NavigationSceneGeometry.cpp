@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace {
@@ -40,6 +41,14 @@ namespace {
             lhs.min.z <= rhs.max.z && lhs.max.z >= rhs.min.z;
     }
 
+    Renderer::Aabb paddedBounds(Renderer::Aabb bounds, float padding)
+    {
+        const float safePadding = std::isfinite(padding) ? std::max(padding, 0.0f) : 0.0f;
+        bounds.min -= glm::vec3{safePadding};
+        bounds.max += glm::vec3{safePadding};
+        return bounds;
+    }
+
     Renderer::Aabb emptyBounds()
     {
         const float max = std::numeric_limits<float>::max();
@@ -58,6 +67,15 @@ namespace {
         for (const glm::vec3& vertex : vertices) {
             includePoint(bounds, vertex);
         }
+        return bounds;
+    }
+
+    Renderer::Aabb boundsForTriangle(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
+    {
+        Renderer::Aabb bounds = emptyBounds();
+        includePoint(bounds, a);
+        includePoint(bounds, b);
+        includePoint(bounds, c);
         return bounds;
     }
 
@@ -108,6 +126,30 @@ namespace {
     {
         return (static_cast<uint64_t>(static_cast<uint32_t>(coord.x)) << 32u) |
             static_cast<uint32_t>(coord.z);
+    }
+
+    bool triangleSlopeAccepted(
+        const glm::vec3& a,
+        const glm::vec3& b,
+        const glm::vec3& c,
+        float maxWalkableSlopeDegrees,
+        bool& degenerate)
+    {
+        degenerate = false;
+        const glm::vec3 cross = glm::cross(b - a, c - a);
+        const float length = glm::length(cross);
+        if (!std::isfinite(length) || length <= 0.000001f) {
+            degenerate = true;
+            return false;
+        }
+
+        const glm::vec3 normal = cross / length;
+        const float up = std::clamp(std::abs(normal.y), 0.0f, 1.0f);
+        const float slopeDegrees = glm::degrees(std::acos(up));
+        const float safeSlope = std::isfinite(maxWalkableSlopeDegrees)
+            ? std::clamp(maxWalkableSlopeDegrees, 0.0f, 90.0f)
+            : 45.0f;
+        return slopeDegrees <= safeSlope;
     }
 }
 
@@ -298,7 +340,8 @@ namespace Engine {
     std::optional<NavigationTerrainBuildData> SceneNavigationGeometryRegistry::buildNavigationData(
         Scene& scene,
         const SceneNavigationBuildRequest& request,
-        const NavigationTerrainBuildData* terrainBase)
+        const NavigationTerrainBuildData* terrainBase,
+        const SceneNavigationGeometryBuildSettings& settings)
     {
         diagnostics_.includedSourceCount = 0;
         diagnostics_.skippedSourceCount = 0;
@@ -311,6 +354,11 @@ namespace Engine {
         diagnostics_.walkableTriangleCount = 0;
         diagnostics_.blockerVertexCount = 0;
         diagnostics_.blockerTriangleCount = 0;
+        diagnostics_.consideredTriangleCount = 0;
+        diagnostics_.boundsCulledTriangleCount = 0;
+        diagnostics_.slopeCulledTriangleCount = 0;
+        diagnostics_.degenerateTriangleCount = 0;
+        diagnostics_.appendedTriangleCount = 0;
         diagnostics_.warnings.clear();
         if (request.captureDebug) {
             debugRequests_.clear();
@@ -322,7 +370,8 @@ namespace Engine {
             appendDebug(std::move(debug));
         }
 
-        if (!validAabb(request.bounds)) {
+        const Renderer::Aabb effectiveBounds = paddedBounds(request.bounds, settings.tileBoundsPadding);
+        if (!validAabb(request.bounds) || !validAabb(effectiveBounds)) {
             diagnostics_.warnings.push_back("Invalid navigation scene geometry build bounds");
             refreshDiagnostics();
             return std::nullopt;
@@ -381,10 +430,22 @@ namespace Engine {
                 return;
             }
             source.lastWorldBounds = sourceWorldBounds;
-            if (!intersects(sourceWorldBounds, request.bounds)) {
+            if (!intersects(sourceWorldBounds, effectiveBounds)) {
                 ++diagnostics_.outOfBoundsSourceCount;
                 ++diagnostics_.skippedSourceCount;
                 return;
+            }
+
+            std::vector<glm::vec3> worldVertices;
+            worldVertices.reserve(descriptor.vertices.size());
+            for (const glm::vec3& vertex : descriptor.vertices) {
+                const glm::vec3 worldVertex = glm::vec3(transform * glm::vec4(vertex, 1.0f));
+                if (!finiteVec3(worldVertex)) {
+                    ++diagnostics_.nonFiniteGeometryCount;
+                    ++diagnostics_.skippedSourceCount;
+                    return;
+                }
+                worldVertices.push_back(worldVertex);
             }
 
             std::vector<glm::vec3>& targetVertices = descriptor.role == SceneNavigationSourceRole::Walkable
@@ -393,23 +454,64 @@ namespace Engine {
             std::vector<uint32_t>& targetIndices = descriptor.role == SceneNavigationSourceRole::Walkable
                 ? result.indices
                 : result.blockingIndices;
-            const uint32_t baseVertex = static_cast<uint32_t>(targetVertices.size());
-            targetVertices.reserve(targetVertices.size() + descriptor.vertices.size());
-            for (const glm::vec3& vertex : descriptor.vertices) {
-                targetVertices.push_back(glm::vec3(transform * glm::vec4(vertex, 1.0f)));
-            }
-            targetIndices.reserve(targetIndices.size() + descriptor.indices.size());
-            for (uint32_t index : descriptor.indices) {
-                targetIndices.push_back(baseVertex + index);
+
+            std::unordered_map<uint32_t, uint32_t> remappedIndices;
+            const auto appendVertex = [&](uint32_t sourceIndex) {
+                if (const auto found = remappedIndices.find(sourceIndex); found != remappedIndices.end()) {
+                    return found->second;
+                }
+                const uint32_t targetIndex = static_cast<uint32_t>(targetVertices.size());
+                targetVertices.push_back(worldVertices[sourceIndex]);
+                remappedIndices.emplace(sourceIndex, targetIndex);
+                return targetIndex;
+            };
+
+            uint32_t acceptedTriangles = 0;
+            for (size_t index = 0; index + 2 < descriptor.indices.size(); index += 3) {
+                const uint32_t ia = descriptor.indices[index];
+                const uint32_t ib = descriptor.indices[index + 1];
+                const uint32_t ic = descriptor.indices[index + 2];
+                ++diagnostics_.consideredTriangleCount;
+
+                const glm::vec3& a = worldVertices[ia];
+                const glm::vec3& b = worldVertices[ib];
+                const glm::vec3& c = worldVertices[ic];
+                const Renderer::Aabb triangleBounds = boundsForTriangle(a, b, c);
+                if (!validAabb(triangleBounds) || !intersects(triangleBounds, effectiveBounds)) {
+                    ++diagnostics_.boundsCulledTriangleCount;
+                    continue;
+                }
+
+                if (descriptor.role == SceneNavigationSourceRole::Walkable) {
+                    bool degenerate = false;
+                    if (!triangleSlopeAccepted(a, b, c, settings.maxWalkableSlopeDegrees, degenerate)) {
+                        if (degenerate) {
+                            ++diagnostics_.degenerateTriangleCount;
+                        } else {
+                            ++diagnostics_.slopeCulledTriangleCount;
+                        }
+                        continue;
+                    }
+                }
+
+                targetIndices.push_back(appendVertex(ia));
+                targetIndices.push_back(appendVertex(ib));
+                targetIndices.push_back(appendVertex(ic));
+                ++acceptedTriangles;
             }
 
-            if (descriptor.role == SceneNavigationSourceRole::Walkable) {
-                diagnostics_.walkableVertexCount += static_cast<uint32_t>(descriptor.vertices.size());
-                diagnostics_.walkableTriangleCount += static_cast<uint32_t>(descriptor.indices.size() / 3);
-            } else {
-                diagnostics_.blockerVertexCount += static_cast<uint32_t>(descriptor.vertices.size());
-                diagnostics_.blockerTriangleCount += static_cast<uint32_t>(descriptor.indices.size() / 3);
+            if (acceptedTriangles == 0) {
+                ++diagnostics_.skippedSourceCount;
+                return;
             }
+            if (descriptor.role == SceneNavigationSourceRole::Walkable) {
+                diagnostics_.walkableVertexCount += static_cast<uint32_t>(remappedIndices.size());
+                diagnostics_.walkableTriangleCount += acceptedTriangles;
+            } else {
+                diagnostics_.blockerVertexCount += static_cast<uint32_t>(remappedIndices.size());
+                diagnostics_.blockerTriangleCount += acceptedTriangles;
+            }
+            diagnostics_.appendedTriangleCount += acceptedTriangles;
             ++diagnostics_.includedSourceCount;
 
             if (request.captureDebug) {

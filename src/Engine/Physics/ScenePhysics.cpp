@@ -250,6 +250,7 @@ namespace Engine {
             bool hasJoltBody = false;
             glm::vec3 position{0.0f};
             glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+            std::optional<Aabb> cachedBounds;
             std::optional<std::pair<glm::vec3, glm::quat>> kinematicTarget;
         };
 
@@ -463,6 +464,7 @@ namespace Engine {
             }
             body.position = position;
             body.rotation = rotation;
+            refreshBodyAabb(body);
 
             JPH::BodyCreationSettings settings(
                 *shape,
@@ -503,6 +505,7 @@ namespace Engine {
             bodyInterface.DestroyBody(body.bodyId);
             body.hasJoltBody = false;
             body.bodyId = {};
+            body.cachedBounds.reset();
         }
 
         void destroyBodySlot(uint32_t index)
@@ -522,6 +525,7 @@ namespace Engine {
             body.generation = nextGeneration(body.generation);
             body.occupied = false;
             body.descriptor = {};
+            body.cachedBounds.reset();
             body.kinematicTarget.reset();
             freeBodies.push_back(index);
             refreshDiagnostics();
@@ -548,6 +552,7 @@ namespace Engine {
             const JPH::BodyInterface& bodyInterface = physicsSystem.GetBodyInterface();
             body.position = fromJolt(bodyInterface.GetPosition(body.bodyId));
             body.rotation = fromJolt(bodyInterface.GetRotation(body.bodyId));
+            refreshBodyAabb(body);
         }
 
         void setStatus(ScenePhysicsQueryStatus status, std::string message)
@@ -592,7 +597,7 @@ namespace Engine {
             return std::nullopt;
         }
 
-        std::optional<Aabb> bodyAabb(const BodyRecord& body) const
+        std::optional<Aabb> computeBodyAabb(const BodyRecord& body) const
         {
             std::optional<Aabb> result;
             for (SceneColliderHandle colliderHandle : body.colliders) {
@@ -612,6 +617,16 @@ namespace Engine {
                 }
             }
             return result;
+        }
+
+        void refreshBodyAabb(BodyRecord& body)
+        {
+            body.cachedBounds = computeBodyAabb(body);
+        }
+
+        std::optional<Aabb> bodyAabb(const BodyRecord& body) const
+        {
+            return body.cachedBounds;
         }
 
         void appendDebug(ScenePhysicsDebugRequest request)
@@ -910,6 +925,7 @@ namespace Engine {
         impl_->cleanupInvalidOwners();
         for (Impl::BodyRecord& body : impl_->bodies) {
             if (!body.occupied || !body.hasJoltBody ||
+                body.descriptor.motionType == ScenePhysicsMotionType::Static ||
                 body.descriptor.motionType == ScenePhysicsMotionType::Dynamic) {
                 continue;
             }
@@ -921,6 +937,7 @@ namespace Engine {
             } else if (!impl_->readActorWorld(body.descriptor.actor, body.position, body.rotation)) {
                 continue;
             }
+            impl_->refreshBodyAabb(body);
             impl_->physicsSystem.GetBodyInterface().SetPositionAndRotation(
                 body.bodyId,
                 toJoltR(body.position),
@@ -941,7 +958,7 @@ namespace Engine {
         impl_->diagnostics.lastStepMicroseconds = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
         for (Impl::BodyRecord& body : impl_->bodies) {
-            if (body.occupied && body.hasJoltBody) {
+            if (body.occupied && body.hasJoltBody && body.descriptor.motionType != ScenePhysicsMotionType::Static) {
                 impl_->updateCachedPoseFromJolt(body);
             }
         }

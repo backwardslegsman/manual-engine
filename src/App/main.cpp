@@ -10,6 +10,7 @@
 #include <deque>
 #include <exception>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -64,6 +65,8 @@
 #include "Engine/ProceduralChunkContent.hpp"
 #include "Engine/SpatialRegistry.hpp"
 #include "Engine/Terrain.hpp"
+#include "Engine/TerrainDataset.hpp"
+#include "Engine/TerrainImport.hpp"
 #include "Engine/TerrainMaterialRenderAdapter.hpp"
 #include "Engine/TerrainSampleMaterials.hpp"
 #include "Engine/TerrainNavigationAdapter.hpp"
@@ -110,6 +113,8 @@ namespace {
         float eventPollingMs = 0.0f;
         float inputMappingMs = 0.0f;
         float cameraUpdateMs = 0.0f;
+        float sceneFixedTickMs = 0.0f;
+        float sceneFrameTickMs = 0.0f;
         float chunkStreamingMs = 0.0f;
         float terrainLodMs = 0.0f;
         float budgetDrainMs = 0.0f;
@@ -645,10 +650,721 @@ namespace {
     }
 
     bool pressedAction(const Engine::EventQueue& events, std::string_view actionName);
+    bool releasedAction(const Engine::EventQueue& events, std::string_view actionName);
     glm::vec2 axis2Action(const Engine::EventQueue& events, std::string_view actionName);
     Renderer::DebugUi::CameraDebugStats makeCameraDebugStats(const Engine::OrbitCameraController& camera);
+    const char* navStatusName(Engine::NavQueryStatus status);
 
 #include "App/AuthoredRuntime.inl"
+
+    std::string scenePhysicsStatusName(Engine::ScenePhysicsQueryStatus status)
+    {
+        switch (status) {
+            case Engine::ScenePhysicsQueryStatus::Success:
+                return "Success";
+            case Engine::ScenePhysicsQueryStatus::InvalidInput:
+                return "InvalidInput";
+            case Engine::ScenePhysicsQueryStatus::NoWorld:
+                return "NoWorld";
+            case Engine::ScenePhysicsQueryStatus::NoHit:
+                return "NoHit";
+            case Engine::ScenePhysicsQueryStatus::UnsupportedShape:
+                return "UnsupportedShape";
+        }
+        return "Unknown";
+    }
+
+    std::string sceneCharacterModeName(Engine::SceneCharacterMovementMode mode)
+    {
+        switch (mode) {
+            case Engine::SceneCharacterMovementMode::Disabled:
+                return "Disabled";
+            case Engine::SceneCharacterMovementMode::Walking:
+                return "Walking";
+            case Engine::SceneCharacterMovementMode::Falling:
+                return "Falling";
+        }
+        return "Unknown";
+    }
+
+    std::string sceneCharacterStatusName(Engine::SceneCharacterMovementStatus status)
+    {
+        switch (status) {
+            case Engine::SceneCharacterMovementStatus::Success:
+                return "Success";
+            case Engine::SceneCharacterMovementStatus::InvalidCharacter:
+                return "InvalidCharacter";
+            case Engine::SceneCharacterMovementStatus::InvalidActor:
+                return "InvalidActor";
+            case Engine::SceneCharacterMovementStatus::InvalidDescriptor:
+                return "InvalidDescriptor";
+            case Engine::SceneCharacterMovementStatus::PhysicsBodyUnavailable:
+                return "PhysicsBodyUnavailable";
+            case Engine::SceneCharacterMovementStatus::NavigationUnavailable:
+                return "NavigationUnavailable";
+            case Engine::SceneCharacterMovementStatus::NoPath:
+                return "NoPath";
+            case Engine::SceneCharacterMovementStatus::Blocked:
+                return "Blocked";
+        }
+        return "Unknown";
+    }
+
+    Renderer::DebugUi::ModernDebugUiState makeModernDebugUiState(
+        const ModernDefaultSceneRuntime& runtime,
+        const FramePerformanceTimings& frameTimings,
+        float startupWorkMs)
+    {
+        Renderer::DebugUi::ModernDebugUiState state;
+        state.performance.startupComplete = runtime.schedulerStarted;
+        state.performance.startupWorkMs = startupWorkMs;
+        state.performance.startupStatus = runtime.status;
+        state.performance.previousFrameCpuMs = frameTimings.previousFrameCpuMs;
+        state.performance.eventPollingMs = frameTimings.eventPollingMs;
+        state.performance.inputMappingMs = frameTimings.inputMappingMs;
+        state.performance.cameraUpdateMs = frameTimings.cameraUpdateMs;
+        state.performance.sceneFixedTickMs = frameTimings.sceneFixedTickMs;
+        state.performance.sceneFrameTickMs = frameTimings.sceneFrameTickMs;
+        state.performance.debugPrimitiveEnqueueMs = frameTimings.debugPrimitiveEnqueueMs;
+        state.performance.drawSubmissionMs = frameTimings.drawSubmissionMs;
+        state.performance.debugPrimitiveDrawMs = frameTimings.debugPrimitiveDrawMs;
+        state.performance.debugUiBuildMs = frameTimings.debugUiBuildMs;
+        state.performance.debugUiRenderMs = frameTimings.debugUiRenderMs;
+        state.performance.bgfxFrameMs = frameTimings.bgfxFrameMs;
+
+        const Engine::SceneSchedulerDiagnostics scheduler = runtime.scene.schedulerDiagnostics();
+        for (uint32_t index = 0; index < state.performance.scenePhaseMs.size() &&
+            index < scheduler.phases.size(); ++index) {
+            state.performance.scenePhaseMs[index] =
+                static_cast<float>(scheduler.phases[index].elapsedMicroseconds) / 1000.0f;
+            state.performance.scenePhaseCallbacks[index] = scheduler.phases[index].callbackCount;
+        }
+
+        state.scene.mode = "Modern default scene";
+        state.scene.status = runtime.status;
+        runtime.scene.forEachActor([&](Engine::SceneActorHandle actor) {
+            ++state.scene.actorCount;
+            state.scene.componentCount += static_cast<uint32_t>(runtime.scene.components(actor).size());
+        });
+        state.scene.frameIndex = scheduler.frameIndex;
+        state.scene.fixedStepIndex = scheduler.fixedStepIndex;
+        state.scene.registeredSystemCount = scheduler.registeredSystemCount;
+        state.scene.enabledSystemCount = scheduler.enabledSystemCount;
+        state.scene.skippedPhaseCount = scheduler.skippedPhaseCount;
+        state.scene.skippedCallbackCount = scheduler.skippedCallbackCount;
+        const Engine::SceneRenderBridgeDiagnostics bridge = runtime.renderBridge.diagnostics();
+        state.scene.renderMeshComponents = bridge.meshComponentCount;
+        state.scene.renderSkinnedComponents = bridge.skinnedMeshComponentCount;
+        state.scene.renderLightComponents = bridge.lightComponentCount;
+        state.scene.renderCameraComponents = bridge.cameraComponentCount;
+        state.scene.liveMeshInstances = bridge.liveMeshInstanceCount;
+        state.scene.liveSkinnedInstances = bridge.liveSkinnedInstanceCount;
+        state.scene.liveRendererLights = bridge.liveLightCount;
+        state.scene.authoredStaticAssets = runtime.staticAssetCount;
+        state.scene.animatedAssets = runtime.animatedAssetCount;
+        state.scene.warnings = runtime.warningCount;
+
+        const Engine::TerrainDatasetDiagnostics terrain = runtime.terrain.diagnostics();
+        state.terrain.loadedHeightmap = runtime.loadedHeightmap;
+        state.terrain.sourceCount = terrain.sourceCount;
+        state.terrain.loadedChunkCount = terrain.loadedChunkCount;
+        state.terrain.renderedChunkCount = runtime.terrainRendererCount;
+        state.terrain.navTileCount = runtime.terrainNavTileCount;
+        state.terrain.physicsColliderCount = runtime.terrainPhysicsColliderCount;
+        state.terrain.boundsMin = runtime.bounds.min;
+        state.terrain.boundsMax = runtime.bounds.max;
+        state.terrain.minHeight = terrain.minHeight;
+        state.terrain.maxHeight = terrain.maxHeight;
+        state.terrain.averageHeight = terrain.averageHeight;
+        state.terrain.memoryEstimateBytes = terrain.estimatedBytes;
+        if (!terrain.warnings.empty()) {
+            state.terrain.diagnostics = terrain.warnings.back();
+        }
+
+        const Engine::NavigationDebugGeometry navigationGeometry = runtime.navigation.debugGeometry();
+        const Engine::SceneNavigationGeometryDiagnostics sceneGeometry = runtime.sceneNavigationGeometry.diagnostics();
+        state.navigation.loadedTiles = static_cast<uint32_t>(runtime.navigation.allTileDiagnostics().size());
+        state.navigation.polygonEdgeCount = static_cast<uint32_t>(navigationGeometry.polygonEdges.size());
+        state.navigation.sceneSourceCount = sceneGeometry.registeredSourceCount;
+        state.navigation.sceneTriangleCount = sceneGeometry.consideredTriangleCount;
+        state.navigation.sceneAppendedTriangleCount = sceneGeometry.appendedTriangleCount;
+        state.navigation.sceneCulledByBounds = sceneGeometry.boundsCulledTriangleCount;
+        state.navigation.sceneCulledBySlope = sceneGeometry.slopeCulledTriangleCount;
+        state.navigation.cacheHits = runtime.navigationCacheHitCount;
+        state.navigation.cacheMisses = runtime.navigationCacheMissCount;
+        state.navigation.cacheStale = runtime.navigationCacheStaleCount;
+        state.navigation.cacheWrites = runtime.navigationCacheWriteCount;
+        state.navigation.lastBuildStatus = navStatusName(runtime.navigation.lastBuildStatus());
+        state.navigation.lastBuildMessage = runtime.navigation.lastBuildMessage();
+        state.navigation.lastQueryStatus = navStatusName(runtime.navigation.lastQueryStatus());
+        state.navigation.lastQueryMessage = runtime.navigation.lastQueryMessage();
+
+        const Engine::ScenePhysicsDiagnostics physics = runtime.physics.diagnostics();
+        state.physics.bodyCount = physics.bodyCount;
+        state.physics.colliderCount = physics.colliderCount;
+        state.physics.enabledBodyCount = physics.activeBodyCount;
+        state.physics.invalidOwnerCleanupCount = physics.invalidOwnerCleanupCount;
+        state.physics.raycastCount = physics.raycastCount;
+        state.physics.sweepCount = physics.sweepCount;
+        state.physics.overlapCount = physics.overlapCount;
+        state.physics.closestPointCount = physics.closestPointCount;
+        state.physics.lastStepMicroseconds = physics.lastStepMicroseconds;
+        state.physics.lastQueryMicroseconds = physics.lastQueryMicroseconds;
+        state.physics.lastStatus = scenePhysicsStatusName(physics.lastStatus);
+        state.physics.lastMessage = physics.lastMessage;
+        state.physics.warnings = static_cast<uint32_t>(physics.warnings.size());
+
+        const Engine::SceneCharacterMovementDiagnostics characters = runtime.characters.diagnostics();
+        state.character.characterCount = characters.characterCount;
+        state.character.failedSweepCount = characters.failedSweepCount;
+        state.character.pathQueryCount = characters.pathQueryCount;
+        state.character.invalidOwnerCleanupCount = characters.invalidOwnerCleanupCount;
+        state.character.lastUpdateMicroseconds = characters.lastUpdateMicroseconds;
+        if (const std::optional<Engine::SceneCharacterState> characterState =
+                runtime.characters.state(runtime.playerCharacter)) {
+            const std::optional<Engine::SceneCharacterDescriptor> descriptor =
+                runtime.characters.descriptor(runtime.playerCharacter);
+            state.character.hasCharacter = true;
+            state.character.enabled = descriptor ? descriptor->enabled : false;
+            state.character.mode = sceneCharacterModeName(characterState->mode);
+            state.character.grounded = characterState->grounded;
+            state.character.velocity = characterState->velocity;
+            state.character.floorNormal = characterState->floorNormal;
+            state.character.floorDistance = characterState->floorDistance;
+            state.character.activePathPointCount = static_cast<uint32_t>(characterState->activePath.points.size());
+            state.character.activeWaypointIndex = characterState->activeWaypointIndex;
+            state.character.lastStatus = sceneCharacterStatusName(characterState->lastStatus);
+            state.character.lastMessage = characterState->lastMessage;
+        }
+
+        const Renderer::DebugDrawStats& debug = Renderer::debugDrawStats();
+        state.debugVisualization.enabled = Renderer::debugDrawSettings().enabled;
+        state.debugVisualization.generatedLines = debug.generatedLines;
+        state.debugVisualization.submittedLines = debug.submittedLines;
+        state.debugVisualization.clippedLines = debug.clippedLines;
+        state.debugVisualization.lastFramePrimitiveBufferSize = debug.lastFramePrimitiveBufferSize;
+        return state;
+    }
+
+    Renderer::DebugUi::ModernDebugUiState makeSharedDebugUiState(
+        std::string mode,
+        std::string status,
+        const FramePerformanceTimings& frameTimings)
+    {
+        Renderer::DebugUi::ModernDebugUiState state;
+        state.scene.mode = std::move(mode);
+        state.scene.status = std::move(status);
+        state.performance.previousFrameCpuMs = frameTimings.previousFrameCpuMs;
+        state.performance.eventPollingMs = frameTimings.eventPollingMs;
+        state.performance.inputMappingMs = frameTimings.inputMappingMs;
+        state.performance.cameraUpdateMs = frameTimings.cameraUpdateMs;
+        state.performance.drawSubmissionMs = frameTimings.drawSubmissionMs;
+        state.performance.debugPrimitiveDrawMs = frameTimings.debugPrimitiveDrawMs;
+        state.performance.debugUiBuildMs = frameTimings.debugUiBuildMs;
+        state.performance.debugUiRenderMs = frameTimings.debugUiRenderMs;
+        state.performance.bgfxFrameMs = frameTimings.bgfxFrameMs;
+        const Renderer::DebugDrawStats& debug = Renderer::debugDrawStats();
+        state.debugVisualization.enabled = Renderer::debugDrawSettings().enabled;
+        state.debugVisualization.generatedLines = debug.generatedLines;
+        state.debugVisualization.submittedLines = debug.submittedLines;
+        state.debugVisualization.clippedLines = debug.clippedLines;
+        state.debugVisualization.lastFramePrimitiveBufferSize = debug.lastFramePrimitiveBufferSize;
+        return state;
+    }
+
+    constexpr uint32_t modernDebugColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255)
+    {
+        return (static_cast<uint32_t>(a) << 24) |
+            (static_cast<uint32_t>(b) << 16) |
+            (static_cast<uint32_t>(g) << 8) |
+            static_cast<uint32_t>(r);
+    }
+
+    void enqueueModernDebugPrimitives(
+        const ModernDefaultSceneRuntime& runtime,
+        const Renderer::RenderView& renderView,
+        const Renderer::DebugDrawSettings& settings)
+    {
+        Renderer::clearDebugPrimitives();
+        if (!settings.enabled) {
+            return;
+        }
+
+        constexpr uint32_t TerrainColor = modernDebugColor(80, 220, 240);
+        constexpr uint32_t NavigationTileColor = modernDebugColor(160, 255, 80);
+        constexpr uint32_t NavigationMeshColor = modernDebugColor(80, 180, 255);
+        constexpr uint32_t SceneNavigationColor = modernDebugColor(255, 220, 80);
+        constexpr uint32_t PhysicsColor = modernDebugColor(255, 100, 80);
+        constexpr uint32_t CharacterColor = modernDebugColor(80, 255, 120);
+        constexpr uint32_t FrustumColor = modernDebugColor(255, 80, 255);
+
+        if (settings.terrainTileBounds) {
+            for (const ModernTerrainChunkRuntime& chunk : runtime.terrainChunks) {
+                if (const std::optional<Engine::TerrainDatasetBounds> bounds =
+                        runtime.terrain.chunkWorldBounds(chunk.chunk)) {
+                    Renderer::addDebugAabb({bounds->min, bounds->max}, TerrainColor);
+                }
+            }
+        }
+
+        if (settings.navigationTileBounds) {
+            for (const Engine::NavigationTileDiagnostics& tile : runtime.navigation.allTileDiagnostics()) {
+                Renderer::addDebugAabb(tile.bounds, NavigationTileColor);
+            }
+        }
+
+        if (settings.navigationMeshEdges) {
+            const Engine::NavigationDebugGeometry geometry = runtime.navigation.debugGeometry();
+            uint32_t submitted = 0;
+            for (const Engine::NavDebugLine& edge : geometry.polygonEdges) {
+                if (submitted++ >= settings.maxNavMeshEdgeLines) {
+                    break;
+                }
+                Renderer::addDebugLine(edge.a, edge.b, NavigationMeshColor);
+            }
+        }
+
+        if (settings.navigationBlockerBounds) {
+            for (const Engine::SceneNavigationDebugRequest& request : runtime.sceneNavigationGeometry.debugRequests()) {
+                Renderer::addDebugAabb(request.bounds, SceneNavigationColor);
+            }
+        }
+
+        if (settings.collisionBounds) {
+            for (const Engine::ScenePhysicsDebugRequest& request : runtime.physics.debugRequests()) {
+                Renderer::addDebugLine(request.start, request.end, PhysicsColor);
+                if (glm::dot(request.extents, request.extents) > 0.0f) {
+                    Renderer::Aabb bounds;
+                    bounds.min = request.position - request.extents;
+                    bounds.max = request.position + request.extents;
+                    Renderer::addDebugAabb(bounds, PhysicsColor);
+                }
+            }
+        }
+
+        if (settings.navigationCurrentPath) {
+            for (const Engine::SceneCharacterDebugRequest& request : runtime.characters.debugRequests()) {
+                Renderer::addDebugLine(request.start, request.end, CharacterColor);
+            }
+            if (const std::optional<Engine::SceneCharacterState> character = runtime.characters.state(runtime.playerCharacter)) {
+                const std::vector<glm::vec3>& points = character->activePath.points;
+                for (size_t index = 1; index < points.size(); ++index) {
+                    Renderer::addDebugLine(points[index - 1], points[index], CharacterColor);
+                }
+            }
+        }
+
+        if (settings.cameraFrustum) {
+            Renderer::addDebugFrustum(glm::inverse(renderView.viewProjection), FrustumColor);
+        }
+    }
+
+}
+
+namespace Renderer::DebugUi {
+        constexpr uint32_t TerrainLodDebugLevelCount = 6;
+
+        struct TerrainLodDebugStats {
+            std::array<uint32_t, TerrainLodDebugLevelCount> counts{};
+            std::string cameraChunkDiagnostics;
+            std::string hoveredChunkDiagnostics;
+            std::string selectedChunkDiagnostics;
+            std::string cameraBiomeGeneration;
+            float activeNavMaxSlopeDegrees = 0.0f;
+        };
+
+        struct SpatialRegistryDebugStats {
+            uint32_t activeCells = 0;
+            uint32_t registeredObjects = 0;
+            int32_t currentCellX = 0;
+            int32_t currentCellZ = 0;
+            uint32_t objectsInCurrentCell = 0;
+            uint32_t objectsNearCamera = 0;
+            float nearQueryRadius = 0.0f;
+        };
+
+        struct NavigationAgentDebugSettings {
+            float radius = 0.45f;
+            float height = 1.8f;
+            float maxSlopeDegrees = 45.0f;
+            float maxClimb = 0.45f;
+        };
+
+        struct NavigationBuildDebugSettings {
+            float cellSize = 0.3f;
+            float cellHeight = 0.2f;
+        };
+
+        struct NavigationDebugStats {
+            uint32_t loadedTiles = 0;
+            uint32_t polygonEdgeCount = 0;
+            uint32_t blockerVertexCount = 0;
+            uint32_t blockerTriangleCount = 0;
+            uint32_t connectivityChunkCount = 0;
+            uint32_t connectivityPortalCount = 0;
+            uint32_t connectivityConnectedPortalCount = 0;
+            uint32_t connectivityPartialChunkCount = 0;
+            uint32_t connectivityBlockedChunkCount = 0;
+            std::string cameraChunkConnectivitySummary;
+            std::string selectedChunkConnectivitySummary;
+            std::string hoveredChunkTileSummary;
+            std::string cameraChunkTileSummary;
+            std::string selectedChunkTileSummary;
+            std::string hoveredChunkPortalSummary;
+            std::string cameraChunkPortalSummary;
+            std::string selectedChunkPortalSummary;
+            uint32_t worldGraphNodeCount = 0;
+            uint32_t worldGraphEdgeCount = 0;
+            uint32_t worldGraphBlockedEdgeCount = 0;
+            bool hasWorldGraph = false;
+            int32_t worldGraphCenterX = 0;
+            int32_t worldGraphCenterZ = 0;
+            std::string lastWorldRouteStatus;
+            uint32_t lastWorldRouteChunkCount = 0;
+            float lastWorldRouteCost = 0.0f;
+            std::string lastWorldRouteMessage;
+            bool hasLastRebuiltChunk = false;
+            int32_t lastRebuiltChunkX = 0;
+            int32_t lastRebuiltChunkZ = 0;
+            bool selectedObjectNavBlocking = false;
+            uint32_t selectedActorCount = 0;
+            std::string selectedActorSummary;
+            bool hasLastGroupDestination = false;
+            glm::vec3 lastGroupDestination{};
+            uint32_t lastGroupCommandSuccessCount = 0;
+            uint32_t lastGroupCommandFailureCount = 0;
+            std::string lastGroupCommandStatus;
+            std::string lastGroupCommandFailureSummary;
+            std::string lastBuildStatus;
+            std::string lastBuildMessage;
+            std::string lastQueryStatus;
+            std::string lastQueryMessage;
+            bool hasNearestPoint = false;
+            std::string nearestPointStatus;
+            glm::vec3 nearestPoint{};
+            std::string currentPathStatus;
+            uint32_t currentPathPointCount = 0;
+            std::string selectedActorCommandSummary;
+            std::string activeNavigationProfileId;
+            NavigationAgentDebugSettings agent;
+            NavigationBuildDebugSettings build;
+            uint32_t navigationResolution = 0;
+            std::string cacheIdentity;
+            uint32_t cacheTileHits = 0;
+            uint32_t cacheTileMisses = 0;
+            uint32_t cacheTileStale = 0;
+            uint32_t cacheTileWrites = 0;
+            uint32_t cacheConnectivityHits = 0;
+            uint32_t cacheConnectivityMisses = 0;
+            uint32_t cacheConnectivityWrites = 0;
+            uint32_t cacheGraphHits = 0;
+            uint32_t cacheGraphMisses = 0;
+            uint32_t cacheGraphWrites = 0;
+            uint32_t navTileCacheHitsThisFrame = 0;
+            uint32_t navTileCacheMissesThisFrame = 0;
+            uint32_t navTileCacheStaleOrCorruptThisFrame = 0;
+            uint32_t navTileCacheLoadFailuresThisFrame = 0;
+            uint32_t cacheReadJobsQueuedThisFrame = 0;
+            uint32_t cacheReadJobsCompletedThisFrame = 0;
+            uint32_t cacheWriteJobsQueuedThisFrame = 0;
+            uint32_t cacheWriteJobsCompletedThisFrame = 0;
+            uint32_t cacheWriteJobsFailedThisFrame = 0;
+            uint32_t navTileWorkerBuildsQueuedThisFrame = 0;
+            uint32_t navTileWorkerBuildsCompletedThisFrame = 0;
+            uint32_t navTileWorkerBuildsFailedThisFrame = 0;
+            uint32_t graphWorkerBuildsQueuedThisFrame = 0;
+            uint32_t graphWorkerBuildsCompletedThisFrame = 0;
+            uint32_t graphWorkerBuildsFailedThisFrame = 0;
+            float lastGraphWorkerBuildMs = 0.0f;
+            int32_t lastGraphWorkerBuildCenterX = 0;
+            int32_t lastGraphWorkerBuildCenterZ = 0;
+            std::string lastGraphWorkerBuildMessage;
+            uint32_t navTileReadyChunks = 0;
+            uint32_t navTilePendingChunks = 0;
+            uint32_t navTileFailedChunks = 0;
+            uint32_t navTileSyncChunksThisFrame = 0;
+            uint32_t navTileSyncDeferredChunks = 0;
+            uint32_t connectivityChunksThisFrame = 0;
+            uint32_t connectivityDeferredChunks = 0;
+            uint32_t connectivityStepsThisFrame = 0;
+            uint32_t connectivitySamplesThisFrame = 0;
+            int32_t connectivityActiveChunkX = 0;
+            int32_t connectivityActiveChunkZ = 0;
+            std::string connectivityLastStepLabel;
+            std::string cacheLastPath;
+            std::string cacheLastMessage;
+            float previousFrameCpuMs = 0.0f;
+            float eventPollingMs = 0.0f;
+            float inputMappingMs = 0.0f;
+            float cameraUpdateMs = 0.0f;
+            float chunkStreamingMs = 0.0f;
+            float terrainLodMs = 0.0f;
+            uint32_t terrainLodRebuildsThisFrame = 0;
+            uint32_t terrainLodPendingRebuilds = 0;
+            uint32_t terrainLodJobsQueuedThisFrame = 0;
+            uint32_t terrainLodJobsCompletedThisFrame = 0;
+            uint32_t terrainLodJobsFailedThisFrame = 0;
+            uint32_t terrainLodCommitsThisFrame = 0;
+            uint32_t terrainLodStaleResultsThisFrame = 0;
+            uint32_t terrainLodCacheHitsThisFrame = 0;
+            uint32_t terrainLodCacheMissesThisFrame = 0;
+            uint32_t terrainLodCacheStaleThisFrame = 0;
+            uint32_t terrainLodCacheCorruptThisFrame = 0;
+            uint32_t terrainLodGeneratedThisFrame = 0;
+            uint32_t terrainLodPendingJobs = 0;
+            uint32_t terrainLodCompletedResults = 0;
+            float lastTerrainLodBuildMs = 0.0f;
+            std::string lastTerrainLodMessage;
+            uint32_t visibilityChunksProcessedThisFrame = 0;
+            uint32_t visibilityChunksDeferred = 0;
+            uint32_t visibilityTerrainUpdatedThisFrame = 0;
+            uint32_t visibilityInstancesUpdatedThisFrame = 0;
+            bool visibilityFullReapplyPending = false;
+            float budgetDrainMs = 0.0f;
+            float navTileSyncMs = 0.0f;
+            float connectivityMs = 0.0f;
+            float worldGraphMs = 0.0f;
+            float fixedUpdateMs = 0.0f;
+            float worldSyncMs = 0.0f;
+            float pickingMs = 0.0f;
+            float nearestNavigationPointMs = 0.0f;
+            float interactionMs = 0.0f;
+            float debugPrimitiveEnqueueMs = 0.0f;
+            float drawSubmissionMs = 0.0f;
+            float debugPrimitiveDrawMs = 0.0f;
+            DebugDrawStats debugDrawStats;
+            float debugUiBuildMs = 0.0f;
+            float debugUiRenderMs = 0.0f;
+            float bgfxFrameMs = 0.0f;
+            float postFrameRequestsMs = 0.0f;
+            uint32_t asyncWorkerCount = 0;
+            uint32_t asyncPendingChunkJobs = 0;
+            uint32_t asyncCompletedChunks = 0;
+            uint32_t asyncPendingUnloads = 0;
+            uint32_t asyncCancelledJobs = 0;
+            uint32_t asyncStaleJobs = 0;
+            uint32_t asyncCommittedLoadsThisFrame = 0;
+            uint32_t asyncCommittedUnloadsThisFrame = 0;
+            float asyncAverageTerrainGenerationMs = 0.0f;
+            float asyncMaxTerrainGenerationMs = 0.0f;
+            float asyncAverageNavigationBuildMs = 0.0f;
+            float asyncMaxNavigationBuildMs = 0.0f;
+            float frameBudgetMs = 0.0f;
+            float frameBudgetUsedMs = 0.0f;
+            float frameBudgetOverrunMs = 0.0f;
+            uint32_t frameBudgetItemsRun = 0;
+            uint32_t frameBudgetItemsDeferred = 0;
+            uint32_t mainThreadPendingWorkItems = 0;
+            std::array<float, 5> frameBudgetCategoryMs{};
+            float slowestBudgetItemMs = 0.0f;
+            std::string slowestBudgetItemLabel;
+            float longFrameThresholdMs = 50.0f;
+            uint32_t longFrameCount = 0;
+            float lastLongFrameMs = 0.0f;
+            std::string lastLongFrameSummary;
+        };
+
+        struct NavigationDebugControls {
+            bool rebuildVisibleTilesRequested = false;
+            bool generateVisibleCacheRequested = false;
+            bool refreshSelectedOrVisibleCacheRequested = false;
+            bool rebuildConnectivityRequested = false;
+            bool clearCacheStatsRequested = false;
+            bool cacheEnabled = true;
+            bool cacheWriteThrough = false;
+            bool asyncTerrainEnabled = true;
+            bool asyncNavigationEnabled = true;
+            bool mainThreadBudgetEnabled = true;
+            float mainThreadBudgetMs = 2.0f;
+            uint32_t propSpawnBatchSize = 8;
+            uint32_t terrainLodRebuildsPerFrame = 1;
+            uint32_t visibilityReapplyChunksPerStep = 8;
+            uint32_t navTileSyncChunksPerFrame = 8;
+            uint32_t connectivityChunksPerFrame = 8;
+            uint32_t connectivitySamplesPerStep = 9;
+            uint32_t worldGraphRecenterThresholdChunks = 8;
+            uint32_t workerThreadCount = 1;
+            uint32_t portalSamplesPerEdge = 9;
+            float portalEdgeInset = 1.5f;
+            float portalEdgeBandWidth = 4.0f;
+            float portalMergeDistance = 2.0f;
+            float portalNeighborLinkDistance = 6.0f;
+            NavigationAgentDebugSettings agent;
+            NavigationBuildDebugSettings build;
+        };
+
+        struct BiomeDebugStats {
+            bool valid = false;
+            std::string cameraBiomeId;
+            std::string cameraBiomeDisplayName;
+            int32_t cameraChunkX = 0;
+            int32_t cameraChunkZ = 0;
+            std::string cameraTerrainMaterialBiomeId;
+            std::array<uint8_t, 4> cameraTerrainColor{};
+            bool cameraTerrainUsesFallback = false;
+            bool hasPlayerBiome = false;
+            std::string playerBiomeId;
+            int32_t playerChunkX = 0;
+            int32_t playerChunkZ = 0;
+            bool hasHoveredBiome = false;
+            std::string hoveredBiomeId;
+            int32_t hoveredChunkX = 0;
+            int32_t hoveredChunkZ = 0;
+            bool hasTerrainHitBiome = false;
+            std::string terrainHitBiomeId;
+            int32_t terrainHitChunkX = 0;
+            int32_t terrainHitChunkZ = 0;
+            float moisture = 0.0f;
+            float roughness = 0.0f;
+            float elevation = 0.0f;
+        };
+
+        struct DebugPickingStats {
+            glm::vec2 mousePosition{};
+            glm::vec3 rayOrigin{};
+            glm::vec3 rayDirection{};
+            bool hasHoveredObject = false;
+            uint32_t hoveredObjectId = UINT32_MAX;
+            std::string hoveredStableId;
+            glm::vec3 hoveredObjectPosition{};
+            float hoveredObjectDistance = 0.0f;
+            int32_t hoveredObjectCellX = 0;
+            int32_t hoveredObjectCellZ = 0;
+            bool hasSelectedObject = false;
+            uint32_t selectedObjectId = UINT32_MAX;
+            std::string selectedStableId;
+            bool selectedIsProcedural = false;
+            std::string selectedArchetypeId;
+            std::string selectedArchetypeDisplayName;
+            std::string selectedArchetypeTags;
+            uint32_t selectedLocalSlot = 0;
+            glm::vec3 selectedObjectPosition{};
+            glm::vec3 selectedObjectRotation{};
+            glm::vec3 selectedObjectScale{1.0f};
+            int32_t selectedOwnerChunkX = 0;
+            int32_t selectedOwnerChunkZ = 0;
+            bool selectedEditable = false;
+            bool selectedIsCustom = false;
+            bool selectedHasPersistentOverride = false;
+            bool selectedCanReset = false;
+            bool hasTerrainHit = false;
+            glm::vec3 terrainHitPosition{};
+            float terrainHitDistance = 0.0f;
+            int32_t terrainHitChunkX = 0;
+            int32_t terrainHitChunkZ = 0;
+        };
+
+        struct InteractionDebugStats {
+            bool hasLastInteraction = false;
+            std::string action;
+            std::string target;
+            std::string outcome;
+            std::string stableId;
+            std::string archetypeId;
+            std::string archetypeDisplayName;
+            std::string archetypeTags;
+            int32_t chunkX = 0;
+            int32_t chunkZ = 0;
+            glm::vec3 position{};
+            float distance = 0.0f;
+            std::string resourceId;
+            uint32_t resourceAmount = 0;
+            std::string status;
+        };
+
+        struct WorldSaveDebugControls {
+            std::array<char, 260> path{"saves/debug_world.yaml"};
+            bool saveRequested = false;
+            bool loadRequested = false;
+            bool removeSelectedRequested = false;
+            bool persistSelectedRequested = false;
+            bool resetSelectedOverrideRequested = false;
+            bool moveSelectedToTerrainRequested = false;
+            bool nudgeSelectedPositiveXRequested = false;
+            bool nudgeSelectedNegativeXRequested = false;
+            bool nudgeSelectedPositiveYRequested = false;
+            bool nudgeSelectedNegativeYRequested = false;
+            bool nudgeSelectedPositiveZRequested = false;
+            bool nudgeSelectedNegativeZRequested = false;
+            bool rotateSelectedPositiveYawRequested = false;
+            bool rotateSelectedNegativeYawRequested = false;
+            bool placeArchetypeRequested = false;
+            float editMoveStep = 1.0f;
+            float editRotateStepDegrees = 15.0f;
+            std::array<char, 64> placeArchetypeId{"camp_marker"};
+            std::string status;
+        };
+
+        struct PlayerActorDebugStats {
+            bool valid = false;
+            uint32_t worldObjectId = UINT32_MAX;
+            std::string stableId;
+            glm::vec3 position{};
+            glm::vec3 velocity{};
+            float facingRadians = 0.0f;
+            bool hasGroundHeight = false;
+            float groundHeight = 0.0f;
+            bool collisionEnabled = false;
+            float collisionRadius = 0.0f;
+            float collisionHeight = 0.0f;
+            bool blockedX = false;
+            bool blockedZ = false;
+            uint32_t collisionHitCount = 0;
+            uint32_t firstBlockingObjectId = UINT32_MAX;
+            std::string firstBlockingStableId;
+            std::string pathStatus;
+            glm::vec3 pathDestination{};
+            uint32_t pathPointCount = 0;
+            uint32_t pathCurrentCorner = 0;
+            float pathArrivalRadius = 0.0f;
+            float pathCornerAdvanceRadius = 0.0f;
+            uint32_t pathBlockedTicks = 0;
+            uint32_t pathRepathAttemptsUsed = 0;
+            std::string pathLastQueryStatus;
+            std::string pathLastQueryMessage;
+            std::string routeStatus;
+            uint32_t routeCurrentWaypoint = 0;
+            uint32_t routeWaypointCount = 0;
+            glm::vec3 routeFinalDestination{};
+            std::string routeMessage;
+        };
+
+        void showRendererDebug(
+            const SceneDrawStats& stats,
+            RendererDebugSettings& settings,
+            AtmosphereSettings& atmosphere,
+            DebugDrawSettings& debugDraw,
+            const TerrainLodDebugStats&,
+            const SpatialRegistryDebugStats&,
+            const NavigationDebugStats& navigation,
+            NavigationDebugControls*,
+            const CameraDebugStats& camera,
+            CameraDebugControls* cameraControls,
+            const BiomeDebugStats&,
+            const DebugPickingStats&,
+            const InteractionDebugStats&,
+            WorldSaveDebugControls*,
+            const PlayerActorDebugStats&)
+        {
+            ModernDebugUiState state;
+            state.scene.mode = settings.sceneMode.empty() ? "Legacy compatibility" : settings.sceneMode;
+            state.scene.status = settings.sceneStatus;
+            state.performance.previousFrameCpuMs = navigation.previousFrameCpuMs;
+            state.performance.cameraUpdateMs = navigation.cameraUpdateMs;
+            state.performance.drawSubmissionMs = navigation.drawSubmissionMs;
+            state.performance.debugPrimitiveDrawMs = navigation.debugPrimitiveDrawMs;
+            state.performance.debugUiBuildMs = navigation.debugUiBuildMs;
+            state.performance.debugUiRenderMs = navigation.debugUiRenderMs;
+            state.performance.bgfxFrameMs = navigation.bgfxFrameMs;
+            state.debugVisualization.generatedLines = Renderer::debugDrawStats().generatedLines;
+            state.debugVisualization.submittedLines = Renderer::debugDrawStats().submittedLines;
+            state.debugVisualization.clippedLines = Renderer::debugDrawStats().clippedLines;
+            state.debugVisualization.lastFramePrimitiveBufferSize = Renderer::debugDrawStats().lastFramePrimitiveBufferSize;
+            showModernDebug(stats, settings, atmosphere, debugDraw, state, camera, cameraControls, nullptr);
+        }
+}
+
+namespace {
 
     void shutdownSharedRuntime(
         Engine::AssetCache& assetCache,
@@ -663,6 +1379,351 @@ namespace {
         bgfx::shutdown();
         SDL_DestroyWindow(window);
         SDL_Quit();
+    }
+
+    int runModernDefaultSceneMode(
+        SDL_Window* window,
+        bool debugUiEnabled,
+        Engine::AssetCache& assetCache,
+        Renderer::AtmosphereSettings& atmosphere)
+    {
+        applyAuthoredAtmosphereDefaults(atmosphere);
+        atmosphere.fogEnabled = true;
+        atmosphere.fogDensity = 0.004f;
+        Renderer::setAtmosphereSettings(atmosphere);
+
+        float startupWorkMs = 0.0f;
+        std::unique_ptr<ModernDefaultSceneRuntime> runtime;
+        if constexpr (BuildDebugToolsEnabled) {
+            startupWorkMs = measureMilliseconds([&]() {
+                runtime = startModernDefaultSceneRuntime(assetCache);
+            });
+            SDL_Log(
+                "Modern default scene startup work complete in %.3f ms: %s",
+                startupWorkMs,
+                runtime ? runtime->status.c_str() : "failed to create runtime");
+        } else {
+            runtime = startModernDefaultSceneRuntime(assetCache);
+        }
+
+        Engine::CameraSettings cameraSettings;
+        cameraSettings.farPlane = 1200.0f;
+        cameraSettings.maxDistance = 420.0f;
+        cameraSettings.minPivotXZ = {runtime->bounds.min.x - 40.0f, runtime->bounds.min.z - 40.0f};
+        cameraSettings.maxPivotXZ = {runtime->bounds.max.x + 40.0f, runtime->bounds.max.z + 40.0f};
+        cameraSettings.keyboardPanSpeed = 55.0f;
+        cameraSettings.edgePanSpeed = 70.0f;
+        cameraSettings.mousePanSensitivity = 0.12f;
+        cameraSettings.zoomSensitivity = 28.0f;
+        Engine::OrbitCameraController camera(cameraSettings);
+        frameCameraForBounds(camera, runtime->bounds);
+        {
+            Engine::CameraState state = camera.state();
+            state.mode = Engine::CameraMode::Free;
+            state.pivot = runtime->focus + glm::vec3{0.0f, 12.0f, 0.0f};
+            state.yawRadians = glm::radians(35.0f);
+            state.pitchRadians = glm::radians(-46.0f);
+            state.distance = std::clamp(170.0f, camera.settings().minDistance, camera.settings().maxDistance);
+            camera.setState(state);
+            camera.clearFollowTarget();
+        }
+
+        Engine::InputMappingLoadResult inputMappingLoad = Engine::InputMapping::loadFromYaml("assets/config/input.yaml");
+        if (!inputMappingLoad.success) {
+            SDL_Log("Using default input mapping: %s", inputMappingLoad.error.c_str());
+        }
+        Engine::InputMapping inputMapping = inputMappingLoad.mapping;
+        Engine::InputState input;
+        Engine::EventQueue events;
+        Engine::FixedStepLoop loop;
+
+        Renderer::DebugUi::RendererDebugSettings debugSettings;
+        debugSettings.enableDistanceCulling = BuildDebugToolsEnabled ? debugSettings.enableDistanceCulling : false;
+        Renderer::DebugDrawSettings debugDrawSettings;
+        Renderer::DebugUi::CameraDebugControls cameraDebugControls;
+        cameraDebugControls.followSmoothing = camera.followSettings().followSmoothing;
+        cameraDebugControls.maxFollowLag = camera.followSettings().maxFollowLag;
+        Renderer::DebugUi::ModernNavigationDebugControls navigationDebugControls;
+        const auto measureDebugOnly = [](auto&& function) -> float {
+            if constexpr (BuildDebugToolsEnabled) {
+                return measureMilliseconds(std::forward<decltype(function)>(function));
+            } else {
+                function();
+                return 0.0f;
+            }
+        };
+
+        bool running = true;
+        bool debugUiWantsMouse = false;
+        bool debugUiWantsKeyboard = false;
+        int currentWidth = 1280;
+        int currentHeight = 720;
+        SDL_GetWindowSize(window, &currentWidth, &currentHeight);
+        currentWidth = std::max(currentWidth, 1);
+        currentHeight = std::max(currentHeight, 1);
+        FramePerformanceTimings frameTimings;
+        float previousFrameCpuMs = 0.0f;
+        float previousDebugUiBuildMs = 0.0f;
+        float previousDebugUiRenderMs = 0.0f;
+        float previousBgfxFrameMs = 0.0f;
+
+        while (running) {
+            std::chrono::steady_clock::time_point frameCpuStart;
+            if constexpr (BuildDebugToolsEnabled) {
+                frameCpuStart = std::chrono::steady_clock::now();
+            }
+            frameTimings = {};
+            frameTimings.previousFrameCpuMs = previousFrameCpuMs;
+            frameTimings.debugUiBuildMs = previousDebugUiBuildMs;
+            frameTimings.debugUiRenderMs = previousDebugUiRenderMs;
+            frameTimings.bgfxFrameMs = previousBgfxFrameMs;
+            loop.beginFrame();
+            input.beginFrame();
+            events.clear();
+
+            frameTimings.eventPollingMs = measureDebugOnly([&]() {
+                SDL_Event event;
+                while (SDL_PollEvent(&event)) {
+                    if (debugUiEnabled) {
+                        Renderer::DebugUi::processEvent(event);
+                    }
+                    bool sendToGameInput = true;
+                    switch (event.type) {
+                        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                        case SDL_EVENT_MOUSE_BUTTON_UP:
+                        case SDL_EVENT_MOUSE_MOTION:
+                        case SDL_EVENT_MOUSE_WHEEL:
+                            sendToGameInput = !debugUiWantsMouse;
+                            break;
+                        case SDL_EVENT_KEY_DOWN:
+                        case SDL_EVENT_KEY_UP:
+                        case SDL_EVENT_TEXT_INPUT:
+                            sendToGameInput = !debugUiWantsKeyboard;
+                            break;
+                        default:
+                            break;
+                    }
+                    if (sendToGameInput) {
+                        input.processEvent(event);
+                    }
+                    if (event.type == SDL_EVENT_QUIT) {
+                        running = false;
+                    }
+                }
+            });
+            if (debugUiEnabled) {
+                debugUiWantsMouse = Renderer::DebugUi::wantsMouseCapture();
+                debugUiWantsKeyboard = Renderer::DebugUi::wantsKeyboardCapture();
+            }
+            resizeBackbufferIfNeeded(window, currentWidth, currentHeight);
+            input.setViewportSize(currentWidth, currentHeight);
+            frameTimings.inputMappingMs = measureDebugOnly([&]() {
+                inputMapping.publishEvents(input, events);
+            });
+            if (pressedAction(events, "app.quit")) {
+                running = false;
+            }
+
+            const float aspectRatio = static_cast<float>(currentWidth) / static_cast<float>(std::max(currentHeight, 1));
+            Engine::EventQueue cameraEvents;
+            for (const Engine::InputActionEvent& event : events.inputActions()) {
+                cameraEvents.publish(event);
+                if (event.action == "player.move" &&
+                    event.payloadType == Engine::InputActionPayloadType::Axis2 &&
+                    event.source == Engine::InputActionSource::Keyboard) {
+                    Engine::InputActionEvent cameraPan = event;
+                    cameraPan.action = "camera.pan";
+                    cameraEvents.publish(cameraPan);
+                }
+            }
+
+            frameTimings.cameraUpdateMs = measureDebugOnly([&]() {
+                camera.followSettings().followSmoothing = cameraDebugControls.followSmoothing;
+                camera.followSettings().maxFollowLag = cameraDebugControls.maxFollowLag;
+                if (cameraDebugControls.setFreeModeRequested) {
+                    cameraDebugControls.setFreeModeRequested = false;
+                    camera.setMode(Engine::CameraMode::Free);
+                    camera.clearFollowTarget();
+                }
+                if (cameraDebugControls.setFollowModeRequested) {
+                    cameraDebugControls.setFollowModeRequested = false;
+                    if (const std::optional<glm::mat4> playerWorld = runtime->scene.worldMatrix(runtime->playerActor)) {
+                        camera.setMode(Engine::CameraMode::FollowTarget);
+                        camera.setFollowTarget(glm::vec3{(*playerWorld)[3]});
+                    }
+                }
+                if (cameraDebugControls.recenterRequested) {
+                    cameraDebugControls.recenterRequested = false;
+                    frameCameraForBounds(camera, runtime->bounds);
+                    camera.clearFollowTarget();
+                }
+                if (camera.mode() == Engine::CameraMode::FollowTarget) {
+                    if (const std::optional<glm::mat4> playerWorld = runtime->scene.worldMatrix(runtime->playerActor)) {
+                        camera.setFollowTarget(glm::vec3{(*playerWorld)[3]});
+                    } else {
+                        camera.setMode(Engine::CameraMode::Free);
+                        camera.clearFollowTarget();
+                    }
+                }
+                camera.update(cameraEvents, loop.frameDeltaSeconds());
+            });
+
+            frameTimings.sceneFixedTickMs = measureDebugOnly([&]() {
+                while (loop.shouldRunFixedUpdate()) {
+                    runtime->scene.tickFixed(loop.fixedDeltaSeconds());
+                    loop.consumeFixedUpdate();
+                }
+            });
+            frameTimings.sceneFrameTickMs = measureDebugOnly([&]() {
+                runtime->scene.tickFrame(loop.frameDeltaSeconds());
+            });
+
+            const Engine::CameraMatrices matrices = camera.matrices(aspectRatio);
+            const Renderer::RenderView renderView{
+                0,
+                matrices.view,
+                matrices.projection,
+                matrices.projection * matrices.view,
+                camera.position(),
+                viewportExtent(currentWidth),
+                viewportExtent(currentHeight),
+                debugSettings.layerMask,
+                BuildDebugToolsEnabled ? debugSettings.enableDistanceCulling : false,
+            };
+
+            frameTimings.debugPrimitiveEnqueueMs = measureDebugOnly([&]() {
+                if constexpr (BuildDebugToolsEnabled) {
+                    enqueueModernDebugPrimitives(*runtime, renderView, debugDrawSettings);
+                } else {
+                    Renderer::clearDebugPrimitives();
+                }
+            });
+            bgfx::setViewClear(
+                0,
+                BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
+                clearColorFromLinearRgba(atmosphere.skyColor),
+                1.0f,
+                0);
+            bgfx::setViewRect(0, 0, 0, viewportExtent(currentWidth), viewportExtent(currentHeight));
+            bgfx::setViewTransform(0, &matrices.view, &matrices.projection);
+            if (debugUiEnabled) {
+                const bgfx::ViewId viewOrder[] = {0, 1};
+                bgfx::setViewOrder(0, 2, viewOrder);
+            }
+            Renderer::SceneDrawStats drawStats;
+            frameTimings.drawSubmissionMs = measureDebugOnly([&]() {
+                drawStats = Renderer::drawScene(renderView);
+            });
+            frameTimings.debugPrimitiveDrawMs = measureDebugOnly([&]() {
+                if constexpr (BuildDebugToolsEnabled) {
+                    Renderer::drawDebugPrimitives(renderView);
+                }
+            });
+
+            if constexpr (!BuildDebugToolsEnabled) {
+                const Engine::CameraState& cameraState = camera.state();
+                const glm::vec3 cameraPosition = camera.position();
+                SDL_SetWindowTitle(
+                    window,
+                    ("ManualEngine Modern Default | terrain " + std::to_string(runtime->terrainRendererCount) +
+                        " nav " + std::to_string(runtime->terrainNavTileCount) +
+                        " meshNav " + std::to_string(runtime->authoredNavigationSourceCount) +
+                        " meshPhys " + std::to_string(runtime->authoredPhysicsBodyCount) +
+                        " navCache h/m/w " + std::to_string(runtime->navigationCacheHitCount) + "/" +
+                        std::to_string(runtime->navigationCacheMissCount + runtime->navigationCacheStaleCount) + "/" +
+                        std::to_string(runtime->navigationCacheWriteCount) +
+                        " static " + std::to_string(runtime->staticAssetCount) +
+                        " animated " + std::to_string(runtime->animatedAssetCount) +
+                        " | freecam pos " + std::to_string(static_cast<int>(cameraPosition.x)) + "," +
+                        std::to_string(static_cast<int>(cameraPosition.y)) + "," +
+                        std::to_string(static_cast<int>(cameraPosition.z)) +
+                        " pivot " + std::to_string(static_cast<int>(cameraState.pivot.x)) + "," +
+                        std::to_string(static_cast<int>(cameraState.pivot.y)) + "," +
+                        std::to_string(static_cast<int>(cameraState.pivot.z))).c_str());
+            }
+
+            if (BuildDebugToolsEnabled) {
+                Renderer::setDebugDrawSettings(debugDrawSettings);
+            }
+            if (debugUiEnabled) {
+                const auto debugUiBuildStart = std::chrono::steady_clock::now();
+                Renderer::DebugUi::beginFrame(viewportExtent(currentWidth), viewportExtent(currentHeight));
+                Renderer::DebugUi::ModernDebugUiState debugState =
+                    makeModernDebugUiState(*runtime, frameTimings, startupWorkMs);
+                Renderer::DebugUi::showModernDebug(
+                    drawStats,
+                    debugSettings,
+                    atmosphere,
+                    debugDrawSettings,
+                    debugState,
+                    makeCameraDebugStats(camera),
+                    &cameraDebugControls,
+                    &navigationDebugControls);
+                Renderer::setAtmosphereSettings(atmosphere);
+                if (navigationDebugControls.clearCacheStatsRequested) {
+                    navigationDebugControls.clearCacheStatsRequested = false;
+                    runtime->navigationCacheHitCount = 0;
+                    runtime->navigationCacheMissCount = 0;
+                    runtime->navigationCacheStaleCount = 0;
+                    runtime->navigationCacheWriteCount = 0;
+                }
+                if (navigationDebugControls.rebuildNavigationRequested) {
+                    navigationDebugControls.rebuildNavigationRequested = false;
+                    if (std::optional<Engine::TerrainSourceDescriptor> source =
+                            runtime->terrain.sourceMetadata(runtime->terrainSource)) {
+                        rebuildModernNavigationWithSceneGeometry(*runtime, *source);
+                    } else {
+                        ++runtime->warningCount;
+                    }
+                }
+                if (debugSettings.propMaxDrawDistance >= 0.0f || debugSettings.terrainMaxDrawDistance >= 0.0f) {
+                    for (ModernTerrainChunkRuntime& chunk : runtime->terrainChunks) {
+                        Renderer::setTerrainMaxDrawDistance(chunk.rendererTerrain, debugSettings.terrainMaxDrawDistance);
+                    }
+                    for (ModernAuthoredAssetRuntime& asset : runtime->authoredAssets) {
+                        for (const Engine::SceneAuthoredNodeBinding& node : asset.result.nodes) {
+                            for (Engine::SceneMeshComponentHandle mesh : node.meshComponents) {
+                                if (std::optional<Engine::SceneMeshComponentDescriptor> descriptor =
+                                        runtime->renderBridge.meshDescriptor(mesh)) {
+                                    descriptor->maxDrawDistance = debugSettings.propMaxDrawDistance;
+                                    (void)runtime->renderBridge.setMeshDescriptor(mesh, *descriptor);
+                                }
+                            }
+                        }
+                    }
+                    for (ModernAnimatedAssetRuntime& asset : runtime->animatedAssets) {
+                        for (const Engine::SceneAnimatedMeshBinding& binding : asset.result.skinnedMeshes) {
+                            if (std::optional<Engine::SceneSkinnedMeshComponentDescriptor> descriptor =
+                                    runtime->renderBridge.skinnedMeshDescriptor(binding.component)) {
+                                descriptor->maxDrawDistance = debugSettings.propMaxDrawDistance;
+                                (void)runtime->renderBridge.setSkinnedMeshDescriptor(binding.component, *descriptor);
+                            }
+                        }
+                    }
+                }
+                frameTimings.debugUiBuildMs =
+                    std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - debugUiBuildStart).count();
+                frameTimings.debugUiRenderMs = measureMilliseconds([&]() {
+                    Renderer::DebugUi::render(1, viewportExtent(currentWidth), viewportExtent(currentHeight));
+                });
+                previousDebugUiBuildMs = frameTimings.debugUiBuildMs;
+                previousDebugUiRenderMs = frameTimings.debugUiRenderMs;
+            }
+
+            frameTimings.bgfxFrameMs = measureDebugOnly([&]() {
+                bgfx::frame();
+            });
+            previousBgfxFrameMs = frameTimings.bgfxFrameMs;
+            if constexpr (BuildDebugToolsEnabled) {
+                previousFrameCpuMs =
+                    std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - frameCpuStart).count();
+            }
+        }
+
+        runtime->shutdown(assetCache);
+        runtime.reset();
+        shutdownSharedRuntime(assetCache, debugUiEnabled, window);
+        return 0;
     }
 
     int runAuthoredSceneMode(
@@ -707,15 +1768,11 @@ namespace {
         Engine::InputState input;
         Engine::EventQueue events;
         Renderer::DebugUi::RendererDebugSettings debugSettings;
-        debugSettings.sceneMode = runtime.usingFallback ? "Authored fallback" : "Authored";
-        debugSettings.sceneStatus = runtime.status;
         debugSettings.propMaxDrawDistance = 0.0f;
         if constexpr (!BuildDebugToolsEnabled) {
             debugSettings.enableDistanceCulling = false;
         }
         Renderer::DebugDrawSettings debugDrawSettings;
-        Renderer::DebugUi::WorldSaveDebugControls worldSaveControls;
-        worldSaveControls.status = runtime.status;
         Renderer::DebugUi::CameraDebugControls cameraDebugControls;
         cameraDebugControls.followSmoothing = camera.followSettings().followSmoothing;
         cameraDebugControls.maxFollowLag = camera.followSettings().maxFollowLag;
@@ -820,52 +1877,19 @@ namespace {
             }
             if ((runtime.usingSceneAdapter || runtime.usingSceneAnimatedAdapter) && runtime.sceneRenderBridge) {
                 runtime.tickSceneScheduler(dt);
-                const Engine::SceneRenderBridgeDiagnostics bridgeDiagnostics = runtime.sceneRenderBridge->diagnostics();
-                debugSettings.sceneStatus = runtime.status +
-                    " | scene actors " + std::to_string(runtime.sceneAdapter.diagnostics.createdActorCount) +
-                    " mesh components " + std::to_string(bridgeDiagnostics.meshComponentCount) +
-                    " skinned components " + std::to_string(bridgeDiagnostics.skinnedMeshComponentCount) +
-                    " live instances " + std::to_string(
-                        bridgeDiagnostics.liveMeshInstanceCount + bridgeDiagnostics.liveSkinnedInstanceCount) +
-                    " lights " + std::to_string(bridgeDiagnostics.liveLightCount);
-                if (runtime.usingSceneAnimatedAdapter) {
-                    debugSettings.sceneStatus +=
-                        " | KayKit animated components " +
-                        std::to_string(runtime.sceneAnimatedResult.diagnostics.createdSkinnedComponentCount);
-                }
-                debugSettings.hasAuthoredSceneDiagnostics = false;
             } else if (runtime.usingStreaming) {
                 runtime.streamingScene.updateStreaming(camera.position(), authoredStreamingWork);
                 authoredStreamingBudget.beginFrame({2.0f, true});
                 authoredStreamingWork.drain(authoredStreamingBudget);
-                const Engine::AuthoredSceneDiagnostics& diagnostics = runtime.streamingScene.diagnostics();
-                debugSettings.sceneStatus = runtime.status +
-                    " | sectors " + std::to_string(diagnostics.loadedSectorCount) +
-                    "/" + std::to_string(diagnostics.totalSectorCount) +
-                    " pending " + std::to_string(diagnostics.pendingLoadSectorCount + diagnostics.pendingUnloadSectorCount) +
-                    " async " + std::string{authoredAsyncPhaseName(runtime.asyncPhase)};
-                updateAuthoredAsyncDiagnostics(runtime, authoredAsyncWork.pendingCount(), debugSettings.sceneStatus);
-                populateAuthoredDebugSettings(debugSettings, runtime.sourcePath, runtime.streamingScene.diagnostics());
-            } else if (!runtime.usingFallback) {
-                debugSettings.sceneStatus = runtime.status +
-                    " | async " + std::string{authoredAsyncPhaseName(runtime.asyncPhase)};
-                debugSettings.hasAuthoredSceneDiagnostics = false;
-            } else {
-                debugSettings.sceneStatus = runtime.status;
-                debugSettings.hasAuthoredSceneDiagnostics = false;
+                std::string status = runtime.status;
+                updateAuthoredAsyncDiagnostics(runtime, authoredAsyncWork.pendingCount(), status);
             }
             if constexpr (BuildDebugToolsEnabled) {
                 populateAnimatedDebugSettings(debugSettings, animatedRuntime);
             }
-            debugSettings.sceneMode = runtime.usingFallback
-                ? "Authored fallback"
-                : (runtime.usingSceneAdapter && runtime.usingSceneAnimatedAdapter
-                    ? "Authored scene adapter + animated sample"
-                    : (runtime.usingSceneAnimatedAdapter && !runtime.usingSceneAdapter
-                    ? "Animated scene adapter"
-                    : (runtime.usingSceneAdapter
-                    ? "Authored scene adapter"
-                    : (runtime.usingStreaming ? "Authored streaming" : "Authored loading"))));
+            const std::string debugSceneMode = runtime.usingFallback
+                ? "Legacy authored fallback"
+                : "Legacy authored compatibility";
 
             Renderer::setAtmosphereSettings(atmosphere);
             if (BuildDebugToolsEnabled) {
@@ -910,22 +1934,18 @@ namespace {
                 Renderer::drawDebugPrimitives(renderView);
             }
             if (debugUiEnabled) {
-                Renderer::DebugUi::showRendererDebug(
+                FramePerformanceTimings sharedTimings;
+                Renderer::DebugUi::ModernDebugUiState debugState =
+                    makeSharedDebugUiState(debugSceneMode, runtime.status, sharedTimings);
+                Renderer::DebugUi::showModernDebug(
                     drawStats,
                     debugSettings,
                     atmosphere,
                     debugDrawSettings,
-                    {},
-                    {},
-                    {},
-                    nullptr,
+                    debugState,
                     makeCameraDebugStats(camera),
                     &cameraDebugControls,
-                    {},
-                    {},
-                    {},
-                    &worldSaveControls,
-                    {});
+                    nullptr);
                 Renderer::DebugUi::render(1, viewportExtent(width), viewportExtent(height));
                 if constexpr (BuildDebugToolsEnabled) {
                     applyAnimatedDebugSettings(animatedRuntime, debugSettings);
@@ -2123,7 +3143,10 @@ int main(int argc, char** argv)
     bgfx::setViewRect(0, 0, 0, viewportExtent(currentWidth), viewportExtent(currentHeight));
 
     Engine::AssetCache assetCache;
-    if (sceneSelection.mode == AppSceneMode::Authored) {
+    if (sceneSelection.mode == AppSceneMode::ModernDefault) {
+        return runModernDefaultSceneMode(window, debugUiEnabled, assetCache, atmosphere);
+    }
+    if (sceneSelection.mode == AppSceneMode::LegacyAuthored) {
         return runAuthoredSceneMode(window, debugUiEnabled, assetCache, atmosphere, sceneSelection);
     }
 
@@ -4622,9 +5645,7 @@ int main(int argc, char** argv)
             inputMapping.publishEvents(input, events);
         });
         playerNavAgent = toEngineAgentSettings(navigationDebugControls.agent);
-        const GameplayRuntimeMode requestedGameplayRuntimeMode = debugSettings.sceneCharacterExperimental
-            ? GameplayRuntimeMode::SceneCharacterExperimental
-            : GameplayRuntimeMode::LegacyProcedural;
+        const GameplayRuntimeMode requestedGameplayRuntimeMode = gameplayRuntimeMode;
         if (requestedGameplayRuntimeMode != gameplayRuntimeMode) {
             gameplayRuntimeMode = requestedGameplayRuntimeMode;
             lastWorldRoute = {};
