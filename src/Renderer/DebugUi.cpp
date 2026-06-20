@@ -81,6 +81,49 @@ namespace {
         return index < std::size(names) ? names[index] : "Unknown";
     }
 
+    const char* streamingResidencyName(size_t index)
+    {
+        static constexpr const char* names[] = {
+            "ColdOnDisk",
+            "ReadQueued",
+            "CachedCpu",
+            "PromoteQueued",
+            "LiveActive",
+            "DemoteQueued",
+            "WriteQueued",
+            "Failed",
+        };
+        return index < std::size(names) ? names[index] : "Unknown";
+    }
+
+    const char* streamingLaneName(size_t index)
+    {
+        static constexpr const char* names[] = {
+            "DiskReadDecode",
+            "DerivedGeneration",
+            "AssetPreload",
+            "MainThreadPromote",
+            "MainThreadDemote",
+            "DiskCacheWrite",
+            "ManifestValidation",
+        };
+        return index < std::size(names) ? names[index] : "Unknown";
+    }
+
+    const char* streamingPayloadName(size_t index)
+    {
+        static constexpr const char* names[] = {
+            "TerrainChunk",
+            "TerrainRenderLod",
+            "NavigationTile",
+            "PhysicsCollider",
+            "SceneChunk",
+            "AssetDependency",
+            "Unknown",
+        };
+        return index < std::size(names) ? names[index] : "Unknown";
+    }
+
     void textVec3(const char* label, const glm::vec3& value)
     {
         ImGui::Text("%s: %.2f, %.2f, %.2f", label, value.x, value.y, value.z);
@@ -235,6 +278,182 @@ namespace {
             stats.layerOrFlagCulledTerrainTiles,
             stats.frustumCulledTerrainTiles,
             stats.distanceCulledTerrainTiles);
+    }
+
+    void showStreaming(const Renderer::DebugUi::OpenWorldStreamingDebugStats& streaming)
+    {
+        ImGui::Text("Open-world streaming: planning, cache reads, and live promotion");
+        ImGui::Text("Live promotion is callback-owned and budgeted on the main thread.");
+        ImGui::Separator();
+
+        ImGui::Text("Manifest records total/considered/skipped: %u / %u / %u",
+            streaming.manifestRecordCount,
+            streaming.manifestRecordsConsidered,
+            streaming.manifestRecordsSkipped);
+        ImGui::Text("Transition candidates/limited: %u / %u",
+            streaming.transitionCandidateCount,
+            streaming.transitionLimitedCount);
+        ImGui::Text("Hysteresis retained / invalid bounds: %u / %u",
+            streaming.hysteresisRetainedCount,
+            streaming.invalidBoundsCount);
+        ImGui::Text("Pending reads / cached CPU payloads: %u / %u",
+            streaming.pendingReadCount,
+            streaming.cachedCpuPayloadCount);
+        ImGui::Text("Stale completions / unsupported reads: %u / %u",
+            streaming.staleReadCompletionCount,
+            streaming.unsupportedReadCount);
+        ImGui::Text("Pending promote / demote: %u / %u",
+            streaming.pendingPromoteCount,
+            streaming.pendingDemoteCount);
+        ImGui::Text("Live payloads / stale live completions: %u / %u",
+            streaming.livePayloadCount,
+            streaming.stalePromotionCompletionCount);
+        ImGui::Text("Promotion failures / demotion failures: %u / %u",
+            streaming.failedPromotionCount,
+            streaming.failedDemotionCount);
+        ImGui::Text("Bake chunks / payload writes: %u / %u",
+            streaming.bakeChunkCount,
+            streaming.bakePayloadWriteCount);
+        ImGui::Text("Generation queued / completed / failed: %u / %u / %u",
+            streaming.generationQueuedCount,
+            streaming.generationCompletedCount,
+            streaming.generationFailedCount);
+        ImGui::Text("Cache invalidations: %u", streaming.cacheInvalidationCount);
+        if (streaming.hasLastFocus) {
+            textVec3("Last focus", streaming.lastFocus);
+        }
+        ImGui::Separator();
+
+        ImGui::Text("Residency");
+        ImGui::Columns(3, "streaming_residency", false);
+        ImGui::Text("State");
+        ImGui::NextColumn();
+        ImGui::Text("Desired");
+        ImGui::NextColumn();
+        ImGui::Text("Actual");
+        ImGui::NextColumn();
+        for (size_t index = 0; index < streaming.desiredChunksByState.size(); ++index) {
+            ImGui::Text("%s", streamingResidencyName(index));
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.desiredChunksByState[index]);
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.actualChunksByState[index]);
+            ImGui::NextColumn();
+        }
+        ImGui::Columns(1);
+        ImGui::Separator();
+
+        ImGui::Text("Desired by payload");
+        ImGui::Columns(2, "streaming_payload_residency", false);
+        ImGui::Text("Payload");
+        ImGui::NextColumn();
+        ImGui::Text("Desired");
+        ImGui::NextColumn();
+        for (size_t index = 0; index < streaming.desiredChunksByPayload.size(); ++index) {
+            ImGui::Text("%s", streamingPayloadName(index));
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.desiredChunksByPayload[index]);
+            ImGui::NextColumn();
+        }
+        ImGui::Columns(1);
+        ImGui::Separator();
+
+        ImGui::Text("Queues and timings");
+        ImGui::Columns(6, "streaming_lanes", false);
+        ImGui::Text("Lane");
+        ImGui::NextColumn();
+        ImGui::Text("Queued");
+        ImGui::NextColumn();
+        ImGui::Text("Active");
+        ImGui::NextColumn();
+        ImGui::Text("Done");
+        ImGui::NextColumn();
+        ImGui::Text("Failed");
+        ImGui::NextColumn();
+        ImGui::Text("CPU");
+        ImGui::NextColumn();
+        for (size_t index = 0; index < streaming.queuedByLane.size(); ++index) {
+            ImGui::Text("%s", streamingLaneName(index));
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.queuedByLane[index]);
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.activeJobsByLane[index]);
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.completedByLane[index]);
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.failedByLane[index]);
+            ImGui::NextColumn();
+            ImGui::Text("%.3f ms", streaming.laneCpuMs[index]);
+            ImGui::NextColumn();
+        }
+        ImGui::Columns(1);
+        ImGui::Separator();
+
+        ImGui::Text("Payload cache");
+        ImGui::Columns(6, "streaming_payloads", false);
+        ImGui::Text("Payload");
+        ImGui::NextColumn();
+        ImGui::Text("Hit");
+        ImGui::NextColumn();
+        ImGui::Text("Miss");
+        ImGui::NextColumn();
+        ImGui::Text("Stale");
+        ImGui::NextColumn();
+        ImGui::Text("Corrupt");
+        ImGui::NextColumn();
+        ImGui::Text("Write");
+        ImGui::NextColumn();
+        for (size_t index = 0; index < streaming.cacheHitsByPayload.size(); ++index) {
+            ImGui::Text("%s", streamingPayloadName(index));
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.cacheHitsByPayload[index]);
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.cacheMissesByPayload[index]);
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.cacheStaleByPayload[index]);
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.cacheCorruptByPayload[index]);
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.cacheWritesByPayload[index]);
+            ImGui::NextColumn();
+        }
+        ImGui::Columns(1);
+        ImGui::Separator();
+
+        ImGui::Text("Main thread promote run/deferred: %u / %u",
+            streaming.mainThreadPromoteItemsRun,
+            streaming.mainThreadPromoteItemsDeferred);
+        ImGui::Text("Main thread demote run/deferred: %u / %u",
+            streaming.mainThreadDemoteItemsRun,
+            streaming.mainThreadDemoteItemsDeferred);
+        ImGui::Text("Bytes read/written/resident: %llu / %llu / %llu",
+            static_cast<unsigned long long>(streaming.bytesRead),
+            static_cast<unsigned long long>(streaming.bytesWritten),
+            static_cast<unsigned long long>(streaming.estimatedResidentBytes));
+        ImGui::Text("Live terrain/nav/physics bodies/colliders: %u / %u / %u / %u",
+            streaming.liveTerrainRenderHandles,
+            streaming.liveNavigationTiles,
+            streaming.livePhysicsBodies,
+            streaming.livePhysicsColliders);
+        ImGui::Text("Live scene actors/components/assets: %u / %u / %u",
+            streaming.liveSceneActors,
+            streaming.liveSceneComponents,
+            streaming.liveAssetDependencies);
+        ImGui::Text("Hysteresis churn / eviction blocked: %u / %u",
+            streaming.hysteresisChurnCount,
+            streaming.evictionBlockedCount);
+        if (streaming.hasLastFailure) {
+            ImGui::Separator();
+            ImGui::Text("Last failure lane/payload: %s / %s",
+                streaming.lastFailureLane.c_str(),
+                streaming.lastFailurePayload.c_str());
+            ImGui::Text("Chunk/status: %s / %s",
+                streaming.lastFailureChunk.c_str(),
+                streaming.lastFailureStatus.c_str());
+            if (!streaming.lastFailureMessage.empty()) {
+                ImGui::TextWrapped("%s", streaming.lastFailureMessage.c_str());
+            }
+        }
     }
 }
 
@@ -500,6 +719,10 @@ namespace Renderer::DebugUi {
                 if (!state.character.lastMessage.empty()) {
                     ImGui::TextWrapped("%s", state.character.lastMessage.c_str());
                 }
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Streaming")) {
+                showStreaming(state.streaming);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Debug Draw")) {

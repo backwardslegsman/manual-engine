@@ -2,7 +2,7 @@
 
 This roadmap consolidates the existing procedural world, authored scene, animated model, renderer, navigation, cache, and async work into a shared scene/component runtime. It is not a greenfield rewrite. Existing systems should be adapted behind stable scene, asset, and component contracts in small steps.
 
-Use this document for long-range architectural work that crosses `src/Engine`, `src/Assets`, `src/Renderer`, and `src/App`. Keep `docs/authored_scene_roadmap.md`, `docs/animation_roadmap.md`, and `docs/navigation_roadmap.md` for subsystem-specific detail.
+Use this document for long-range architectural work that crosses `src/Engine`, `src/Assets`, `src/Renderer`, and `src/App`. Keep `docs/authored_scene_roadmap.md`, `docs/animation_roadmap.md`, and `docs/navigation_roadmap.md` for subsystem-specific detail. Use `docs/open_world_streaming_roadmap.md` for the modern open-world residency plan that combines chunked scene records, heightmap terrain chunks, baked nav tiles, baked physics colliders, asset dependency streaming, async queues, and debug counters.
 
 ## Principles
 

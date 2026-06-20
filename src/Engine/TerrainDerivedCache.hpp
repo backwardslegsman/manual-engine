@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 
 #include "Engine/TerrainDataset.hpp"
+#include "Engine/TerrainPhysicsColliderAdapter.hpp"
 
 namespace Engine {
     enum class TerrainDerivedCachePolicy {
@@ -21,6 +22,7 @@ namespace Engine {
     enum class TerrainDerivedKind {
         ChunkHeights,
         LodMesh,
+        PhysicsCollider,
     };
 
     enum class TerrainDerivedCacheStatus {
@@ -39,6 +41,7 @@ namespace Engine {
         std::string terrainImportVersion = "heightmap_import_t1";
         std::string chunkPayloadVersion = "terrain_chunk_payload_t3";
         std::string lodMeshPayloadVersion = "terrain_lod_mesh_payload_t3";
+        std::string physicsColliderPayloadVersion = "terrain_physics_collider_payload_s4";
         TerrainDerivedCachePolicy policy = TerrainDerivedCachePolicy::Disabled;
     };
 
@@ -111,6 +114,10 @@ namespace Engine {
         std::optional<TerrainCachedLodMeshPayload> payload;
     };
 
+    struct TerrainDerivedCachePhysicsColliderReadResult : TerrainDerivedCacheOperationResult {
+        std::optional<TerrainPhysicsColliderPayload> payload;
+    };
+
     using TerrainDerivedCacheWriteResult = TerrainDerivedCacheOperationResult;
 
     struct TerrainDerivedCacheStats {
@@ -139,6 +146,10 @@ namespace Engine {
             const TerrainCachedChunkPayload& sourceChunk,
             const TerrainLodMeshBuildSettings& lod,
             std::string sourceHash = {});
+        [[nodiscard]] static TerrainDerivedCacheManifest buildPhysicsColliderManifest(
+            TerrainDerivedCacheSettings settings,
+            const TerrainPhysicsColliderPayload& payload,
+            std::string sourceHash = {});
         [[nodiscard]] static std::filesystem::path cacheRoot(const TerrainDerivedCacheManifest& manifest);
         [[nodiscard]] static std::string hashFile(const std::filesystem::path& path);
         [[nodiscard]] static TerrainDerivedCacheChunkReadResult readChunk(const TerrainDerivedCacheManifest& manifest);
@@ -149,6 +160,11 @@ namespace Engine {
         [[nodiscard]] static TerrainDerivedCacheWriteResult writeLodMesh(
             TerrainDerivedCacheManifest manifest,
             const TerrainCachedLodMeshPayload& payload);
+        [[nodiscard]] static TerrainDerivedCachePhysicsColliderReadResult readPhysicsCollider(
+            const TerrainDerivedCacheManifest& manifest);
+        [[nodiscard]] static TerrainDerivedCacheWriteResult writePhysicsCollider(
+            TerrainDerivedCacheManifest manifest,
+            const TerrainPhysicsColliderPayload& payload);
 
         void recordResult(const TerrainDerivedCacheOperationResult& result);
         const TerrainDerivedCacheStats& stats() const;

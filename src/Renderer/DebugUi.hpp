@@ -142,6 +142,70 @@ namespace Renderer::DebugUi {
         uint32_t lastFramePrimitiveBufferSize = 0;
     };
 
+    struct OpenWorldStreamingDebugStats {
+        std::array<uint32_t, 8> desiredChunksByState{};
+        std::array<uint32_t, 8> actualChunksByState{};
+        std::array<uint32_t, 7> desiredChunksByPayload{};
+        std::array<uint32_t, 7> transitionCountThisFrame{};
+        std::array<uint32_t, 7> queuedByLane{};
+        std::array<uint32_t, 7> activeJobsByLane{};
+        std::array<uint32_t, 7> completedByLane{};
+        std::array<uint32_t, 7> failedByLane{};
+        std::array<float, 7> laneCpuMs{};
+        std::array<uint32_t, 7> cacheHitsByPayload{};
+        std::array<uint32_t, 7> cacheMissesByPayload{};
+        std::array<uint32_t, 7> cacheStaleByPayload{};
+        std::array<uint32_t, 7> cacheCorruptByPayload{};
+        std::array<uint32_t, 7> cacheWritesByPayload{};
+        uint32_t mainThreadPromoteItemsRun = 0;
+        uint32_t mainThreadPromoteItemsDeferred = 0;
+        uint32_t mainThreadDemoteItemsRun = 0;
+        uint32_t mainThreadDemoteItemsDeferred = 0;
+        uint64_t bytesRead = 0;
+        uint64_t bytesWritten = 0;
+        uint64_t estimatedResidentBytes = 0;
+        uint32_t liveTerrainRenderHandles = 0;
+        uint32_t liveNavigationTiles = 0;
+        uint32_t livePhysicsBodies = 0;
+        uint32_t livePhysicsColliders = 0;
+        uint32_t liveSceneActors = 0;
+        uint32_t liveSceneComponents = 0;
+        uint32_t liveAssetDependencies = 0;
+        bool hasLastFocus = false;
+        glm::vec3 lastFocus{};
+        uint32_t manifestRecordCount = 0;
+        uint32_t manifestRecordsConsidered = 0;
+        uint32_t manifestRecordsSkipped = 0;
+        uint32_t transitionCandidateCount = 0;
+        uint32_t transitionLimitedCount = 0;
+        uint32_t hysteresisRetainedCount = 0;
+        uint32_t invalidBoundsCount = 0;
+        uint32_t pendingReadCount = 0;
+        uint32_t cachedCpuPayloadCount = 0;
+        uint32_t staleReadCompletionCount = 0;
+        uint32_t unsupportedReadCount = 0;
+        uint32_t pendingPromoteCount = 0;
+        uint32_t pendingDemoteCount = 0;
+        uint32_t stalePromotionCompletionCount = 0;
+        uint32_t failedPromotionCount = 0;
+        uint32_t failedDemotionCount = 0;
+        uint32_t livePayloadCount = 0;
+        uint32_t bakeChunkCount = 0;
+        uint32_t bakePayloadWriteCount = 0;
+        uint32_t generationQueuedCount = 0;
+        uint32_t generationCompletedCount = 0;
+        uint32_t generationFailedCount = 0;
+        uint32_t cacheInvalidationCount = 0;
+        uint32_t hysteresisChurnCount = 0;
+        uint32_t evictionBlockedCount = 0;
+        bool hasLastFailure = false;
+        std::string lastFailureLane;
+        std::string lastFailurePayload;
+        std::string lastFailureChunk;
+        std::string lastFailureStatus;
+        std::string lastFailureMessage;
+    };
+
     struct CameraDebugStats {
         bool followMode = false;
         bool hasTarget = false;
@@ -173,6 +237,7 @@ namespace Renderer::DebugUi {
         ModernPhysicsDebugStats physics;
         ModernCharacterDebugStats character;
         DebugVisualizationDebugStats debugVisualization;
+        OpenWorldStreamingDebugStats streaming;
     };
 
     bool init(SDL_Window* window);

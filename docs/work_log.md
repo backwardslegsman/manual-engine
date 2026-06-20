@@ -1542,3 +1542,69 @@ Changed:
 
 Rationale:
 - The default runtime is now modern scene-backed, so debug UI should target modern diagnostics and public service APIs instead of keeping stale legacy control surfaces that no longer affect the active scene.
+
+## 2026-06-20 - Open World Streaming Roadmap
+
+Changed:
+- Added `docs/open_world_streaming_roadmap.md` covering halo-based residency, async read/generate/promote/demote queues, full-heightmap bake expectations, terrain/nav/physics/scene/asset streaming responsibilities, debug counters, and phased implementation.
+- Linked the streaming roadmap from the engine overview, scene component roadmap, and system contracts.
+
+Rationale:
+- Full-heightmap worlds need baked navmesh/collision data, asset dependency residency, and budgeted async queue transitions before the modern default scene can scale beyond a small startup patch without blocking the main thread.
+
+## 2026-06-20 - Phase S0 Streaming Contract And Instrumentation
+
+Changed:
+- Added `Engine::OpenWorldStreaming` with stable residency states, dirty flags, transition lanes, payload kinds, display-name helpers, diagnostics counters, live-resource counters, cache counters, and empty diagnostics snapshots.
+- Added a modern Debug UI Streaming tab with inert queue/timing/cache/resource placeholders fed by no-op diagnostics.
+- Added focused streaming contract tests and extended Debug UI header coverage for the streaming placeholder.
+- Updated the open-world streaming roadmap, system contracts, and engine overview to document that S0 is instrumentation only.
+
+Rationale:
+- Later streaming phases need stable terminology, counters, and presentation surfaces before adding halo planning, async IO, cache generation, or live-system promotion.
+
+## 2026-06-20 - Phase S1 Chunk Manifest And Halo Planner
+
+Changed:
+- Extended `Engine::OpenWorldStreaming` with durable in-memory chunk manifest records, stable terrain/scene/asset chunk keys, per-payload active/cache halo policies, and deterministic halo planning.
+- Added XZ bounds-distance residency decisions, hysteresis retention, per-payload transition caps, stable manifest record hashing, and planner diagnostics for manifest scan counts, desired residency, skipped records, transition candidates, and limited transitions.
+- Expanded the modern Debug UI Streaming tab to show S1 manifest and planner counters while keeping App runtime behavior inert.
+- Extended streaming tests for durable identity, active/cache/cold selection, hysteresis, transition caps, independent payload radii, invalid inputs, large metadata scans, and header dependency boundaries.
+
+Rationale:
+- Later async streaming phases need a deterministic desired-residency plan before they enqueue disk reads, generation jobs, live-system promotion, demotion, or cache writes.
+
+## 2026-06-20 - Phase S2 Async Read/Decode Cache Halo
+
+Changed:
+- Added `Engine::OpenWorldStreamingCacheHalo` as a transient cache-halo coordinator over `AsyncWorkQueue`, S1 halo decisions, and durable streaming keys.
+- Added streaming read descriptors, read requests, read results, cached CPU payload variants, descriptor sidecar tables, and snapshot/debug records for terrain chunk cache payloads, navigation tile cache bytes, metadata-only assets, and unsupported future payloads.
+- Reused `TerrainDerivedCache::readChunk` and `NavigationCache::readTileCache` through worker jobs without introducing new cache formats or live-system promotion.
+- Extended streaming diagnostics and Debug UI stats with pending reads, cached CPU payloads, stale completions, unsupported reads, read queue counters, bytes read, and last read failures.
+- Expanded streaming tests for queued reads, duplicate desired plans, cache hits, failure statuses, stale/cancelled completions, queue/merge caps, descriptor helpers, and header dependency boundaries.
+
+Rationale:
+- Open-world streaming needs a cache-halo stage that can warm CPU payloads asynchronously before later phases decide whether to generate missing data or promote cached data into renderer, navigation, physics, scene, or asset systems.
+
+## 2026-06-20 - Phase S3 Budgeted Main-Thread Promotion/Demotion
+
+Changed:
+- Added `Engine::OpenWorldStreamingLiveHalo` as a transient live-halo coordinator over S1 halo decisions, S2 cached CPU payloads, and budgeted `MainThreadWorkQueue` callbacks.
+- Added promotion/demotion request, result, status, callback, runtime-token, snapshot, and diagnostics types while keeping the streaming core independent from live renderer, navigation, physics, scene, App, and serialization handles.
+- Extended the modern Debug UI streaming stats with pending promote/demote, live payload, stale live completion, and promotion/demotion failure counters.
+- Extended streaming tests for live promotion, demotion, duplicate suppression, missing payloads, callback failures, queue caps, stale queued work, and debug header coverage.
+
+Rationale:
+- Active-halo streaming needs a main-thread handoff layer before cached terrain, nav, physics, scene, or asset payloads can safely become live resources under a frame budget.
+
+## 2026-06-20 - Phase S4 Full Heightmap Bake And Runtime Cache Use
+
+Changed:
+- Added `Engine::OpenWorldStreamingBake` to import a full heightmap, partition durable terrain chunks, write terrain chunk, render LOD, navigation tile, and terrain physics collider derived payload caches, and return S1 manifest records plus S2 read descriptors.
+- Extended `TerrainDerivedCache` with renderer-independent terrain physics collider payload manifests, binary read/write helpers, and S2 read support for baked render LOD and physics collider payloads.
+- Added `OpenWorldStreamingDerivedGenerationHalo` so runtime cache miss/refresh generation is explicit policy-driven worker work that returns plain cached payloads without touching live renderer, navigation, physics, scene, or App state.
+- Extended streaming diagnostics and Debug UI stats with bake and derived-generation counters.
+- Expanded open-world streaming tests for full-heightmap bake, baked payload readback, cache identity invalidation, and explicit generation-on-miss policy.
+
+Rationale:
+- Open-world streaming needs reusable baked terrain/nav/physics/render payloads and a non-blocking generation fallback before those payloads can be promoted into live systems around camera halos.

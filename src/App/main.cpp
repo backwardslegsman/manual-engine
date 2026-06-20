@@ -58,6 +58,7 @@
 #include "Engine/NavigationConnectivity.hpp"
 #include "Engine/NavigationProfile.hpp"
 #include "Engine/NavigationRuntime.hpp"
+#include "Engine/OpenWorldStreaming.hpp"
 #include "Engine/ObjectArchetype.hpp"
 #include "Engine/OrbitCamera.hpp"
 #include "Engine/PersistentObjectEditor.hpp"
@@ -710,6 +711,82 @@ namespace {
         return "Unknown";
     }
 
+    Renderer::DebugUi::OpenWorldStreamingDebugStats toDebugStats(
+        const Engine::OpenWorldStreamingDiagnostics& diagnostics)
+    {
+        Renderer::DebugUi::OpenWorldStreamingDebugStats stats;
+        for (uint32_t index = 0; index < Engine::StreamingResidencyStateCount; ++index) {
+            stats.desiredChunksByState[index] = diagnostics.desiredChunksByState[index];
+            stats.actualChunksByState[index] = diagnostics.actualChunksByState[index];
+        }
+        for (uint32_t index = 0; index < Engine::StreamingTransitionLaneCount; ++index) {
+            stats.transitionCountThisFrame[index] = diagnostics.transitionCountThisFrame[index];
+            stats.queuedByLane[index] = diagnostics.lanes[index].queuedCount;
+            stats.activeJobsByLane[index] = diagnostics.lanes[index].activeJobCount;
+            stats.completedByLane[index] = diagnostics.lanes[index].completedCount;
+            stats.failedByLane[index] = diagnostics.lanes[index].failedCount;
+            stats.laneCpuMs[index] = static_cast<float>(diagnostics.lanes[index].elapsedMicroseconds) / 1000.0f;
+            stats.bytesRead += diagnostics.lanes[index].bytesRead;
+            stats.bytesWritten += diagnostics.lanes[index].bytesWritten;
+        }
+        for (uint32_t index = 0; index < Engine::StreamingPayloadKindCount; ++index) {
+            stats.desiredChunksByPayload[index] = diagnostics.desiredChunksByPayload[index];
+            stats.cacheHitsByPayload[index] = diagnostics.payloads[index].hits;
+            stats.cacheMissesByPayload[index] = diagnostics.payloads[index].misses;
+            stats.cacheStaleByPayload[index] = diagnostics.payloads[index].stale;
+            stats.cacheCorruptByPayload[index] = diagnostics.payloads[index].corrupt;
+            stats.cacheWritesByPayload[index] = diagnostics.payloads[index].writes;
+        }
+        stats.mainThreadPromoteItemsRun = diagnostics.mainThreadPromoteItemsRun;
+        stats.mainThreadPromoteItemsDeferred = diagnostics.mainThreadPromoteItemsDeferred;
+        stats.mainThreadDemoteItemsRun = diagnostics.mainThreadDemoteItemsRun;
+        stats.mainThreadDemoteItemsDeferred = diagnostics.mainThreadDemoteItemsDeferred;
+        stats.estimatedResidentBytes = diagnostics.estimatedResidentBytes;
+        stats.liveTerrainRenderHandles = diagnostics.liveResources.terrainRenderHandles;
+        stats.liveNavigationTiles = diagnostics.liveResources.navigationTiles;
+        stats.livePhysicsBodies = diagnostics.liveResources.physicsBodies;
+        stats.livePhysicsColliders = diagnostics.liveResources.physicsColliders;
+        stats.liveSceneActors = diagnostics.liveResources.sceneActors;
+        stats.liveSceneComponents = diagnostics.liveResources.sceneComponents;
+        stats.liveAssetDependencies = diagnostics.liveResources.assetDependencies;
+        stats.hasLastFocus = diagnostics.hasLastFocus;
+        stats.lastFocus = diagnostics.lastFocus;
+        stats.manifestRecordCount = diagnostics.manifestRecordCount;
+        stats.manifestRecordsConsidered = diagnostics.manifestRecordsConsidered;
+        stats.manifestRecordsSkipped = diagnostics.manifestRecordsSkipped;
+        stats.transitionCandidateCount = diagnostics.transitionCandidateCount;
+        stats.transitionLimitedCount = diagnostics.transitionLimitedCount;
+        stats.hysteresisRetainedCount = diagnostics.hysteresisRetainedCount;
+        stats.invalidBoundsCount = diagnostics.invalidBoundsCount;
+        stats.pendingReadCount = diagnostics.pendingReadCount;
+        stats.cachedCpuPayloadCount = diagnostics.cachedCpuPayloadCount;
+        stats.staleReadCompletionCount = diagnostics.staleReadCompletionCount;
+        stats.unsupportedReadCount = diagnostics.unsupportedReadCount;
+        stats.pendingPromoteCount = diagnostics.pendingPromoteCount;
+        stats.pendingDemoteCount = diagnostics.pendingDemoteCount;
+        stats.stalePromotionCompletionCount = diagnostics.stalePromotionCompletionCount;
+        stats.failedPromotionCount = diagnostics.failedPromotionCount;
+        stats.failedDemotionCount = diagnostics.failedDemotionCount;
+        stats.livePayloadCount = diagnostics.livePayloadCount;
+        stats.bakeChunkCount = diagnostics.bakeChunkCount;
+        stats.bakePayloadWriteCount = diagnostics.bakePayloadWriteCount;
+        stats.generationQueuedCount = diagnostics.generationQueuedCount;
+        stats.generationCompletedCount = diagnostics.generationCompletedCount;
+        stats.generationFailedCount = diagnostics.generationFailedCount;
+        stats.cacheInvalidationCount = diagnostics.cacheInvalidationCount;
+        stats.hysteresisChurnCount = diagnostics.hysteresisChurnCount;
+        stats.evictionBlockedCount = diagnostics.evictionBlockedCount;
+        stats.hasLastFailure = diagnostics.lastFailure.hasFailure;
+        if (stats.hasLastFailure) {
+            stats.lastFailureLane = Engine::streamingTransitionLaneName(diagnostics.lastFailure.lane);
+            stats.lastFailurePayload = Engine::streamingPayloadKindName(diagnostics.lastFailure.payload);
+            stats.lastFailureChunk = diagnostics.lastFailure.chunkId;
+            stats.lastFailureStatus = diagnostics.lastFailure.status;
+            stats.lastFailureMessage = diagnostics.lastFailure.message;
+        }
+        return stats;
+    }
+
     Renderer::DebugUi::ModernDebugUiState makeModernDebugUiState(
         const ModernDefaultSceneRuntime& runtime,
         const FramePerformanceTimings& frameTimings,
@@ -843,6 +920,7 @@ namespace {
         state.debugVisualization.submittedLines = debug.submittedLines;
         state.debugVisualization.clippedLines = debug.clippedLines;
         state.debugVisualization.lastFramePrimitiveBufferSize = debug.lastFramePrimitiveBufferSize;
+        state.streaming = toDebugStats(Engine::makeEmptyOpenWorldStreamingDiagnostics());
         return state;
     }
 
@@ -869,6 +947,7 @@ namespace {
         state.debugVisualization.submittedLines = debug.submittedLines;
         state.debugVisualization.clippedLines = debug.clippedLines;
         state.debugVisualization.lastFramePrimitiveBufferSize = debug.lastFramePrimitiveBufferSize;
+        state.streaming = toDebugStats(Engine::makeEmptyOpenWorldStreamingDiagnostics());
         return state;
     }
 

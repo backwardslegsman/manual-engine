@@ -56,6 +56,8 @@ add_executable(manual_engine
     src/Engine/ObjectArchetype.cpp
     src/Engine/ObjectId.cpp
     src/Engine/Navigation.cpp
+    src/Engine/OpenWorldStreaming.cpp
+    src/Engine/OpenWorldStreamingBake.cpp
     src/Engine/OrbitCamera.cpp
     src/Engine/PersistentObjectEditor.cpp
     src/Engine/Picking.cpp
@@ -284,6 +286,53 @@ target_link_libraries(manual_engine_debug_visualization_tests
 )
 
 add_test(NAME manual_engine_debug_visualization_tests COMMAND manual_engine_debug_visualization_tests)
+
+add_executable(manual_engine_open_world_streaming_tests
+    tests/engine/OpenWorldStreamingTestRunner.cpp
+    tests/navigation/RendererStubs.cpp
+    src/Assets/HeightmapImporter.cpp
+    src/Engine/AsyncWorkQueue.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/FrameBudget.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationCache.cpp
+    src/Engine/OpenWorldStreaming.cpp
+    src/Engine/OpenWorldStreamingBake.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/Terrain.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainDerivedCache.cpp
+    src/Engine/TerrainImport.cpp
+    src/Engine/TerrainNavigationAdapter.cpp
+    src/Engine/TerrainPhysicsColliderAdapter.cpp
+)
+
+target_include_directories(manual_engine_open_world_streaming_tests
+    PRIVATE
+        src
+        ${Stb_INCLUDE_DIR}
+)
+
+target_compile_definitions(manual_engine_open_world_streaming_tests
+    PRIVATE
+        MANUAL_ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(manual_engine_open_world_streaming_tests
+    PRIVATE
+        glm::glm
+        Jolt::Jolt
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        RecastNavigation::DetourTileCache
+        RecastNavigation::DetourCrowd
+        RecastNavigation::DebugUtils
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_open_world_streaming_tests COMMAND manual_engine_open_world_streaming_tests)
 
 add_executable(manual_engine_terrain_dataset_tests
     tests/terrain/TerrainDatasetTestRunner.cpp

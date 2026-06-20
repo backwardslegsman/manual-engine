@@ -181,6 +181,8 @@ namespace {
         ctx.expect(contents.find("ModernPhysicsDebugStats") != std::string::npos, "modern physics stats are exposed");
         ctx.expect(contents.find("ModernCharacterDebugStats") != std::string::npos, "modern character stats are exposed");
         ctx.expect(contents.find("DebugVisualizationDebugStats") != std::string::npos, "modern debug visualization stats are exposed");
+        ctx.expect(contents.find("OpenWorldStreamingDebugStats") != std::string::npos, "modern streaming stats are exposed");
+        ctx.expect(contents.find("OpenWorldStreamingDebugStats streaming") != std::string::npos, "modern aggregate carries streaming stats");
         ctx.expect(contents.find("WorldSave") == std::string::npos, "legacy world save debug UI is not public");
         ctx.expect(contents.find("Biome") == std::string::npos, "legacy biome debug UI is not public");
         ctx.expect(contents.find("DebugPicking") == std::string::npos, "legacy picking debug UI is not public");

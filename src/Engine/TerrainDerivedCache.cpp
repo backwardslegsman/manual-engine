@@ -17,6 +17,7 @@ namespace Engine {
     namespace {
         constexpr std::array<char, 4> ChunkMagic{'M', 'T', 'C', '1'};
         constexpr std::array<char, 4> LodMagic{'M', 'T', 'L', '1'};
+        constexpr std::array<char, 4> PhysicsMagic{'M', 'T', 'P', '1'};
         constexpr uint64_t FnvOffset = 14695981039346656037ull;
         constexpr uint64_t FnvPrime = 1099511628211ull;
 
@@ -55,7 +56,12 @@ namespace Engine {
 
         std::string fileName(const TerrainDerivedCacheManifest& manifest)
         {
-            const char* prefix = manifest.kind == TerrainDerivedKind::ChunkHeights ? "chunk" : "lod";
+            const char* prefix = "chunk";
+            if (manifest.kind == TerrainDerivedKind::LodMesh) {
+                prefix = "lod";
+            } else if (manifest.kind == TerrainDerivedKind::PhysicsCollider) {
+                prefix = "physics";
+            }
             return std::string{prefix} + "_" +
                 std::to_string(manifest.chunkId.coord.x) + "_" +
                 std::to_string(manifest.chunkId.coord.z) + ".bin";
@@ -138,7 +144,13 @@ namespace Engine {
             node["identity_hash"] = manifest.identityHash;
             node["format_version"] = manifest.settings.formatVersion;
             node["terrain_import_version"] = manifest.settings.terrainImportVersion;
-            node["kind"] = manifest.kind == TerrainDerivedKind::ChunkHeights ? "chunk" : "lod";
+            if (manifest.kind == TerrainDerivedKind::ChunkHeights) {
+                node["kind"] = "chunk";
+            } else if (manifest.kind == TerrainDerivedKind::LodMesh) {
+                node["kind"] = "lod";
+            } else {
+                node["kind"] = "physics";
+            }
             node["source_id"] = manifest.chunkId.source.value;
             node["chunk"]["x"] = manifest.chunkId.coord.x;
             node["chunk"]["z"] = manifest.chunkId.coord.z;
@@ -305,6 +317,31 @@ namespace Engine {
         std::ostringstream identity;
         appendCommonIdentity(identity, manifest);
         identity << "lod|" << manifest.lodIndex << '|' << manifest.renderResolution << '|';
+        manifest.identityHash = hexHash(fnv1a(identity.str()));
+        return manifest;
+    }
+
+    TerrainDerivedCacheManifest TerrainDerivedCache::buildPhysicsColliderManifest(
+        TerrainDerivedCacheSettings settings,
+        const TerrainPhysicsColliderPayload& payload,
+        std::string sourceHash)
+    {
+        TerrainDerivedCacheManifest manifest;
+        manifest.settings = std::move(settings);
+        manifest.kind = TerrainDerivedKind::PhysicsCollider;
+        manifest.chunkId = payload.chunkId;
+        manifest.importSettings = payload.identity.importSettings;
+        manifest.sourceHash = std::move(sourceHash);
+        manifest.sourceType = payload.identity.sourceType;
+        manifest.chunkSize = payload.size;
+        manifest.chunkResolution = payload.sourceResolution;
+        manifest.renderResolution = payload.colliderResolution;
+        manifest.payloadVersion = manifest.settings.physicsColliderPayloadVersion;
+        manifest.payloadFileName = fileName(manifest);
+        std::ostringstream identity;
+        appendCommonIdentity(identity, manifest);
+        identity << "physics|" << manifest.renderResolution << '|'
+                 << TerrainPhysicsColliderAdapterVersion << '|';
         manifest.identityHash = hexHash(fnv1a(identity.str()));
         return manifest;
     }
@@ -579,6 +616,146 @@ namespace Engine {
             }
             file.close();
             return writeManifestAndFinalize(std::move(manifest), path, TerrainDerivedKind::LodMesh);
+        } catch (const std::exception& ex) {
+            result.status = TerrainDerivedCacheStatus::WriteFailed;
+            result.message = ex.what();
+            return result;
+        }
+    }
+
+    TerrainDerivedCachePhysicsColliderReadResult TerrainDerivedCache::readPhysicsCollider(
+        const TerrainDerivedCacheManifest& manifest)
+    {
+        TerrainDerivedCachePhysicsColliderReadResult result;
+        result.kind = TerrainDerivedKind::PhysicsCollider;
+        result.path = payloadPath(manifest);
+        if (!validateManifestFile(manifest, result)) {
+            return result;
+        }
+
+        std::ifstream file(result.path, std::ios::binary);
+        if (!file) {
+            result.status = TerrainDerivedCacheStatus::Miss;
+            result.message = "Terrain physics collider cache miss.";
+            return result;
+        }
+        std::array<char, 4> magic{};
+        file.read(magic.data(), magic.size());
+        if (magic != PhysicsMagic) {
+            result.status = TerrainDerivedCacheStatus::Stale;
+            result.message = "Terrain physics collider cache magic mismatch.";
+            return result;
+        }
+
+        TerrainPhysicsColliderPayload payload;
+        file.read(reinterpret_cast<char*>(&payload.chunkId.source.value), sizeof(payload.chunkId.source.value));
+        file.read(reinterpret_cast<char*>(&payload.chunkId.coord.x), sizeof(payload.chunkId.coord.x));
+        file.read(reinterpret_cast<char*>(&payload.chunkId.coord.z), sizeof(payload.chunkId.coord.z));
+        file.read(reinterpret_cast<char*>(&payload.coord.x), sizeof(payload.coord.x));
+        file.read(reinterpret_cast<char*>(&payload.coord.z), sizeof(payload.coord.z));
+        readVec3(file, payload.origin);
+        file.read(reinterpret_cast<char*>(&payload.size), sizeof(payload.size));
+        file.read(reinterpret_cast<char*>(&payload.sourceResolution), sizeof(payload.sourceResolution));
+        file.read(reinterpret_cast<char*>(&payload.colliderResolution), sizeof(payload.colliderResolution));
+        readVec3(file, payload.bounds.min);
+        readVec3(file, payload.bounds.max);
+        file.read(reinterpret_cast<char*>(&payload.identity.sourceId.value), sizeof(payload.identity.sourceId.value));
+        if (!readString(file, payload.identity.sourceHash) || !readSettings(file, payload.identity.importSettings)) {
+            result.status = TerrainDerivedCacheStatus::Corrupt;
+            result.message = "Terrain physics collider identity is truncated.";
+            return result;
+        }
+        uint32_t sourceType = 0;
+        file.read(reinterpret_cast<char*>(&sourceType), sizeof(sourceType));
+        payload.identity.sourceType = static_cast<TerrainDatasetSourceType>(sourceType);
+        uint32_t vertexCount = 0;
+        uint32_t indexCount = 0;
+        file.read(reinterpret_cast<char*>(&vertexCount), sizeof(vertexCount));
+        file.read(reinterpret_cast<char*>(&indexCount), sizeof(indexCount));
+        if (!file || vertexCount == 0 || indexCount == 0 ||
+            vertexCount > 16u * 1024u * 1024u || indexCount > 64u * 1024u * 1024u) {
+            result.status = TerrainDerivedCacheStatus::Stale;
+            result.message = "Terrain physics collider cache header is invalid.";
+            return result;
+        }
+        payload.vertices.resize(vertexCount);
+        for (glm::vec3& vertex : payload.vertices) {
+            if (!readVec3(file, vertex)) {
+                result.status = TerrainDerivedCacheStatus::Corrupt;
+                result.message = "Terrain physics collider vertices are truncated.";
+                return result;
+            }
+        }
+        payload.indices.resize(indexCount);
+        file.read(reinterpret_cast<char*>(payload.indices.data()), static_cast<std::streamsize>(payload.indices.size() * sizeof(uint32_t)));
+        if (!file) {
+            result.status = TerrainDerivedCacheStatus::Corrupt;
+            result.message = "Terrain physics collider indices are truncated.";
+            return result;
+        }
+        if (payload.chunkId != manifest.chunkId ||
+            payload.sourceResolution != manifest.chunkResolution ||
+            payload.colliderResolution != manifest.renderResolution ||
+            !settingsMatch(payload.identity.importSettings, manifest.importSettings)) {
+            result.status = TerrainDerivedCacheStatus::Stale;
+            result.message = "Terrain physics collider cache identity mismatch.";
+            return result;
+        }
+        result.status = TerrainDerivedCacheStatus::Hit;
+        result.message = "Loaded terrain physics collider cache.";
+        result.bytes = std::filesystem::file_size(result.path);
+        result.payload = std::move(payload);
+        return result;
+    }
+
+    TerrainDerivedCacheWriteResult TerrainDerivedCache::writePhysicsCollider(
+        TerrainDerivedCacheManifest manifest,
+        const TerrainPhysicsColliderPayload& payload)
+    {
+        TerrainDerivedCacheWriteResult result;
+        result.kind = TerrainDerivedKind::PhysicsCollider;
+        try {
+            const std::filesystem::path root = cacheRoot(manifest);
+            std::filesystem::create_directories(root);
+            const std::filesystem::path path = root / manifest.payloadFileName;
+            std::ofstream file(path, std::ios::binary);
+            if (!file) {
+                result.status = TerrainDerivedCacheStatus::WriteFailed;
+                result.message = "Failed to open terrain physics collider cache for writing.";
+                return result;
+            }
+            file.write(PhysicsMagic.data(), PhysicsMagic.size());
+            file.write(reinterpret_cast<const char*>(&payload.chunkId.source.value), sizeof(payload.chunkId.source.value));
+            file.write(reinterpret_cast<const char*>(&payload.chunkId.coord.x), sizeof(payload.chunkId.coord.x));
+            file.write(reinterpret_cast<const char*>(&payload.chunkId.coord.z), sizeof(payload.chunkId.coord.z));
+            file.write(reinterpret_cast<const char*>(&payload.coord.x), sizeof(payload.coord.x));
+            file.write(reinterpret_cast<const char*>(&payload.coord.z), sizeof(payload.coord.z));
+            writeVec3(file, payload.origin);
+            file.write(reinterpret_cast<const char*>(&payload.size), sizeof(payload.size));
+            file.write(reinterpret_cast<const char*>(&payload.sourceResolution), sizeof(payload.sourceResolution));
+            file.write(reinterpret_cast<const char*>(&payload.colliderResolution), sizeof(payload.colliderResolution));
+            writeVec3(file, payload.bounds.min);
+            writeVec3(file, payload.bounds.max);
+            file.write(reinterpret_cast<const char*>(&payload.identity.sourceId.value), sizeof(payload.identity.sourceId.value));
+            writeString(file, payload.identity.sourceHash);
+            writeSettings(file, payload.identity.importSettings);
+            const uint32_t sourceType = static_cast<uint32_t>(payload.identity.sourceType);
+            file.write(reinterpret_cast<const char*>(&sourceType), sizeof(sourceType));
+            const uint32_t vertexCount = static_cast<uint32_t>(payload.vertices.size());
+            const uint32_t indexCount = static_cast<uint32_t>(payload.indices.size());
+            file.write(reinterpret_cast<const char*>(&vertexCount), sizeof(vertexCount));
+            file.write(reinterpret_cast<const char*>(&indexCount), sizeof(indexCount));
+            for (const glm::vec3& vertex : payload.vertices) {
+                writeVec3(file, vertex);
+            }
+            file.write(reinterpret_cast<const char*>(payload.indices.data()), static_cast<std::streamsize>(payload.indices.size() * sizeof(uint32_t)));
+            if (!file) {
+                result.status = TerrainDerivedCacheStatus::WriteFailed;
+                result.message = "Failed to write terrain physics collider cache payload.";
+                return result;
+            }
+            file.close();
+            return writeManifestAndFinalize(std::move(manifest), path, TerrainDerivedKind::PhysicsCollider);
         } catch (const std::exception& ex) {
             result.status = TerrainDerivedCacheStatus::WriteFailed;
             result.message = ex.what();
