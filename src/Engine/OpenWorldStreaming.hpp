@@ -282,6 +282,14 @@ namespace Engine {
         uint32_t generationCompletedCount = 0;
         uint32_t generationFailedCount = 0;
         uint32_t cacheInvalidationCount = 0;
+        uint32_t assetDependencyManifestCount = 0;
+        uint32_t assetMetadataCacheHitCount = 0;
+        uint32_t liveAssetMeshCount = 0;
+        uint32_t liveAssetTextureCount = 0;
+        uint32_t missingAssetDependencyCount = 0;
+        uint32_t unsupportedAssetDependencyCount = 0;
+        uint32_t sharedAssetReferenceCount = 0;
+        uint64_t assetReleaseLatencyMicroseconds = 0;
         uint32_t mainThreadPromoteItemsRun = 0;
         uint32_t mainThreadPromoteItemsDeferred = 0;
         uint32_t mainThreadDemoteItemsRun = 0;

@@ -57,6 +57,7 @@ add_executable(manual_engine
     src/Engine/ObjectId.cpp
     src/Engine/Navigation.cpp
     src/Engine/OpenWorldStreaming.cpp
+    src/Engine/OpenWorldStreamingAssets.cpp
     src/Engine/OpenWorldStreamingBake.cpp
     src/Engine/OrbitCamera.cpp
     src/Engine/PersistentObjectEditor.cpp
@@ -289,15 +290,19 @@ add_test(NAME manual_engine_debug_visualization_tests COMMAND manual_engine_debu
 
 add_executable(manual_engine_open_world_streaming_tests
     tests/engine/OpenWorldStreamingTestRunner.cpp
-    tests/navigation/RendererStubs.cpp
+    tests/authored_scene/RendererOwnershipStubs.cpp
+    src/Assets/Assimp/Importer.cpp
     src/Assets/HeightmapImporter.cpp
     src/Engine/AsyncWorkQueue.cpp
+    src/Engine/AssetCache.cpp
+    src/Engine/AssetRegistry.cpp
     src/Engine/Biome.cpp
     src/Engine/ChunkTypes.cpp
     src/Engine/FrameBudget.cpp
     src/Engine/Navigation.cpp
     src/Engine/NavigationCache.cpp
     src/Engine/OpenWorldStreaming.cpp
+    src/Engine/OpenWorldStreamingAssets.cpp
     src/Engine/OpenWorldStreamingBake.cpp
     src/Engine/Physics/ScenePhysics.cpp
     src/Engine/Scene/Scene.cpp
@@ -323,6 +328,7 @@ target_compile_definitions(manual_engine_open_world_streaming_tests
 target_link_libraries(manual_engine_open_world_streaming_tests
     PRIVATE
         glm::glm
+        assimp::assimp
         Jolt::Jolt
         RecastNavigation::Recast
         RecastNavigation::Detour

@@ -1608,3 +1608,14 @@ Changed:
 
 Rationale:
 - Open-world streaming needs reusable baked terrain/nav/physics/render payloads and a non-blocking generation fallback before those payloads can be promoted into live systems around camera halos.
+
+## 2026-06-20 - Phase S5 Asset Dependency Streaming
+
+Changed:
+- Added `Engine::OpenWorldStreamingAssets` with asset dependency descriptors, durable manifest/read-descriptor helpers, registry descriptor conversion, and metadata-only cache-halo records.
+- Added `OpenWorldStreamingAssetResidency` as the S3 promotion/demotion adapter for `AssetCache`-owned static mesh and texture dependencies.
+- Added shared live-reference tracking, deterministic release, missing required/optional asset diagnostics, unsupported type diagnostics, and asset streaming counters for the Debug UI Streaming tab.
+- Extended open-world streaming tests for durable asset identity, metadata warming, live promotion/demotion, shared references, missing assets, unsupported asset types, and header boundary checks.
+
+Rationale:
+- Open-world streaming needs asset dependencies to move through the same cache/live halo model as terrain, nav, and physics data while keeping renderer resource acquisition explicit and main-thread-owned.

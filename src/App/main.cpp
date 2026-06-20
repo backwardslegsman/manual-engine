@@ -774,6 +774,14 @@ namespace {
         stats.generationCompletedCount = diagnostics.generationCompletedCount;
         stats.generationFailedCount = diagnostics.generationFailedCount;
         stats.cacheInvalidationCount = diagnostics.cacheInvalidationCount;
+        stats.assetDependencyManifestCount = diagnostics.assetDependencyManifestCount;
+        stats.assetMetadataCacheHitCount = diagnostics.assetMetadataCacheHitCount;
+        stats.liveAssetMeshCount = diagnostics.liveAssetMeshCount;
+        stats.liveAssetTextureCount = diagnostics.liveAssetTextureCount;
+        stats.missingAssetDependencyCount = diagnostics.missingAssetDependencyCount;
+        stats.unsupportedAssetDependencyCount = diagnostics.unsupportedAssetDependencyCount;
+        stats.sharedAssetReferenceCount = diagnostics.sharedAssetReferenceCount;
+        stats.assetReleaseLatencyMicroseconds = diagnostics.assetReleaseLatencyMicroseconds;
         stats.hysteresisChurnCount = diagnostics.hysteresisChurnCount;
         stats.evictionBlockedCount = diagnostics.evictionBlockedCount;
         stats.hasLastFailure = diagnostics.lastFailure.hasFailure;

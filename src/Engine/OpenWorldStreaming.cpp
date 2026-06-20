@@ -586,7 +586,7 @@ namespace Engine {
                     sizeof(buffer),
                     "asset:%llu",
                     static_cast<unsigned long long>(key.asset.value));
-                return buffer;
+                return key.stableId.empty() ? std::string{buffer} : std::string{buffer} + ":" + key.stableId;
             case StreamingChunkKeyKind::None:
                 break;
         }

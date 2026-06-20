@@ -319,6 +319,18 @@ namespace {
             streaming.generationCompletedCount,
             streaming.generationFailedCount);
         ImGui::Text("Cache invalidations: %u", streaming.cacheInvalidationCount);
+        ImGui::Text("Asset deps manifest / metadata hits: %u / %u",
+            streaming.assetDependencyManifestCount,
+            streaming.assetMetadataCacheHitCount);
+        ImGui::Text("Live asset meshes / textures: %u / %u",
+            streaming.liveAssetMeshCount,
+            streaming.liveAssetTextureCount);
+        ImGui::Text("Missing / unsupported asset deps: %u / %u",
+            streaming.missingAssetDependencyCount,
+            streaming.unsupportedAssetDependencyCount);
+        ImGui::Text("Shared asset refs / release us: %u / %llu",
+            streaming.sharedAssetReferenceCount,
+            static_cast<unsigned long long>(streaming.assetReleaseLatencyMicroseconds));
         if (streaming.hasLastFocus) {
             textVec3("Last focus", streaming.lastFocus);
         }

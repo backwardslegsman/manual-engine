@@ -17,6 +17,7 @@
 #include "Engine/FrameBudget.hpp"
 #include "Engine/NavigationCache.hpp"
 #include "Engine/OpenWorldStreaming.hpp"
+#include "Engine/OpenWorldStreamingAssets.hpp"
 #include "Engine/OpenWorldStreamingBake.hpp"
 #include "Engine/TerrainDerivedCache.hpp"
 
@@ -208,7 +209,11 @@ namespace {
             diagnostics.manifestRecordsConsidered + diagnostics.manifestRecordsSkipped +
             diagnostics.transitionCandidateCount + diagnostics.transitionLimitedCount +
             diagnostics.hysteresisRetainedCount + diagnostics.invalidBoundsCount +
-            diagnostics.hysteresisChurnCount + diagnostics.evictionBlockedCount;
+            diagnostics.hysteresisChurnCount + diagnostics.evictionBlockedCount +
+            diagnostics.assetDependencyManifestCount + diagnostics.assetMetadataCacheHitCount +
+            diagnostics.liveAssetMeshCount + diagnostics.liveAssetTextureCount +
+            diagnostics.missingAssetDependencyCount + diagnostics.unsupportedAssetDependencyCount +
+            diagnostics.sharedAssetReferenceCount + diagnostics.assetReleaseLatencyMicroseconds;
         for (uint32_t value : diagnostics.desiredChunksByPayload) {
             total += value;
         }
@@ -246,6 +251,9 @@ namespace {
         ctx.expect(header.find("ScenePhysicsBodyHandle") == std::string::npos, "header has no physics body handles");
         ctx.expect(header.find("TextureHandle") == std::string::npos, "header has no renderer texture handles");
         ctx.expect(header.find("Renderer") == std::string::npos, "header still has no renderer types after S1");
+        const std::string assetHeader = readSourceFile("src/Engine/OpenWorldStreamingAssets.hpp");
+        ctx.expect(assetHeader.find("AssetCache") != std::string::npos, "asset streaming adapter owns AssetCache boundary");
+        ctx.expect(assetHeader.find("AssetHandle") == std::string::npos, "asset streaming adapter avoids transient AssetHandle identity");
     }
 
     Engine::StreamingWorldBounds bounds(float minX, float minZ, float maxX, float maxZ)
@@ -1043,6 +1051,195 @@ namespace {
         ctx.expect(live.snapshot().diagnostics.actualChunksByState[static_cast<uint32_t>(Engine::StreamingResidencyState::ColdOnDisk)] == 1, "record remains cold");
     }
 
+    Engine::StreamingAssetDependencyDescriptor assetDescriptor(
+        Engine::AssetId id,
+        Engine::AssetType type,
+        std::string_view suffix,
+        bool required = true)
+    {
+        Engine::StreamingAssetDependencyDescriptor descriptor;
+        descriptor.asset = id;
+        descriptor.type = type;
+        descriptor.sourcePath = tempPath(suffix);
+        descriptor.importSettings = {"streaming_asset", "s5", std::string{suffix}};
+        descriptor.estimatedBytes = 128;
+        descriptor.required = required;
+        descriptor.debugName = std::string{suffix};
+        if (type == Engine::AssetType::Texture) {
+            Renderer::TextureDescriptor texture;
+            texture.slot = Renderer::TextureSlot::BaseColor;
+            texture.colorSpace = Renderer::TextureColorSpace::Srgb;
+            texture.generateMips = true;
+            descriptor.textureDescriptor = texture;
+        }
+        return descriptor;
+    }
+
+    void AssetDependencyRecordsUseDurableIdentity(TestContext& ctx)
+    {
+        const Engine::StreamingAssetDependencyDescriptor first =
+            assetDescriptor({7101}, Engine::AssetType::Texture, "asset_a");
+        Engine::StreamingAssetDependencyDescriptor second = first;
+        second.importSettings.optionsHash = "different";
+
+        const Engine::StreamingAssetDependencyBuildResult firstRecord =
+            Engine::makeAssetDependencyStreamingRecord(first, bounds(0.0f, 0.0f, 1.0f, 1.0f));
+        const Engine::StreamingAssetDependencyBuildResult secondRecord =
+            Engine::makeAssetDependencyStreamingRecord(second, bounds(0.0f, 0.0f, 1.0f, 1.0f));
+
+        ctx.expect(firstRecord.success && secondRecord.success, "asset dependency records built");
+        ctx.expect(firstRecord.record.key.kind == Engine::StreamingChunkKeyKind::AssetDependency, "asset dependency key kind");
+        ctx.expect(firstRecord.record.key.asset == first.asset, "asset id preserved in key");
+        ctx.expect(firstRecord.record.payload == Engine::StreamingPayloadKind::AssetDependency, "asset dependency payload kind");
+        ctx.expect(firstRecord.record.key != secondRecord.record.key, "import settings distinguish asset dependency keys");
+        ctx.expect(firstRecord.readDescriptor.descriptor.kind == Engine::StreamingReadDescriptorKind::Fake, "asset metadata read descriptor is metadata/fake hit");
+
+        const std::string header = readSourceFile("src/Engine/OpenWorldStreamingAssets.hpp");
+        ctx.expect(header.find("AssetHandle") == std::string::npos, "asset streaming header does not expose AssetHandle");
+        ctx.expect(header.find("CachedTexture") != std::string::npos, "asset streaming adapter owns runtime cache acquisitions");
+    }
+
+    void AssetMetadataCacheWarmsWithoutPromotion(TestContext& ctx)
+    {
+        const Engine::StreamingAssetDependencyDescriptor descriptor =
+            assetDescriptor({7201}, Engine::AssetType::StaticMesh, "asset_metadata");
+        const Engine::StreamingAssetDependencyBuildResult dependency =
+            Engine::makeAssetDependencyStreamingRecord(descriptor, bounds(0.0f, 0.0f, 1.0f, 1.0f));
+        Engine::StreamingChunkManifest manifest;
+        Engine::StreamingReadDescriptorTable descriptors;
+        Engine::addAssetDependencyStreamingRecord(manifest, descriptors, dependency);
+
+        Engine::AsyncWorkQueue queue{1};
+        Engine::OpenWorldStreamingCacheHalo cache;
+        cache.update(queue, cachePlanForRecords(manifest), descriptors);
+        cache.mergeCompleted(waitCompleted(queue));
+        queue.shutdown();
+
+        const Engine::StreamingCacheHaloSnapshot snapshot = cache.snapshot();
+        ctx.expect(snapshot.diagnostics.cachedCpuPayloadCount == 1, "asset metadata became cached CPU payload");
+        ctx.expect(snapshot.diagnostics.payloads[static_cast<uint32_t>(Engine::StreamingPayloadKind::AssetDependency)].hits == 1, "asset metadata hit counted");
+        const std::optional<Engine::StreamingCachedPayload> payload =
+            cache.cachedPayload(dependency.record.key, Engine::StreamingPayloadKind::AssetDependency);
+        ctx.expect(payload && std::holds_alternative<Engine::StreamingMetadataPayload>(*payload), "asset dependency stores metadata payload only");
+    }
+
+    void AssetStreamingPromotesAndDemotesThroughCallbacks(TestContext& ctx)
+    {
+        const Engine::StreamingAssetDependencyDescriptor descriptor =
+            assetDescriptor({7301}, Engine::AssetType::Texture, "asset_live");
+        const Engine::StreamingAssetDependencyBuildResult dependency =
+            Engine::makeAssetDependencyStreamingRecord(descriptor, bounds(0.0f, 0.0f, 1.0f, 1.0f));
+        Engine::StreamingChunkManifest manifest;
+        Engine::StreamingReadDescriptorTable descriptors;
+        Engine::addAssetDependencyStreamingRecord(manifest, descriptors, dependency);
+        Engine::OpenWorldStreamingCacheHalo cache = warmCacheForManifest(
+            manifest,
+            Engine::StreamingCachedPayload{Engine::StreamingMetadataPayload{"asset"}});
+
+        uint32_t acquireTextureCount = 0;
+        uint32_t releaseTextureCount = 0;
+        Engine::StreamingAssetCacheCallbacks callbacks;
+        callbacks.acquireTexture = [&acquireTextureCount](const std::filesystem::path&, const Renderer::TextureDescriptor&) {
+            ++acquireTextureCount;
+            return Engine::CachedTexture{acquireTextureCount, Renderer::createSolidTexture(255, 255, 255, 255)};
+        };
+        callbacks.releaseTexture = [&releaseTextureCount](Engine::CachedTexture) {
+            ++releaseTextureCount;
+        };
+
+        Engine::OpenWorldStreamingAssetResidency assets{callbacks};
+        ctx.expect(assets.registerDependency(descriptor), "registered texture dependency");
+        Engine::OpenWorldStreamingLiveHalo live;
+        Engine::MainThreadWorkQueue work;
+        live.update(work, cachePlanForRecords(manifest), cache, Engine::makeAssetStreamingPromotionCallbacks(assets));
+        Engine::FrameBudget budget;
+        budget.beginFrame({1000.0f, true});
+        work.drain(budget);
+        ctx.expect(acquireTextureCount == 1, "texture acquired once during promotion");
+        ctx.expect(live.snapshot().diagnostics.liveResources.textureHandles == 1, "live halo copied texture count");
+        ctx.expect(assets.diagnostics().liveTextureCount == 1, "asset residency counted live texture");
+
+        const Engine::StreamingHaloPlan coldPlan = Engine::planStreamingHalo(
+            manifest,
+            {500.0f, 0.0f, 0.0f},
+            live.snapshot().residency,
+            plannerSettings(1.0f, 2.0f));
+        live.update(work, coldPlan, cache, Engine::makeAssetStreamingPromotionCallbacks(assets));
+        budget.beginFrame({1000.0f, true});
+        work.drain(budget);
+        ctx.expect(releaseTextureCount == 1, "texture released once during demotion");
+        ctx.expect(assets.diagnostics().liveTextureCount == 0, "asset residency cleared live texture count");
+    }
+
+    void AssetStreamingHandlesSharedMissingAndUnsupported(TestContext& ctx)
+    {
+        uint32_t acquireMeshCount = 0;
+        uint32_t releaseMeshCount = 0;
+        Engine::StreamingAssetCacheCallbacks callbacks;
+        callbacks.acquireStaticMesh = [&acquireMeshCount](const std::filesystem::path&) {
+            ++acquireMeshCount;
+            return Engine::CachedStaticMesh{acquireMeshCount, Renderer::StaticMeshHandle{acquireMeshCount}};
+        };
+        callbacks.releaseStaticMesh = [&releaseMeshCount](Engine::CachedStaticMesh) {
+            ++releaseMeshCount;
+        };
+        Engine::OpenWorldStreamingAssetResidency assets{callbacks};
+        const Engine::StreamingAssetDependencyDescriptor mesh =
+            assetDescriptor({7401}, Engine::AssetType::StaticMesh, "asset_shared");
+        ctx.expect(assets.registerDependency(mesh), "registered shared mesh dependency");
+        const Engine::StreamingAssetDependencyBuildResult meshRecord =
+            Engine::makeAssetDependencyStreamingRecord(mesh, bounds(0.0f, 0.0f, 1.0f, 1.0f));
+        Engine::StreamingPromotionRequest request;
+        request.key = meshRecord.record.key;
+        request.payload = Engine::StreamingPayloadKind::AssetDependency;
+        const Engine::StreamingCachedPayload metadata{Engine::StreamingMetadataPayload{"asset"}};
+        const Engine::StreamingPromotionResult first = assets.promotionCallbacks().promote(request, metadata);
+        const Engine::StreamingPromotionResult second = assets.promotionCallbacks().promote(request, metadata);
+        ctx.expect(first.status == Engine::StreamingPromotionStatus::Success, "first shared asset promotion succeeds");
+        ctx.expect(second.status == Engine::StreamingPromotionStatus::Success, "second shared asset promotion succeeds");
+        ctx.expect(acquireMeshCount == 1, "shared asset acquired only once");
+        ctx.expect(assets.diagnostics().sharedReferenceCount == 1, "shared reference counted");
+        Engine::StreamingDemotionRequest demote;
+        demote.key = meshRecord.record.key;
+        demote.payload = Engine::StreamingPayloadKind::AssetDependency;
+        assets.promotionCallbacks().demote(demote, second.liveToken);
+        ctx.expect(releaseMeshCount == 0, "first demote of shared asset keeps resource alive");
+        assets.promotionCallbacks().demote(demote, first.liveToken);
+        ctx.expect(releaseMeshCount == 1, "final shared demote releases resource");
+
+        Engine::StreamingAssetCacheCallbacks missingCallbacks;
+        missingCallbacks.acquireTexture = [](const std::filesystem::path&, const Renderer::TextureDescriptor&) {
+            return Engine::CachedTexture{};
+        };
+        Engine::OpenWorldStreamingAssetResidency missing{missingCallbacks};
+        const Engine::StreamingAssetDependencyDescriptor required =
+            assetDescriptor({7402}, Engine::AssetType::Texture, "asset_required_missing", true);
+        Engine::StreamingAssetDependencyDescriptor optional =
+            assetDescriptor({7403}, Engine::AssetType::Texture, "asset_optional_missing", false);
+        missing.registerDependency(required);
+        missing.registerDependency(optional);
+        const Engine::StreamingPromotionResult missingRequired = missing.promotionCallbacks().promote(
+            {Engine::makeAssetDependencyStreamingRecord(required).record.key, Engine::StreamingPayloadKind::AssetDependency},
+            metadata);
+        const Engine::StreamingPromotionResult missingOptional = missing.promotionCallbacks().promote(
+            {Engine::makeAssetDependencyStreamingRecord(optional).record.key, Engine::StreamingPayloadKind::AssetDependency},
+            metadata);
+        ctx.expect(missingRequired.status != Engine::StreamingPromotionStatus::Success, "missing required asset fails promotion");
+        ctx.expect(missingOptional.status == Engine::StreamingPromotionStatus::Success, "missing optional asset promotes metadata only");
+        ctx.expect(missing.diagnostics().missingRequiredCount == 1, "missing required counted");
+        ctx.expect(missing.diagnostics().missingOptionalCount == 1, "missing optional counted");
+
+        Engine::OpenWorldStreamingAssetResidency unsupported{callbacks};
+        const Engine::StreamingAssetDependencyDescriptor material =
+            assetDescriptor({7404}, Engine::AssetType::Material, "asset_material");
+        unsupported.registerDependency(material);
+        const Engine::StreamingPromotionResult unsupportedResult = unsupported.promotionCallbacks().promote(
+            {Engine::makeAssetDependencyStreamingRecord(material).record.key, Engine::StreamingPayloadKind::AssetDependency},
+            metadata);
+        ctx.expect(unsupportedResult.status == Engine::StreamingPromotionStatus::UnsupportedPayload, "unsupported asset type fails explicitly");
+        ctx.expect(unsupported.diagnostics().unsupportedTypeCount == 1, "unsupported asset type counted");
+    }
+
     Engine::OpenWorldStreamingBakeSettings bakeSettings(std::string_view suffix)
     {
         Engine::OpenWorldStreamingBakeSettings settings;
@@ -1173,6 +1370,8 @@ namespace {
         ctx.expect(header.find("livePayloadCount") != std::string::npos, "streaming live stats exposed");
         ctx.expect(header.find("bakePayloadWriteCount") != std::string::npos, "streaming bake stats exposed");
         ctx.expect(header.find("generationQueuedCount") != std::string::npos, "streaming generation stats exposed");
+        ctx.expect(header.find("assetDependencyManifestCount") != std::string::npos, "streaming asset dependency stats exposed");
+        ctx.expect(header.find("liveAssetTextureCount") != std::string::npos, "streaming live asset texture stats exposed");
         ctx.expect(header.find("WorldSave") == std::string::npos, "legacy world save debug UI absent");
         ctx.expect(header.find("DebugPicking") == std::string::npos, "legacy picking debug UI absent");
         ctx.expect(header.find("InteractionDebug") == std::string::npos, "legacy interaction debug UI absent");
@@ -1215,6 +1414,10 @@ int main()
         {"LiveHaloMissingPayloadAndCallbackFailureAreDiagnosed", LiveHaloMissingPayloadAndCallbackFailureAreDiagnosed},
         {"LiveHaloQueueCapsAreDeterministic", LiveHaloQueueCapsAreDeterministic},
         {"LiveHaloStaleQueuedWorkIsIgnored", LiveHaloStaleQueuedWorkIsIgnored},
+        {"AssetDependencyRecordsUseDurableIdentity", AssetDependencyRecordsUseDurableIdentity},
+        {"AssetMetadataCacheWarmsWithoutPromotion", AssetMetadataCacheWarmsWithoutPromotion},
+        {"AssetStreamingPromotesAndDemotesThroughCallbacks", AssetStreamingPromotesAndDemotesThroughCallbacks},
+        {"AssetStreamingHandlesSharedMissingAndUnsupported", AssetStreamingHandlesSharedMissingAndUnsupported},
         {"FullHeightmapBakeWritesAllPayloads", FullHeightmapBakeWritesAllPayloads},
         {"BakedPayloadsReadThroughCacheHalo", BakedPayloadsReadThroughCacheHalo},
         {"BakeIdentityChangesWithSettings", BakeIdentityChangesWithSettings},

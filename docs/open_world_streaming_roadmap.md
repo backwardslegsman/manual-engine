@@ -278,17 +278,22 @@ Tests:
 
 ### Phase S5 - Asset Dependency Streaming
 
-- Add asset dependency records to chunk manifests.
-- Preload asset metadata in cache halo.
-- Acquire renderer resources in active halo.
-- Add reference-counted residency by `AssetId` and import settings key.
-- Add counters for asset cache hits, misses, pending loads, live handles, and release latency.
+Status: implemented as an Engine API plus tests, with no App streaming policy integration yet. `Engine::OpenWorldStreamingAssets` adds asset dependency descriptors, durable manifest/read-descriptor helpers, metadata cache warming, and an asset residency adapter that uses S3 promotion/demotion callbacks to acquire and release live `AssetCache` resources. Static mesh and texture dependencies are first-class live promotion targets; material, skinned mesh, authored scene, animation, and terrain material-set dependencies remain metadata/diagnostic records until their ownership is made streamable.
+
+- Asset dependency manifest records are keyed by durable `AssetId` plus import settings and never by `AssetHandle`, `CachedTexture`, `CachedStaticMesh`, renderer handles, or opaque handles.
+- Cache halo warming stores metadata-only `StreamingMetadataPayload` records for asset dependencies without touching `AssetCache` or renderer resources.
+- Active halo promotion uses `OpenWorldStreamingAssetResidency` callbacks to acquire `StaticMesh` and `Texture` dependencies from `AssetCache` on the main thread and to release them deterministically on demotion.
+- Shared dependency promotion reuses an existing live acquisition and tracks reference counts; final demotion releases the cached mesh/texture exactly once.
+- Missing required assets fail promotion with diagnostics; missing optional assets may promote metadata-only; unsupported asset types fail explicitly with `UnsupportedPayload`.
+- Streaming diagnostics and the Debug UI Streaming tab now expose asset dependency manifest, metadata hit, live mesh/texture, missing, unsupported, shared reference, and release-latency counters.
 
 Tests:
 
-- shared assets stay live while any active chunk needs them;
-- inactive chunks release live renderer resources after demotion;
-- missing assets produce visible diagnostics without blocking unrelated chunks.
+- asset manifest records use durable `AssetId` plus import settings and exclude runtime handles;
+- metadata cache halo records become `CachedCpu` without touching `AssetCache`;
+- static mesh and texture promotion/demotion call cache callbacks under S3 live-halo ordering;
+- shared dependencies acquire once and release only after the last demotion;
+- required missing, optional missing, and unsupported dependency cases are diagnosed deterministically.
 
 ### Phase S6 - Scene Chunk Serialization Integration
 
