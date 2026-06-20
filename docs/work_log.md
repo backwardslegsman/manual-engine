@@ -1477,3 +1477,23 @@ Changed:
 
 Rationale:
 - Scene gameplay now has a constrained Lua layer that reuses the native hook/reflection/opaque-handle contract without exposing subsystem storage, renderer/bgfx, Jolt, Detour, App state, or serialization payloads.
+
+## 2026-06-19 - Phase 16 Debug Visualization Roadmap Expansion
+
+Changed:
+- Expanded Phase 16 in `docs/scene_component_roadmap.md` into a full debug visualization plan covering collector ownership, category/severity models, primitive/report request types, budgets, clipping, renderer/App consumption, subsystem producer targets, release/no-op behavior, serialization boundaries, implementation phases, and tests.
+- Clarified that debug visualization should be renderer-independent Engine diagnostic data consumed by App/Renderer composition, not a simulation dependency or a serialized payload.
+
+Rationale:
+- Scene, terrain, navigation, physics, animation, Lua, and asset diagnostics now need one bounded debug request contract so future visualization does not keep growing as ad hoc per-subsystem vectors and App-only wiring.
+
+## 2026-06-19 - Phase 16 Debug Visualization
+
+Changed:
+- Added `Engine::DebugVisualizationCollector` with renderer-independent debug categories, severities, primitive/report request records, per-category/global budgets, distance clipping, deterministic snapshots, and diagnostics.
+- Added line, polyline, AABB, sphere, capsule, transform-axis, label, and report-row request helpers plus a renderer-line conversion helper for line and AABB output.
+- Added `manual_engine_debug_visualization_tests` covering disabled/no-op behavior, category filtering, budgets, clipping, deterministic ordering, report rows, plain-data request records, renderer-line conversion, and clear/reset behavior.
+- Added the debug visualization module to `manual_engine` and updated system contracts, engine overview, and the scene roadmap.
+
+Rationale:
+- Debug visualization now has a bounded Engine request boundary that future scene, terrain, navigation, physics, animation, asset, behavior, and Lua producers can use without depending on ImGui, bgfx, App-local state, or serialized payloads.

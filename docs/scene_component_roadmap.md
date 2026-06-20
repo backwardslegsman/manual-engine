@@ -1150,17 +1150,150 @@ Exit criteria:
 
 Goal: Unify debug visibility across scene, renderer, navigation, physics, animation, and assets.
 
-- Add a debug visualization request API that systems can use without depending on ImGui.
-- Add categories for transforms, bounds, navmesh, paths, physics shapes, skeletons, cameras, lights, and streaming sectors.
-- Add budgets and clipping for expensive debug draws.
-- Add per-scene debug settings surfaced through the existing Render tab or future Scene tab.
-- Add profile/report output for scene diagnostics and resource counts.
-- Preserve release behavior: debug visualization disabled unless explicitly enabled by build/runtime policy.
-- Add tests for request capping, category toggles, and no-op release paths where practical.
+Status: initial implementation added. `Engine::DebugVisualizationCollector` now provides the renderer-independent request layer for bounded debug primitive/report data. It supports categories, severities, line/AABB/sphere/capsule/transform-axis/label/report requests, per-category and global budgets, distance clipping, deterministic snapshots, diagnostics, and conversion to renderer debug line primitives. Existing App debug producers are not migrated yet; the collector is the new boundary for future scene-system debug visualization work.
+
+Scope:
+
+- Add a CPU-only debug visualization module under `src/Engine`, likely `DebugVisualization.hpp/.cpp`.
+- Keep request collection independent from Dear ImGui, bgfx, Renderer implementation details, Jolt, Detour, Lua VM internals, serialization file I/O, App gameplay state, and subsystem storage.
+- Let App/Renderer composition explicitly drain request batches and convert them to existing renderer debug primitives or future debug UI panels.
+- Preserve current debug renderer behavior while moving reusable request shaping, category toggles, budgets, and diagnostics out of one-off App logic where practical.
+- Preserve release behavior: debug visualization should compile to no-op or remain disabled unless build/runtime policy explicitly enables it.
+- Do not add an editor viewport, persistent debug overlays, capture/replay UI, remote telemetry, GPU debug capture, or scripting-visible debug draw APIs in the first pass.
+
+Debug request ownership:
+
+- Add `DebugVisualizationSink` or `DebugVisualizationCollector` as the receiver-owned request surface.
+- Requests are frame-transient by default. Systems publish plain records each frame or on explicit diagnostic calls; the collector owns capping, category filtering, and output ordering.
+- Debug request records should never own live runtime resources. They may store transient handles only for labels/diagnostics and should also store enough plain geometry/text data to render after the source system moves on.
+- Debug visualization must not mutate scene, physics, navigation, renderer resources, terrain chunks, asset cache, Lua state, or serialization state.
+- Prefer explicit sinks passed to systems or adapters over a global debug bus. App or scene composition chooses which sink receives which systems' debug requests.
+
+Public API shape:
+
+- Add category and severity types:
+  - `DebugVisualizationCategory::{SceneTransforms, SceneBounds, RenderBridge, Physics, CharacterMovement, Navigation, Terrain, Animation, Assets, BehaviorHooks, Lua, Streaming, Serialization, Performance}`.
+  - `DebugVisualizationSeverity::{Info, Warning, Error}` for labels/report rows, not rendering logic.
+- Add primitive request types:
+  - line segment/polyline;
+  - AABB/OBB;
+  - sphere/capsule/cylinder;
+  - frustum/camera;
+  - transform axes;
+  - triangle mesh wireframe summary for capped terrain/nav/physics geometry;
+  - text/label anchor;
+  - path/waypoint sequence;
+  - skeleton joint/bone line set;
+  - light cone/range;
+  - sector/chunk/tile bounds.
+- Add report request types:
+  - subsystem counters;
+  - timing rows;
+  - resource count rows;
+  - warning/error messages;
+  - handle/identity summary rows.
+- Add `DebugVisualizationSettings`:
+  - enabled flag;
+  - per-category enabled flags;
+  - per-category primitive budgets;
+  - text/label budget;
+  - max world distance from camera/debug focus;
+  - optional clip bounds or loaded-sector bounds;
+  - expensive-category throttles;
+  - deterministic sorting policy.
+- Add `DebugVisualizationDiagnostics`:
+  - accepted/skipped/clipped/capped counts by category and primitive type;
+  - warning/error counts;
+  - last capped category;
+  - generation time;
+  - output primitive count;
+  - report row count.
+
+System integration targets:
+
+- Scene:
+  - actor transform axes, parent/child links, root markers, actor bounds once bounds exist, component summaries, and scheduler phase diagnostics.
+- Scene render bridge:
+  - mesh/skinned/light/camera component anchors, camera frustums, light cones/ranges, renderer resource liveness warnings, and bridge sync diagnostics.
+- Physics:
+  - body/collider shapes, raycast/sweep/overlap/closest-point query records, dynamic/kinematic/static color coding, sleeping/disabled state, and invalid-owner cleanup warnings.
+- Character movement:
+  - capsule, floor normal, sweep path, slide normal, step probes, active path target, grounded/falling state, and blocked movement diagnostics.
+- Navigation:
+  - projected points, local paths, raycast segments, failed query markers, nav tile bounds, portals, scene geometry source bounds, and terrain adapter source summaries.
+- Terrain:
+  - dataset chunk bounds, source-space chunk IDs, render LOD rings, cache hit/miss/stale/corrupt summaries, nav/physics/material adapter diagnostics, and serialization-prep identity rows.
+- Animation:
+  - skeleton joint/bone lines, skinned component anchors, animator clip/playback/crossfade rows, invalid joint/channel warnings, and palette update counts.
+- Assets:
+  - asset dependency graph summaries, stale/missing markers, imported-resource counts, and cache/reference ownership warnings.
+- Behavior hooks and Lua:
+  - lifecycle/tick/property callback order rows, failed callback markers, disabled/unregistered scripts, budget-exceeded warnings, and invalid target records.
+- Serialization:
+  - scene binary header/directory summary rows, skipped optional chunks, validation failures, and runtime-handle rejection diagnostics.
+
+Renderer/App bridge:
+
+- Add an adapter that converts `DebugVisualizationCollector` output into existing `Renderer` debug primitives and ImGui/debug-panel rows.
+- App remains responsible for:
+  - choosing enabled categories;
+  - providing camera/focus/clip settings;
+  - draining the collector;
+  - submitting renderer debug primitives;
+  - displaying report rows in existing tabs or a future Scene tab.
+- Renderer remains responsible only for drawing submitted primitives. Renderer should not inspect Engine subsystem storage to generate debug state.
+- Release builds should preserve current `MANUAL_ENGINE_ENABLE_DEBUG_TOOLS` behavior. In Release, request collection should either compile out or cheaply reject all requests unless an explicit runtime policy enables it.
+
+Budgeting and determinism:
+
+- All request collection should be deterministic for identical input and settings.
+- Category budgets must cap expensive sources before they create unbounded vectors of primitives.
+- Clipping should happen as early as possible using camera distance, loaded chunk/sector bounds, or caller-provided bounds.
+- Expensive categories such as navmesh edges, terrain wireframes, skeletons, physics triangle meshes, and asset dependency graphs should support throttling or summary-only modes.
+- Diagnostics must report capped/skipped requests so debug users know when visualization is incomplete.
+
+Serialization and scripting boundaries:
+
+- Debug visualization records are transient diagnostics. They must not be serialized into scene binary files, terrain chunk files, save state, derived caches, or asset manifests.
+- Lua scripts should not get direct debug draw APIs in Phase 16. If script-visible debug draw is later needed, it should go through a narrow allowlisted API with the same budgets/categories and no renderer handles.
+- Debug category settings may become user preferences later, but Phase 16 should not add save-file or scene-file persistence for them.
+
+Implementation phases inside Phase 16:
+
+1. Core request model:
+   - Category/severity/primitive/report records, collector settings, diagnostics, clear/snapshot APIs, and no-op disabled behavior are implemented.
+2. Renderer/App adapter:
+   - Collector line and AABB output can be converted into existing renderer debug line primitives without moving renderer ownership into Engine systems.
+3. Scene and physics producers:
+   - Dedicated producer helpers for scene transforms/hierarchy, physics bodies/colliders, character movement probes, and scene render bridge cameras/lights remain deferred.
+4. Navigation and terrain producers:
+   - Routing existing nav query/debug records, scene navigation geometry records, terrain dataset/cache/adapter diagnostics, and terrain chunk bounds through the collector remains deferred.
+5. Animation, asset, behavior, and Lua producers:
+   - Report/marker helpers for skeletons, asset dependencies, behavior callback order/failures, and Lua script diagnostics remain deferred.
+6. Release/no-op and tests:
+   - Disabled/no-op behavior, category toggles, budgets, clipping, deterministic ordering, report rows, plain-data boundaries, and renderer-line conversion are covered by `manual_engine_debug_visualization_tests`.
+
+Test plan:
+
+- Add `manual_engine_debug_visualization_tests` as a CPU-only target for collector logic.
+- Add focused renderer-stub tests only where adapter conversion needs renderer primitive shape verification.
+- Required tests:
+  - disabled collector accepts no requests and reports no output;
+  - category toggles accept/reject deterministic request subsets;
+  - per-category and global budgets cap line, shape, label, and report output;
+  - clipping rejects out-of-range primitives and reports clipped counts;
+  - deterministic ordering is stable for identical input;
+  - report rows preserve severity/category/source labels;
+  - no request type stores renderer handles, bgfx handles, Jolt IDs, Detour refs, Lua registry refs, or App pointers;
+  - scene/physics/navigation/terrain helper fixtures publish expected primitive categories without linking App or bgfx;
+  - release/no-op policy compiles and runs without allocating large request buffers.
 
 Exit criteria:
 
-- Debug visual output is consistent and budgeted across systems instead of ad hoc per feature.
+- Debug visual output uses one bounded, category-aware request contract across systems instead of ad hoc per-feature vectors.
+- Renderer and ImGui remain consumers of debug requests, not owners of simulation diagnostics.
+- Expensive debug categories are clipped/capped and report incomplete visualization clearly.
+- Release/debug-tool-disabled builds keep debug visualization inert unless explicitly enabled.
 
 ## Migration Strategy
 

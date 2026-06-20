@@ -39,6 +39,7 @@ add_executable(manual_engine
     src/Engine/BlockingCollision.cpp
     src/Engine/ChunkStreamer.cpp
     src/Engine/ChunkTypes.cpp
+    src/Engine/DebugVisualization.cpp
     src/Engine/EventQueue.cpp
     src/Engine/FixedStepLoop.cpp
     src/Engine/FrameBudget.cpp
@@ -260,6 +261,23 @@ target_link_libraries(manual_engine_heightmap_import_tests
 )
 
 add_test(NAME manual_engine_heightmap_import_tests COMMAND manual_engine_heightmap_import_tests)
+
+add_executable(manual_engine_debug_visualization_tests
+    tests/engine/DebugVisualizationTestRunner.cpp
+    src/Engine/DebugVisualization.cpp
+)
+
+target_include_directories(manual_engine_debug_visualization_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_debug_visualization_tests
+    PRIVATE
+        glm::glm
+)
+
+add_test(NAME manual_engine_debug_visualization_tests COMMAND manual_engine_debug_visualization_tests)
 
 add_executable(manual_engine_terrain_dataset_tests
     tests/terrain/TerrainDatasetTestRunner.cpp
