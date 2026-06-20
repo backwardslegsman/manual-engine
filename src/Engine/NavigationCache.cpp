@@ -263,6 +263,8 @@ namespace Engine {
             node["terrain_source_hash"] = manifest.terrainSourceHash;
             node["terrain_source_type"] = manifest.terrainSourceType;
             node["terrain_navigation_adapter_version"] = manifest.terrainNavigationAdapterVersion;
+            node["terrain_navigation_border_padding_world"] = manifest.terrainNavigationBorderPaddingWorld;
+            node["terrain_navigation_border_sample_count"] = manifest.terrainNavigationBorderSampleCount;
             node["scene_geometry_hash"] = manifest.sceneGeometryHash;
             node["scene_geometry_max_slope_degrees"] = manifest.sceneGeometryMaxSlopeDegrees;
             node["scene_geometry_tile_bounds_padding"] = manifest.sceneGeometryTileBoundsPadding;
@@ -348,6 +350,8 @@ namespace Engine {
         AssetImportSettingsKey terrainImportSettings,
         std::string terrainSourceType,
         std::string terrainNavigationAdapterVersion,
+        float terrainNavigationBorderPaddingWorld,
+        uint32_t terrainNavigationBorderSampleCount,
         std::string sceneGeometryHash,
         float sceneGeometryMaxSlopeDegrees,
         float sceneGeometryTileBoundsPadding,
@@ -369,6 +373,10 @@ namespace Engine {
         manifest.terrainImportSettings = std::move(terrainImportSettings);
         manifest.terrainSourceType = std::move(terrainSourceType);
         manifest.terrainNavigationAdapterVersion = std::move(terrainNavigationAdapterVersion);
+        manifest.terrainNavigationBorderPaddingWorld = std::isfinite(terrainNavigationBorderPaddingWorld)
+            ? std::max(terrainNavigationBorderPaddingWorld, 0.0f)
+            : 0.0f;
+        manifest.terrainNavigationBorderSampleCount = terrainNavigationBorderSampleCount;
         manifest.sceneGeometryHash = std::move(sceneGeometryHash);
         manifest.sceneGeometryMaxSlopeDegrees = std::isfinite(sceneGeometryMaxSlopeDegrees)
             ? std::clamp(sceneGeometryMaxSlopeDegrees, 0.0f, 90.0f)
@@ -394,6 +402,8 @@ namespace Engine {
                  << manifest.terrainImportSettings.optionsHash << '|'
                  << manifest.terrainSourceType << '|'
                  << manifest.terrainNavigationAdapterVersion << '|'
+                 << manifest.terrainNavigationBorderPaddingWorld << '|'
+                 << manifest.terrainNavigationBorderSampleCount << '|'
                  << manifest.sceneGeometryHash << '|'
                  << manifest.sceneGeometryMaxSlopeDegrees << '|'
                  << manifest.sceneGeometryTileBoundsPadding << '|'

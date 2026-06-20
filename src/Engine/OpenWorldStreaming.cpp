@@ -8,10 +8,12 @@
 #include <exception>
 #include <limits>
 #include <sstream>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 
 #include "Engine/NavigationCache.hpp"
+#include "Engine/SceneSerialization.hpp"
 #include "Engine/TerrainDerivedCache.hpp"
 
 namespace Engine {
@@ -92,7 +94,7 @@ namespace Engine {
             float distance,
             const StreamingPayloadResidencyPolicy& policy)
         {
-            if (distance <= policy.activeRadius) {
+            if (policy.liveAllowed && distance <= policy.activeRadius) {
                 return StreamingResidencyState::LiveActive;
             }
             if (distance <= policy.cacheRadius) {
@@ -113,20 +115,59 @@ namespace Engine {
             return nullptr;
         }
 
+        [[nodiscard]] uint32_t profileIndex(StreamingHaloProfile profile)
+        {
+            return static_cast<uint32_t>(profile);
+        }
+
+        [[nodiscard]] int profilePriority(StreamingHaloProfile profile)
+        {
+            switch (profile) {
+                case StreamingHaloProfile::StandardLive:
+                case StreamingHaloProfile::Default:
+                    return 0;
+                case StreamingHaloProfile::LowDetailLive:
+                    return 1;
+                case StreamingHaloProfile::HighDetailLive:
+                    return 2;
+                case StreamingHaloProfile::Behavior:
+                case StreamingHaloProfile::Animation:
+                    return 3;
+                case StreamingHaloProfile::CacheOnly:
+                case StreamingHaloProfile::FarMetadata:
+                    return 4;
+                case StreamingHaloProfile::AudioParticle:
+                    return 5;
+                case StreamingHaloProfile::Editing:
+                    return 6;
+                case StreamingHaloProfile::Count:
+                    break;
+            }
+            return 7;
+        }
+
         [[nodiscard]] bool decisionLess(
             const StreamingChunkResidencyDecision& lhs,
             const StreamingChunkResidencyDecision& rhs)
         {
-            if (lhs.payload != rhs.payload) {
-                return static_cast<uint32_t>(lhs.payload) < static_cast<uint32_t>(rhs.payload);
-            }
             const int lhsPriority = desiredPriority(lhs.desired);
             const int rhsPriority = desiredPriority(rhs.desired);
             if (lhsPriority != rhsPriority) {
                 return lhsPriority < rhsPriority;
             }
+            const int lhsProfile = profilePriority(lhs.haloProfile);
+            const int rhsProfile = profilePriority(rhs.haloProfile);
+            if (lhsProfile != rhsProfile) {
+                return lhsProfile < rhsProfile;
+            }
             if (lhs.distanceToFocus != rhs.distanceToFocus) {
                 return lhs.distanceToFocus < rhs.distanceToFocus;
+            }
+            if (lhs.priorityBias != rhs.priorityBias) {
+                return lhs.priorityBias > rhs.priorityBias;
+            }
+            if (lhs.payload != rhs.payload) {
+                return static_cast<uint32_t>(lhs.payload) < static_cast<uint32_t>(rhs.payload);
             }
             return stableStreamingChunkKeyString(lhs.key) < stableStreamingChunkKeyString(rhs.key);
         }
@@ -371,6 +412,60 @@ namespace Engine {
                     }
                     return finish();
                 }
+                case StreamingReadDescriptorKind::SceneChunkBinary: {
+                    if (request.descriptor.sceneChunkPath.empty()) {
+                        result.status = StreamingReadStatus::Failed;
+                        result.message = "Missing scene chunk binary path.";
+                        return finish();
+                    }
+
+                    const SceneSerializationReadResult read =
+                        readSceneBinary(request.descriptor.sceneChunkPath, SceneSerializationSettings{});
+                    result.message = read.message;
+                    std::error_code fileError;
+                    if (std::filesystem::exists(request.descriptor.sceneChunkPath, fileError)) {
+                        result.bytesRead = std::filesystem::file_size(request.descriptor.sceneChunkPath, fileError);
+                        if (fileError) {
+                            result.bytesRead = 0;
+                        }
+                    }
+
+                    switch (read.status) {
+                        case SceneSerializationStatus::Success: {
+                            result.status = StreamingReadStatus::Hit;
+                            StreamingSceneChunkPayload payload;
+                            payload.stableChunkId = request.descriptor.sceneChunkStableId.empty()
+                                ? request.key.stableId
+                                : request.descriptor.sceneChunkStableId;
+                            payload.actorCount = static_cast<uint32_t>(read.scene.actors.size());
+                            payload.componentCount = static_cast<uint32_t>(read.scene.components.size());
+                            payload.assetDependencies = request.descriptor.sceneChunkAssetDependencies;
+                            payload.scene = std::make_shared<SceneSerializedScene>(std::move(read.scene));
+                            result.payload = std::move(payload);
+                            break;
+                        }
+                        case SceneSerializationStatus::IoError:
+                            result.status = StreamingReadStatus::Miss;
+                            break;
+                        case SceneSerializationStatus::UnsupportedVersion:
+                            result.status = StreamingReadStatus::Stale;
+                            break;
+                        case SceneSerializationStatus::CorruptHeader:
+                        case SceneSerializationStatus::CorruptDirectory:
+                        case SceneSerializationStatus::MissingRequiredChunk:
+                        case SceneSerializationStatus::UnknownRequiredChunk:
+                        case SceneSerializationStatus::ChecksumMismatch:
+                            result.status = StreamingReadStatus::Corrupt;
+                            break;
+                        case SceneSerializationStatus::InvalidInput:
+                        case SceneSerializationStatus::UnknownType:
+                        case SceneSerializationStatus::MissingAsset:
+                        case SceneSerializationStatus::InvalidReference:
+                            result.status = StreamingReadStatus::Failed;
+                            break;
+                    }
+                    return finish();
+                }
                 case StreamingReadDescriptorKind::MetadataOnly:
                     result.status = StreamingReadStatus::Hit;
                     result.payload = StreamingMetadataPayload{request.descriptor.fakeMessage};
@@ -490,6 +585,35 @@ namespace Engine {
         return "Unknown";
     }
 
+    const char* streamingHaloProfileName(StreamingHaloProfile profile)
+    {
+        switch (profile) {
+            case StreamingHaloProfile::Default:
+                return "Default";
+            case StreamingHaloProfile::FarMetadata:
+                return "FarMetadata";
+            case StreamingHaloProfile::CacheOnly:
+                return "CacheOnly";
+            case StreamingHaloProfile::LowDetailLive:
+                return "LowDetailLive";
+            case StreamingHaloProfile::StandardLive:
+                return "StandardLive";
+            case StreamingHaloProfile::HighDetailLive:
+                return "HighDetailLive";
+            case StreamingHaloProfile::Behavior:
+                return "Behavior";
+            case StreamingHaloProfile::Animation:
+                return "Animation";
+            case StreamingHaloProfile::AudioParticle:
+                return "AudioParticle";
+            case StreamingHaloProfile::Editing:
+                return "Editing";
+            case StreamingHaloProfile::Count:
+                break;
+        }
+        return "Unknown";
+    }
+
     const char* streamingReadStatusName(StreamingReadStatus status)
     {
         switch (status) {
@@ -542,7 +666,8 @@ namespace Engine {
         return lhs.kind == rhs.kind &&
             lhs.terrainChunk == rhs.terrainChunk &&
             lhs.asset == rhs.asset &&
-            lhs.stableId == rhs.stableId;
+            lhs.stableId == rhs.stableId &&
+            lhs.variantId == rhs.variantId;
     }
 
     bool operator!=(const StreamingChunkKey& lhs, const StreamingChunkKey& rhs)
@@ -577,16 +702,24 @@ namespace Engine {
                     static_cast<unsigned long long>(key.terrainChunk.source.value),
                     key.terrainChunk.coord.x,
                     key.terrainChunk.coord.z);
-                return buffer;
+                return key.variantId.empty() ? std::string{buffer} : std::string{buffer} + ":" + key.variantId;
             case StreamingChunkKeyKind::SceneChunk:
-                return "scene:" + key.stableId;
+                return key.variantId.empty()
+                    ? "scene:" + key.stableId
+                    : "scene:" + key.stableId + ":" + key.variantId;
             case StreamingChunkKeyKind::AssetDependency:
                 std::snprintf(
                     buffer,
                     sizeof(buffer),
                     "asset:%llu",
                     static_cast<unsigned long long>(key.asset.value));
-                return key.stableId.empty() ? std::string{buffer} : std::string{buffer} + ":" + key.stableId;
+                if (!key.stableId.empty() && !key.variantId.empty()) {
+                    return std::string{buffer} + ":" + key.stableId + ":" + key.variantId;
+                }
+                if (!key.stableId.empty()) {
+                    return std::string{buffer} + ":" + key.stableId;
+                }
+                return key.variantId.empty() ? std::string{buffer} : std::string{buffer} + ":" + key.variantId;
             case StreamingChunkKeyKind::None:
                 break;
         }
@@ -598,6 +731,20 @@ namespace Engine {
         StreamingHaloPlannerSettings settings;
         for (StreamingPayloadResidencyPolicy& policy : settings.payloadPolicies) {
             policy = {};
+        }
+        for (uint32_t payload = 0; payload < StreamingPayloadKindCount; ++payload) {
+            for (uint32_t profile = 0; profile < StreamingHaloProfileCount; ++profile) {
+                settings.profilePolicies[payload][profile] = settings.payloadPolicies[payload];
+            }
+            settings.profilePolicies[payload][profileIndex(StreamingHaloProfile::FarMetadata)].activeRadius = 0.0f;
+            settings.profilePolicies[payload][profileIndex(StreamingHaloProfile::FarMetadata)].cacheRadius = 512.0f;
+            settings.profilePolicies[payload][profileIndex(StreamingHaloProfile::FarMetadata)].liveAllowed = false;
+            settings.profilePolicies[payload][profileIndex(StreamingHaloProfile::CacheOnly)].liveAllowed = false;
+            settings.profilePolicies[payload][profileIndex(StreamingHaloProfile::LowDetailLive)].activeRadius = 192.0f;
+            settings.profilePolicies[payload][profileIndex(StreamingHaloProfile::LowDetailLive)].cacheRadius = 256.0f;
+            settings.profilePolicies[payload][profileIndex(StreamingHaloProfile::StandardLive)] = settings.payloadPolicies[payload];
+            settings.profilePolicies[payload][profileIndex(StreamingHaloProfile::HighDetailLive)].activeRadius = 48.0f;
+            settings.profilePolicies[payload][profileIndex(StreamingHaloProfile::HighDetailLive)].cacheRadius = 96.0f;
         }
         return settings;
     }
@@ -635,6 +782,7 @@ namespace Engine {
         hashInt32(hash, record.key.terrainChunk.coord.z);
         hashUint64(hash, record.key.asset.value);
         hashString(hash, record.key.stableId);
+        hashString(hash, record.key.variantId);
         hashUint64(hash, static_cast<uint64_t>(record.payload));
         hashFloat(hash, record.bounds.min.x);
         hashFloat(hash, record.bounds.min.y);
@@ -646,6 +794,9 @@ namespace Engine {
         hashUint64(hash, record.settingsHash);
         hashUint64(hash, record.estimatedBytes);
         hashUint64(hash, static_cast<uint64_t>(static_cast<uint32_t>(record.dirtyFlags)));
+        hashUint64(hash, static_cast<uint64_t>(record.haloProfile));
+        hashUint64(hash, record.detailLevel);
+        hashUint64(hash, static_cast<uint64_t>(static_cast<int64_t>(record.priorityBias)));
         for (bool available : record.availablePayloads) {
             hashUint64(hash, available ? 1ull : 0ull);
         }
@@ -753,6 +904,19 @@ namespace Engine {
         return descriptor;
     }
 
+    StreamingReadDescriptor sceneChunkBinaryReadDescriptor(
+        std::filesystem::path path,
+        std::string stableChunkId,
+        std::vector<AssetId> assetDependencies)
+    {
+        StreamingReadDescriptor descriptor;
+        descriptor.kind = StreamingReadDescriptorKind::SceneChunkBinary;
+        descriptor.sceneChunkPath = std::move(path);
+        descriptor.sceneChunkStableId = std::move(stableChunkId);
+        descriptor.sceneChunkAssetDependencies = std::move(assetDependencies);
+        return descriptor;
+    }
+
     StreamingReadDescriptor metadataOnlyStreamingReadDescriptor(std::string label)
     {
         StreamingReadDescriptor descriptor;
@@ -855,24 +1019,41 @@ namespace Engine {
 
     StreamingHaloPlan planStreamingHalo(
         const StreamingChunkManifest& manifest,
-        const glm::vec3& focus,
+        const StreamingFocusInput& focus,
         const std::vector<StreamingChunkResidencyInput>& currentResidency,
         const StreamingHaloPlannerSettings& settings)
     {
         StreamingHaloPlan plan;
         OpenWorldStreamingDiagnostics& diagnostics = plan.diagnostics;
         diagnostics.manifestRecordCount = static_cast<uint32_t>(manifest.records.size());
-        diagnostics.hasLastFocus = finiteVec3(focus);
-        diagnostics.lastFocus = focus;
+        diagnostics.hasLastFocus = finiteVec3(focus.position);
+        diagnostics.lastFocus = focus.position;
 
-        if (!finiteVec3(focus)) {
+        if (!finiteVec3(focus.position)) {
             diagnostics.manifestRecordsSkipped = static_cast<uint32_t>(manifest.records.size());
             diagnostics.invalidBoundsCount = static_cast<uint32_t>(manifest.records.size());
             return plan;
         }
 
+        std::vector<glm::vec3> predictivePoints;
+        if (focus.velocity && finiteVec3(*focus.velocity) &&
+            focus.predictionSeconds > 0.0f && focus.maxPredictionDistance > 0.0f) {
+            glm::vec3 predictedOffset = *focus.velocity * focus.predictionSeconds;
+            const float distance = glm::length(predictedOffset);
+            if (distance > focus.maxPredictionDistance && distance > 0.0f) {
+                predictedOffset *= focus.maxPredictionDistance / distance;
+            }
+            predictivePoints.push_back(focus.position + predictedOffset);
+        }
+        for (const glm::vec3& goal : focus.goalFocusPoints) {
+            if (finiteVec3(goal)) {
+                predictivePoints.push_back(goal);
+            }
+        }
+
         for (const StreamingChunkManifestRecord& record : manifest.records) {
             if (payloadIndex(record.payload) >= StreamingPayloadKindCount ||
+                profileIndex(record.haloProfile) >= StreamingHaloProfileCount ||
                 record.payload == StreamingPayloadKind::Unknown ||
                 !Engine::isValid(record.key) ||
                 !Engine::isValid(record.bounds)) {
@@ -884,6 +1065,9 @@ namespace Engine {
             }
 
             ++diagnostics.manifestRecordsConsidered;
+            if (!record.key.variantId.empty()) {
+                ++diagnostics.variantRecordCount;
+            }
             const StreamingChunkResidencyInput* currentInput = findCurrentResidency(currentResidency, record);
             const StreamingResidencyState rawCurrent = currentInput
                 ? currentInput->state
@@ -894,10 +1078,30 @@ namespace Engine {
                 ++diagnostics.actualChunksByState[currentIndex];
             }
 
-            const StreamingPayloadResidencyPolicy& policy = settings.payloadPolicies[payloadIndex(record.payload)];
-            const float distance = streamingBoundsDistanceXZ(record.bounds, focus);
+            const uint32_t payload = payloadIndex(record.payload);
+            const uint32_t profile = profileIndex(record.haloProfile);
+            const StreamingPayloadResidencyPolicy& policy = record.haloProfile == StreamingHaloProfile::Default
+                ? settings.payloadPolicies[payload]
+                : settings.profilePolicies[payload][profile];
+            const float distance = streamingBoundsDistanceXZ(record.bounds, focus.position);
             const StreamingResidencyState baseDesired = baseDesiredResidency(distance, policy);
             StreamingResidencyState desired = baseDesired;
+            bool activeFocusCandidate = baseDesired != StreamingResidencyState::ColdOnDisk;
+            bool predictiveCandidate = false;
+            float bestPredictiveDistance = std::numeric_limits<float>::infinity();
+            for (const glm::vec3& predictivePoint : predictivePoints) {
+                bestPredictiveDistance = std::min(
+                    bestPredictiveDistance,
+                    streamingBoundsDistanceXZ(record.bounds, predictivePoint));
+            }
+            if (baseDesired == StreamingResidencyState::ColdOnDisk &&
+                bestPredictiveDistance <= policy.cacheRadius) {
+                predictiveCandidate = true;
+                desired = (policy.predictiveLiveAllowed && policy.liveAllowed &&
+                    bestPredictiveDistance <= policy.activeRadius)
+                    ? StreamingResidencyState::LiveActive
+                    : StreamingResidencyState::CachedCpu;
+            }
             bool hysteresisRetained = false;
             if (current == StreamingResidencyState::LiveActive &&
                 distance <= policy.activeRadius + policy.hysteresis) {
@@ -908,6 +1112,10 @@ namespace Engine {
                 distance <= policy.cacheRadius + policy.hysteresis) {
                 desired = StreamingResidencyState::CachedCpu;
                 hysteresisRetained = baseDesired != desired;
+            } else if (current == StreamingResidencyState::CachedCpu &&
+                predictiveCandidate &&
+                desired == StreamingResidencyState::CachedCpu) {
+                ++diagnostics.prefetchRetainedCount;
             }
 
             StreamingChunkResidencyDecision decision;
@@ -918,6 +1126,23 @@ namespace Engine {
             decision.distanceToFocus = distance;
             decision.transitionCandidate = current != desired;
             decision.hysteresisRetained = hysteresisRetained;
+            decision.haloProfile = record.haloProfile;
+            decision.detailLevel = record.detailLevel;
+            decision.priorityBias = record.priorityBias;
+            decision.predictiveCandidate = predictiveCandidate;
+            decision.activeFocusCandidate = activeFocusCandidate;
+            if (activeFocusCandidate) {
+                ++diagnostics.activeFocusCandidateCount;
+            }
+            if (predictiveCandidate) {
+                ++diagnostics.predictiveCandidateCount;
+                if (desired == StreamingResidencyState::CachedCpu) {
+                    ++diagnostics.predictivePrefetchCount;
+                }
+            }
+            if (record.haloProfile == StreamingHaloProfile::HighDetailLive) {
+                ++diagnostics.highDetailCandidateCount;
+            }
             if (hysteresisRetained) {
                 ++diagnostics.hysteresisRetainedCount;
                 ++diagnostics.hysteresisChurnCount;
@@ -930,18 +1155,25 @@ namespace Engine {
 
         std::sort(plan.decisions.begin(), plan.decisions.end(), decisionLess);
 
-        std::array<uint32_t, StreamingPayloadKindCount> transitionsByPayload{};
+        std::array<
+            std::array<uint32_t, StreamingHaloProfileCount>,
+            StreamingPayloadKindCount> transitionsByProfile{};
         for (StreamingChunkResidencyDecision& decision : plan.decisions) {
             const uint32_t index = payloadIndex(decision.payload);
+            const uint32_t profile = profileIndex(decision.haloProfile);
             if (decision.transitionCandidate) {
-                const uint32_t maxTransitions = settings.payloadPolicies[index].maxTransitionsPerFrame;
-                if (transitionsByPayload[index] >= maxTransitions) {
+                const StreamingPayloadResidencyPolicy& policy = decision.haloProfile == StreamingHaloProfile::Default
+                    ? settings.payloadPolicies[index]
+                    : settings.profilePolicies[index][profile];
+                const uint32_t maxTransitions = policy.maxTransitionsPerFrame;
+                if (transitionsByProfile[index][profile] >= maxTransitions) {
                     decision.transitionLimited = true;
                     decision.desired = decision.current;
                     ++diagnostics.transitionLimitedCount;
+                    ++diagnostics.transitionLimitedByProfile[profile];
                     ++diagnostics.evictionBlockedCount;
                 } else {
-                    ++transitionsByPayload[index];
+                    ++transitionsByProfile[index][profile];
                 }
             }
 
@@ -952,9 +1184,23 @@ namespace Engine {
             if (index < StreamingPayloadKindCount) {
                 ++diagnostics.desiredChunksByPayload[index];
             }
+            if (profile < StreamingHaloProfileCount) {
+                ++diagnostics.desiredChunksByProfile[profile];
+            }
         }
 
         return plan;
+    }
+
+    StreamingHaloPlan planStreamingHalo(
+        const StreamingChunkManifest& manifest,
+        const glm::vec3& focus,
+        const std::vector<StreamingChunkResidencyInput>& currentResidency,
+        const StreamingHaloPlannerSettings& settings)
+    {
+        StreamingFocusInput input;
+        input.position = focus;
+        return planStreamingHalo(manifest, input, currentResidency, settings);
     }
 
     OpenWorldStreamingCacheHalo::OpenWorldStreamingCacheHalo(StreamingCacheHaloSettings settings)
@@ -1188,6 +1434,22 @@ namespace Engine {
         return record->cachedPayload;
     }
 
+    void OpenWorldStreamingCacheHalo::storeCachedPayload(
+        const StreamingChunkKey& key,
+        StreamingPayloadKind payload,
+        StreamingCachedPayload cachedPayload,
+        uint64_t manifestRecordHash)
+    {
+        Record& record = ensureRecord(key, payload);
+        record.state = StreamingResidencyState::CachedCpu;
+        record.manifestRecordHash = manifestRecordHash;
+        ++record.generation;
+        record.pendingRead = {};
+        record.cachedPayload = std::move(cachedPayload);
+        record.message = "Cached payload supplied by streaming generation.";
+        rebuildDiagnostics();
+    }
+
     OpenWorldStreamingCacheHalo::Record* OpenWorldStreamingCacheHalo::findRecord(
         const StreamingChunkKey& key,
         StreamingPayloadKind payload)
@@ -1289,6 +1551,7 @@ namespace Engine {
         }
         diagnostics_.pendingReadCount = 0;
         diagnostics_.cachedCpuPayloadCount = 0;
+        diagnostics_.cachedSceneChunkPayloadCount = 0;
         diagnostics_.estimatedResidentBytes = 0;
         diagnostics_.lanes[static_cast<uint32_t>(StreamingTransitionLane::DiskReadDecode)].activeJobCount = 0;
 
@@ -1308,10 +1571,17 @@ namespace Engine {
                         return static_cast<uint64_t>(payload.heights.size() * sizeof(float));
                     } else if constexpr (std::is_same_v<T, StreamingNavigationTilePayload>) {
                         return static_cast<uint64_t>(payload.detourTileData.size());
+                    } else if constexpr (std::is_same_v<T, StreamingSceneChunkPayload>) {
+                        return static_cast<uint64_t>(
+                            payload.actorCount * sizeof(SceneSerializedActorRecord) +
+                            payload.componentCount * sizeof(SceneSerializedComponentRecord));
                     } else {
                         return 0;
                     }
                 }, *record.cachedPayload);
+                if (std::holds_alternative<StreamingSceneChunkPayload>(*record.cachedPayload)) {
+                    ++diagnostics_.cachedSceneChunkPayloadCount;
+                }
             }
         }
         diagnostics_.lanes[static_cast<uint32_t>(StreamingTransitionLane::DiskReadDecode)].activeJobCount =

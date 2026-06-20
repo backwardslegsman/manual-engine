@@ -71,6 +71,7 @@ namespace Engine {
         std::vector<glm::vec3> blockingVertices;
         std::vector<uint32_t> blockingIndices;
         Renderer::Aabb bounds;
+        std::optional<Renderer::Aabb> rasterizationBounds;
     };
 
     struct NavigationTileCacheData {

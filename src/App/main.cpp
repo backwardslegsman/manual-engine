@@ -59,6 +59,7 @@
 #include "Engine/NavigationProfile.hpp"
 #include "Engine/NavigationRuntime.hpp"
 #include "Engine/OpenWorldStreaming.hpp"
+#include "Engine/OpenWorldStreamingRuntime.hpp"
 #include "Engine/ObjectArchetype.hpp"
 #include "Engine/OrbitCamera.hpp"
 #include "Engine/PersistentObjectEditor.hpp"
@@ -737,6 +738,10 @@ namespace {
             stats.cacheCorruptByPayload[index] = diagnostics.payloads[index].corrupt;
             stats.cacheWritesByPayload[index] = diagnostics.payloads[index].writes;
         }
+        for (uint32_t index = 0; index < Engine::StreamingHaloProfileCount; ++index) {
+            stats.desiredChunksByProfile[index] = diagnostics.desiredChunksByProfile[index];
+            stats.transitionLimitedByProfile[index] = diagnostics.transitionLimitedByProfile[index];
+        }
         stats.mainThreadPromoteItemsRun = diagnostics.mainThreadPromoteItemsRun;
         stats.mainThreadPromoteItemsDeferred = diagnostics.mainThreadPromoteItemsDeferred;
         stats.mainThreadDemoteItemsRun = diagnostics.mainThreadDemoteItemsRun;
@@ -782,8 +787,25 @@ namespace {
         stats.unsupportedAssetDependencyCount = diagnostics.unsupportedAssetDependencyCount;
         stats.sharedAssetReferenceCount = diagnostics.sharedAssetReferenceCount;
         stats.assetReleaseLatencyMicroseconds = diagnostics.assetReleaseLatencyMicroseconds;
+        stats.sceneChunkManifestCount = diagnostics.sceneChunkManifestCount;
+        stats.cachedSceneChunkPayloadCount = diagnostics.cachedSceneChunkPayloadCount;
+        stats.promotedSceneChunkCount = diagnostics.promotedSceneChunkCount;
+        stats.demotedSceneChunkCount = diagnostics.demotedSceneChunkCount;
+        stats.sceneChunkActorsCreated = diagnostics.sceneChunkActorsCreated;
+        stats.sceneChunkComponentsCreated = diagnostics.sceneChunkComponentsCreated;
+        stats.sceneChunkActorsDestroyed = diagnostics.sceneChunkActorsDestroyed;
+        stats.sceneChunkDuplicateStableIdCount = diagnostics.sceneChunkDuplicateStableIdCount;
+        stats.sceneChunkInvalidParentCount = diagnostics.sceneChunkInvalidParentCount;
+        stats.sceneChunkInvalidComponentCount = diagnostics.sceneChunkInvalidComponentCount;
+        stats.sceneChunkUnsupportedOwnershipCount = diagnostics.sceneChunkUnsupportedOwnershipCount;
         stats.hysteresisChurnCount = diagnostics.hysteresisChurnCount;
         stats.evictionBlockedCount = diagnostics.evictionBlockedCount;
+        stats.variantRecordCount = diagnostics.variantRecordCount;
+        stats.activeFocusCandidateCount = diagnostics.activeFocusCandidateCount;
+        stats.predictiveCandidateCount = diagnostics.predictiveCandidateCount;
+        stats.predictivePrefetchCount = diagnostics.predictivePrefetchCount;
+        stats.prefetchRetainedCount = diagnostics.prefetchRetainedCount;
+        stats.highDetailCandidateCount = diagnostics.highDetailCandidateCount;
         stats.hasLastFailure = diagnostics.lastFailure.hasFailure;
         if (stats.hasLastFailure) {
             stats.lastFailureLane = Engine::streamingTransitionLaneName(diagnostics.lastFailure.lane);
@@ -879,6 +901,13 @@ namespace {
         state.navigation.cacheMisses = runtime.navigationCacheMissCount;
         state.navigation.cacheStale = runtime.navigationCacheStaleCount;
         state.navigation.cacheWrites = runtime.navigationCacheWriteCount;
+        const Engine::NavigationConnectivityStats connectivityStats = runtime.navigationConnectivity.stats();
+        state.navigation.connectivityChunks = connectivityStats.chunkCount;
+        state.navigation.connectivityPortals = connectivityStats.totalPortals;
+        state.navigation.connectivityConnectedPortals = connectivityStats.connectedPortals;
+        state.navigation.connectivityPartialChunks = connectivityStats.partialChunks;
+        state.navigation.connectivityBlockedChunks = connectivityStats.blockedChunks;
+        state.navigation.connectivityStatus = runtime.navigationStatus;
         state.navigation.lastBuildStatus = navStatusName(runtime.navigation.lastBuildStatus());
         state.navigation.lastBuildMessage = runtime.navigation.lastBuildMessage();
         state.navigation.lastQueryStatus = navStatusName(runtime.navigation.lastQueryStatus());
@@ -928,7 +957,7 @@ namespace {
         state.debugVisualization.submittedLines = debug.submittedLines;
         state.debugVisualization.clippedLines = debug.clippedLines;
         state.debugVisualization.lastFramePrimitiveBufferSize = debug.lastFramePrimitiveBufferSize;
-        state.streaming = toDebugStats(Engine::makeEmptyOpenWorldStreamingDiagnostics());
+        state.streaming = toDebugStats(runtime.streamingRuntime.diagnostics());
         return state;
     }
 
@@ -980,6 +1009,7 @@ namespace {
         constexpr uint32_t TerrainColor = modernDebugColor(80, 220, 240);
         constexpr uint32_t NavigationTileColor = modernDebugColor(160, 255, 80);
         constexpr uint32_t NavigationMeshColor = modernDebugColor(80, 180, 255);
+        constexpr uint32_t NavigationPortalColor = modernDebugColor(80, 255, 220);
         constexpr uint32_t SceneNavigationColor = modernDebugColor(255, 220, 80);
         constexpr uint32_t PhysicsColor = modernDebugColor(255, 100, 80);
         constexpr uint32_t CharacterColor = modernDebugColor(80, 255, 120);
@@ -1008,6 +1038,27 @@ namespace {
                     break;
                 }
                 Renderer::addDebugLine(edge.a, edge.b, NavigationMeshColor);
+            }
+            for (const auto& [_, connectivity] : runtime.navigationConnectivity.all()) {
+                for (const std::vector<Engine::ChunkNavPortal>& portals : connectivity.portalsByEdge) {
+                    for (const Engine::ChunkNavPortal& portal : portals) {
+                        const glm::vec3 marker = portal.position + glm::vec3{0.0f, 0.2f, 0.0f};
+                        Renderer::addDebugLine(
+                            marker + glm::vec3{-0.25f, 0.0f, 0.0f},
+                            marker + glm::vec3{0.25f, 0.0f, 0.0f},
+                            NavigationPortalColor);
+                        Renderer::addDebugLine(
+                            marker + glm::vec3{0.0f, 0.0f, -0.25f},
+                            marker + glm::vec3{0.0f, 0.0f, 0.25f},
+                            NavigationPortalColor);
+                        if (portal.connectedToLoadedNeighbor) {
+                            Renderer::addDebugLine(
+                                portal.position + glm::vec3{0.0f, 0.25f, 0.0f},
+                                portal.connectedNeighborPosition + glm::vec3{0.0f, 0.25f, 0.0f},
+                                NavigationPortalColor);
+                        }
+                    }
+                }
             }
         }
 
@@ -1655,6 +1706,57 @@ namespace {
                 camera.update(cameraEvents, loop.frameDeltaSeconds());
             });
 
+            frameTimings.chunkStreamingMs = measureDebugOnly([&]() {
+                if (runtime->usingOpenWorldStreaming && runtime->streamingRuntime.initialized()) {
+                    runtime->streamingRuntime.pollCompleted(runtime->streamingAsync.pollCompleted());
+                    Engine::StreamingFocusInput focus;
+                    focus.position = camera.position();
+                    if (const std::optional<glm::mat4> playerWorld =
+                            runtime->scene.worldMatrix(runtime->playerActor)) {
+                        focus.position = glm::vec3{(*playerWorld)[3]};
+                        focus.goalFocusPoints.push_back(camera.position());
+                    }
+                    focus.velocity = glm::vec3{0.0f};
+                    focus.predictionSeconds = 1.0f;
+                    focus.maxPredictionDistance = 80.0f;
+                    runtime->streamingRuntime.update(
+                        focus,
+                        runtime->streamingAsync,
+                        runtime->streamingMainThread,
+                        modernStreamingCallbacks(*runtime));
+                    runtime->streamingBudget.beginFrame({2.0f, true});
+                    runtime->streamingMainThread.drain(runtime->streamingBudget);
+                }
+            });
+
+            if (std::optional<Engine::SceneTransform> playerTransform =
+                    runtime->scene.localTransform(runtime->playerActor)) {
+                const float terrainY = runtime->terrain.sampleHeight(
+                    playerTransform->translation.x,
+                    playerTransform->translation.z).value_or(runtime->focus.y);
+                const bool hasTerrainCollider = runtime->terrainPhysicsColliderCount > 0 ||
+                    !runtime->streamingPhysicsColliders.empty();
+                if (!hasTerrainCollider) {
+                    runtime->characters.setEnabled(runtime->playerCharacter, false);
+                } else if (const std::optional<Engine::SceneCharacterDescriptor> character =
+                        runtime->characters.descriptor(runtime->playerCharacter);
+                    character && !character->enabled) {
+                    runtime->characters.setEnabled(runtime->playerCharacter, true);
+                    (void)resetModernPlayerAboveTerrain(*runtime);
+                }
+                if (playerTransform->translation.y < terrainY - 8.0f) {
+                    if (resetModernPlayerAboveTerrain(*runtime)) {
+                        runtime->navigationStatus =
+                            "Reset modern test character above terrain after it fell below the loaded surface.";
+                    } else {
+                        runtime->navigationStatus =
+                            "Failed to reset modern test character after it fell below terrain.";
+                        ++runtime->warningCount;
+                    }
+                    SDL_Log("%s", runtime->navigationStatus.c_str());
+                }
+            }
+
             frameTimings.sceneFixedTickMs = measureDebugOnly([&]() {
                 while (loop.shouldRunFixedUpdate()) {
                     runtime->scene.tickFixed(loop.fixedDeltaSeconds());
@@ -1756,12 +1858,35 @@ namespace {
                 }
                 if (navigationDebugControls.rebuildNavigationRequested) {
                     navigationDebugControls.rebuildNavigationRequested = false;
-                    if (std::optional<Engine::TerrainSourceDescriptor> source =
+                    if (runtime->usingOpenWorldStreaming) {
+                        runtime->navigationStatus = rebuildModernNavigationConnectivityFromLoadedTiles(
+                            runtime->navigationConnectivity,
+                            runtime->navigation);
+                        SDL_Log("%s", runtime->navigationStatus.c_str());
+                    } else if (std::optional<Engine::TerrainSourceDescriptor> source =
                             runtime->terrain.sourceMetadata(runtime->terrainSource)) {
                         rebuildModernNavigationWithSceneGeometry(*runtime, *source);
                     } else {
                         ++runtime->warningCount;
                     }
+                }
+                if (navigationDebugControls.requestCharacterNavigationTest) {
+                    navigationDebugControls.requestCharacterNavigationTest = false;
+                    runtime->navigationStatus =
+                        requestModernCharacterNavigationTest(*runtime, camera.position());
+                    debugDrawSettings.navigationCurrentPath = true;
+                    debugDrawSettings.navigationMeshEdges = true;
+                    SDL_Log("%s", runtime->navigationStatus.c_str());
+                }
+                if (navigationDebugControls.clearCharacterPathRequested) {
+                    navigationDebugControls.clearCharacterPathRequested = false;
+                    if (!runtime->characters.clearPath(runtime->playerCharacter)) {
+                        runtime->navigationStatus = "Failed to clear modern character path.";
+                        ++runtime->warningCount;
+                    } else {
+                        runtime->navigationStatus = "Cleared modern character navigation path.";
+                    }
+                    SDL_Log("%s", runtime->navigationStatus.c_str());
                 }
                 if (debugSettings.propMaxDrawDistance >= 0.0f || debugSettings.terrainMaxDrawDistance >= 0.0f) {
                     for (ModernTerrainChunkRuntime& chunk : runtime->terrainChunks) {

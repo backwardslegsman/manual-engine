@@ -53,15 +53,13 @@ namespace Engine {
             return dx * dx + dz * dz;
         }
 
-        glm::vec3 chunkCenter(const Renderer::Aabb& bounds, const TerrainSystem& terrain)
+        glm::vec3 chunkCenter(const Renderer::Aabb& bounds)
         {
-            glm::vec3 center{
+            return {
                 (bounds.min.x + bounds.max.x) * 0.5f,
-                0.0f,
+                (bounds.min.y + bounds.max.y) * 0.5f,
                 (bounds.min.z + bounds.max.z) * 0.5f,
             };
-            center.y = terrain.sampleHeight(center.x, center.z).value_or((bounds.min.y + bounds.max.y) * 0.5f);
-            return center;
         }
 
         bool insideEdgeBand(
@@ -109,6 +107,20 @@ namespace Engine {
         }
     }
 
+    void NavigationConnectivitySystem::rebuild(
+        const std::vector<ChunkCoord>& loadedNavChunks,
+        const NavigationSystem& navigation,
+        const NavAgentSettings& agent)
+    {
+        NavigationConnectivityBuildRequest request;
+        request.chunks = loadedNavChunks;
+        request.clearExisting = true;
+        const NavigationConnectivityBuildHandle handle = beginRebuild(std::move(request));
+        while (hasActiveRebuild(handle)) {
+            stepRebuild(handle, navigation, agent, std::numeric_limits<uint32_t>::max());
+        }
+    }
+
     void NavigationConnectivitySystem::rebuildChunk(
         ChunkCoord coord,
         const NavigationSystem& navigation,
@@ -116,6 +128,14 @@ namespace Engine {
         const NavAgentSettings& agent)
     {
         rebuildChunks(std::span<const ChunkCoord>{&coord, 1}, navigation, terrain, agent);
+    }
+
+    void NavigationConnectivitySystem::rebuildChunk(
+        ChunkCoord coord,
+        const NavigationSystem& navigation,
+        const NavAgentSettings& agent)
+    {
+        rebuildChunks(std::span<const ChunkCoord>{&coord, 1}, navigation, agent);
     }
 
     void NavigationConnectivitySystem::rebuildChunks(
@@ -130,6 +150,20 @@ namespace Engine {
         const NavigationConnectivityBuildHandle handle = beginRebuild(std::move(request));
         while (hasActiveRebuild(handle)) {
             stepRebuild(handle, navigation, terrain, agent, std::numeric_limits<uint32_t>::max());
+        }
+    }
+
+    void NavigationConnectivitySystem::rebuildChunks(
+        std::span<const ChunkCoord> coords,
+        const NavigationSystem& navigation,
+        const NavAgentSettings& agent)
+    {
+        NavigationConnectivityBuildRequest request;
+        request.chunks.assign(coords.begin(), coords.end());
+        request.clearExisting = false;
+        const NavigationConnectivityBuildHandle handle = beginRebuild(std::move(request));
+        while (hasActiveRebuild(handle)) {
+            stepRebuild(handle, navigation, agent, std::numeric_limits<uint32_t>::max());
         }
     }
 
@@ -159,6 +193,18 @@ namespace Engine {
         NavigationConnectivityBuildHandle handle,
         const NavigationSystem& navigation,
         const TerrainSystem& terrain,
+        const NavAgentSettings& agent,
+        uint32_t maxSamples)
+    {
+        (void)terrain;
+        NavigationConnectivityBuildStepResult result =
+            stepRebuild(handle, navigation, agent, maxSamples);
+        return result;
+    }
+
+    NavigationConnectivityBuildStepResult NavigationConnectivitySystem::stepRebuild(
+        NavigationConnectivityBuildHandle handle,
+        const NavigationSystem& navigation,
         const NavAgentSettings& agent,
         uint32_t maxSamples)
     {
@@ -213,7 +259,7 @@ namespace Engine {
                     break;
                 }
 
-                rebuild.connectivity.biomeId = terrain.sampleChunkBiome(coord).id;
+                rebuild.connectivity.biomeId = "nav_tile";
                 rebuild.connectivity.traversalCost = std::max(0.0f, rebuild.bounds->max.x - rebuild.bounds->min.x);
                 rebuild.sampleIndex = 0;
                 rebuild.phase = NavigationConnectivityBuildPhase::NorthEdge;
@@ -237,7 +283,7 @@ namespace Engine {
                         ? 0.5f
                         : static_cast<float>(rebuild.sampleIndex) / static_cast<float>(samples - 1);
                     std::optional<ChunkNavPortal> portal =
-                        buildPortalSample(coord, direction, t, *rebuild.bounds, navigation, terrain, agent, edgeDiagnostics);
+                        buildPortalSample(coord, direction, t, *rebuild.bounds, navigation, nullptr, agent, edgeDiagnostics);
                     if (portal) {
                         if (shouldMergePortal(portals, portal->position)) {
                             ++edgeDiagnostics.mergedDuplicateCount;
@@ -332,6 +378,7 @@ namespace Engine {
         settings.edgeBandWidth = std::max(settings.edgeBandWidth, 0.0f);
         settings.portalMergeDistance = std::max(settings.portalMergeDistance, 0.0f);
         settings.neighborLinkDistance = std::max(settings.neighborLinkDistance, 0.0f);
+        settings.maxPortalHeightDelta = std::max(settings.maxPortalHeightDelta, 0.0f);
         settings_ = settings;
     }
 
@@ -421,11 +468,12 @@ namespace Engine {
         NavEdgeDirection direction,
         float t,
         const Renderer::Aabb& bounds,
-        const NavigationSystem& navigation,
-        const TerrainSystem& terrain,
-        const NavAgentSettings& agent,
-        NavigationPortalEdgeDiagnostics& diagnostics) const
+            const NavigationSystem& navigation,
+            const TerrainSystem* terrain,
+            const NavAgentSettings& agent,
+            NavigationPortalEdgeDiagnostics& diagnostics) const
     {
+        (void)terrain;
         glm::vec3 sample{};
         switch (direction) {
             case NavEdgeDirection::North:
@@ -443,9 +491,9 @@ namespace Engine {
             case NavEdgeDirection::Count:
                 return std::nullopt;
         }
-        sample.y = terrain.sampleHeight(sample.x, sample.z).value_or((bounds.min.y + bounds.max.y) * 0.5f);
+        sample.y = (bounds.min.y + bounds.max.y) * 0.5f;
 
-        NavQueryResult nearest = navigation.nearestNavigablePoint(sample, agent);
+        NavQueryResult nearest = navigation.nearestNavigablePointInTile(coord, sample, agent);
         if (nearest.status != NavQueryStatus::Success) {
             ++diagnostics.rejectedNoNearestPolyCount;
             return std::nullopt;
@@ -455,10 +503,17 @@ namespace Engine {
             return std::nullopt;
         }
 
-        const NavQueryResult path = navigation.findPath(chunkCenter(bounds, terrain), nearest.point, agent);
-        if (path.status != NavQueryStatus::Success || path.path.points.empty()) {
-            ++diagnostics.rejectedCenterReachabilityCount;
-            return std::nullopt;
+        if (settings_.requireCenterReachability) {
+            const NavQueryResult center = navigation.nearestNavigablePointInTile(coord, chunkCenter(bounds), agent);
+            if (center.status != NavQueryStatus::Success) {
+                ++diagnostics.rejectedCenterReachabilityCount;
+                return std::nullopt;
+            }
+            const NavQueryResult path = navigation.findPath(center.point, nearest.point, agent);
+            if (path.status != NavQueryStatus::Success || path.path.points.empty()) {
+                ++diagnostics.rejectedCenterReachabilityCount;
+                return std::nullopt;
+            }
         }
 
         return ChunkNavPortal{
@@ -513,6 +568,12 @@ namespace Engine {
                     ChunkNavPortal* bestNeighbor = nullptr;
                     float bestDistanceSquared = linkDistanceSquared;
                     for (ChunkNavPortal& neighborPortal : neighborPortals) {
+                        if (std::abs(portal.position.y - neighborPortal.position.y) > settings_.maxPortalHeightDelta) {
+                            if (const auto diagnosticsIt = diagnostics_.find(connectivity.coord); diagnosticsIt != diagnostics_.end()) {
+                                ++diagnosticsIt->second.edges[directionIndex].rejectedHeightDeltaCount;
+                            }
+                            continue;
+                        }
                         const float distanceSquared = xzDistanceSquared(portal.position, neighborPortal.position);
                         if (distanceSquared <= bestDistanceSquared) {
                             bestDistanceSquared = distanceSquared;

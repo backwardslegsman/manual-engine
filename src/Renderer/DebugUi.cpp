@@ -124,6 +124,23 @@ namespace {
         return index < std::size(names) ? names[index] : "Unknown";
     }
 
+    const char* streamingProfileName(size_t index)
+    {
+        static constexpr const char* names[] = {
+            "Default",
+            "FarMetadata",
+            "CacheOnly",
+            "LowDetailLive",
+            "StandardLive",
+            "HighDetailLive",
+            "Behavior",
+            "Animation",
+            "AudioParticle",
+            "Editing",
+        };
+        return index < std::size(names) ? names[index] : "Unknown";
+    }
+
     void textVec3(const char* label, const glm::vec3& value)
     {
         ImGui::Text("%s: %.2f, %.2f, %.2f", label, value.x, value.y, value.z);
@@ -331,6 +348,28 @@ namespace {
         ImGui::Text("Shared asset refs / release us: %u / %llu",
             streaming.sharedAssetReferenceCount,
             static_cast<unsigned long long>(streaming.assetReleaseLatencyMicroseconds));
+        ImGui::Text("Scene chunks manifest / cached / promoted / demoted: %u / %u / %u / %u",
+            streaming.sceneChunkManifestCount,
+            streaming.cachedSceneChunkPayloadCount,
+            streaming.promotedSceneChunkCount,
+            streaming.demotedSceneChunkCount);
+        ImGui::Text("Scene chunk actors created / destroyed: %u / %u",
+            streaming.sceneChunkActorsCreated,
+            streaming.sceneChunkActorsDestroyed);
+        ImGui::Text("Scene chunk components created: %u", streaming.sceneChunkComponentsCreated);
+        ImGui::Text("Scene chunk issues dup IDs / parents / components / ownership: %u / %u / %u / %u",
+            streaming.sceneChunkDuplicateStableIdCount,
+            streaming.sceneChunkInvalidParentCount,
+            streaming.sceneChunkInvalidComponentCount,
+            streaming.sceneChunkUnsupportedOwnershipCount);
+        ImGui::Text("Variants / high-detail candidates: %u / %u",
+            streaming.variantRecordCount,
+            streaming.highDetailCandidateCount);
+        ImGui::Text("Focus candidates active / predictive / prefetched / retained: %u / %u / %u / %u",
+            streaming.activeFocusCandidateCount,
+            streaming.predictiveCandidateCount,
+            streaming.predictivePrefetchCount,
+            streaming.prefetchRetainedCount);
         if (streaming.hasLastFocus) {
             textVec3("Last focus", streaming.lastFocus);
         }
@@ -350,6 +389,25 @@ namespace {
             ImGui::Text("%u", streaming.desiredChunksByState[index]);
             ImGui::NextColumn();
             ImGui::Text("%u", streaming.actualChunksByState[index]);
+            ImGui::NextColumn();
+        }
+        ImGui::Columns(1);
+        ImGui::Separator();
+
+        ImGui::Text("Desired by profile");
+        ImGui::Columns(3, "streaming_profile_residency", false);
+        ImGui::Text("Profile");
+        ImGui::NextColumn();
+        ImGui::Text("Desired");
+        ImGui::NextColumn();
+        ImGui::Text("Limited");
+        ImGui::NextColumn();
+        for (size_t index = 0; index < streaming.desiredChunksByProfile.size(); ++index) {
+            ImGui::Text("%s", streamingProfileName(index));
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.desiredChunksByProfile[index]);
+            ImGui::NextColumn();
+            ImGui::Text("%u", streaming.transitionLimitedByProfile[index]);
             ImGui::NextColumn();
         }
         ImGui::Columns(1);
@@ -665,6 +723,16 @@ namespace Renderer::DebugUi {
                     state.navigation.cacheMisses,
                     state.navigation.cacheStale,
                     state.navigation.cacheWrites);
+                ImGui::Text("Connectivity chunks/portals/linked: %u / %u / %u",
+                    state.navigation.connectivityChunks,
+                    state.navigation.connectivityPortals,
+                    state.navigation.connectivityConnectedPortals);
+                ImGui::Text("Connectivity partial/blocked chunks: %u / %u",
+                    state.navigation.connectivityPartialChunks,
+                    state.navigation.connectivityBlockedChunks);
+                if (!state.navigation.connectivityStatus.empty()) {
+                    ImGui::TextWrapped("%s", state.navigation.connectivityStatus.c_str());
+                }
                 if (!state.navigation.cacheIdentity.empty()) {
                     ImGui::TextWrapped("Cache identity: %s", state.navigation.cacheIdentity.c_str());
                 }
@@ -730,6 +798,15 @@ namespace Renderer::DebugUi {
                 ImGui::Text("Last status: %s", state.character.lastStatus.empty() ? "<none>" : state.character.lastStatus.c_str());
                 if (!state.character.lastMessage.empty()) {
                     ImGui::TextWrapped("%s", state.character.lastMessage.c_str());
+                }
+                if (navigationControls) {
+                    if (ImGui::Button("Path Character To Camera")) {
+                        navigationControls->requestCharacterNavigationTest = true;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Clear Character Path")) {
+                        navigationControls->clearCharacterPathRequested = true;
+                    }
                 }
                 ImGui::EndTabItem();
             }

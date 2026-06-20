@@ -109,6 +109,18 @@ namespace {
         return chunk;
     }
 
+    Engine::TerrainImportedChunk flatImportedChunk(int32_t x, int32_t z, float originX, float originZ)
+    {
+        Engine::TerrainImportedChunk chunk;
+        chunk.id = {{901}, {x, z}};
+        chunk.coord = {x, z};
+        chunk.origin = {originX, 0.0f, originZ};
+        chunk.size = 4.0f;
+        chunk.resolution = 3;
+        chunk.heights.assign(9, 0.0f);
+        return chunk;
+    }
+
     Engine::GeneratedTerrainTileData generatedTile()
     {
         Engine::GeneratedTerrainTileData tile;
@@ -135,7 +147,11 @@ namespace {
         return settings;
     }
 
-    Engine::NavigationCacheManifest manifestFor(Engine::TerrainNavigationSourceIdentity source, uint32_t navigationResolution = 5)
+    Engine::NavigationCacheManifest manifestFor(
+        Engine::TerrainNavigationSourceIdentity source,
+        uint32_t navigationResolution = 5,
+        float borderPadding = 0.0f,
+        uint32_t borderSamples = 0)
     {
         Engine::NavigationCacheSettings settings;
         settings.worldId = "terrain-nav-adapter-test";
@@ -153,7 +169,9 @@ namespace {
             source.sourceHash,
             source.importSettings,
             source.sourceType == Engine::TerrainDatasetSourceType::HeightmapImported ? "heightmap_imported" : "procedural",
-            Engine::TerrainNavigationAdapterVersion);
+            Engine::TerrainNavigationAdapterVersion,
+            borderPadding,
+            borderSamples);
     }
 
     void datasetImportedChunkProducesDeterministicBuildData(TestContext& ctx)
@@ -252,6 +270,106 @@ namespace {
         }
     }
 
+    void borderNeighborhoodProducesExpandedGeometry(TestContext& ctx)
+    {
+        const std::vector<Engine::TerrainImportedChunk> chunks{
+            flatImportedChunk(0, 0, 0.0f, 0.0f),
+            flatImportedChunk(1, 0, 4.0f, 0.0f),
+        };
+        Engine::TerrainNavigationBuildSettings settings;
+        settings.navigationResolution = 5;
+        settings.borderSampleCount = 1;
+        const auto request = Engine::terrainNavigationRequestFromImportedChunkNeighborhood(
+            chunks,
+            chunks.front().id,
+            settings,
+            identity());
+        ctx.expect(request.has_value(), "border request was not built");
+        if (!request) {
+            return;
+        }
+        const Engine::TerrainNavigationBuildResult result = Engine::buildTerrainNavigationData(*request);
+        ctx.expect(result.success && result.buildData.has_value(), "border build failed");
+        if (!result.buildData) {
+            return;
+        }
+        ctx.expect(result.buildData->vertices.size() == 49, "border build vertex count was wrong");
+        ctx.expect(result.buildData->indices.size() == 216, "border build index count was wrong");
+        ctx.expect(result.buildData->rasterizationBounds.has_value(), "border build did not set rasterization bounds");
+        ctx.expect(near(result.buildData->bounds.min.x, 0.0f) && near(result.buildData->bounds.max.x, 4.0f),
+            "output tile bounds changed");
+        ctx.expect(result.buildData->rasterizationBounds &&
+                near(result.buildData->rasterizationBounds->min.x, -1.0f) &&
+                near(result.buildData->rasterizationBounds->max.x, 5.0f),
+            "rasterization bounds were not expanded");
+    }
+
+    void zeroBorderPreservesCompatibilityOutput(TestContext& ctx)
+    {
+        const std::vector<Engine::TerrainImportedChunk> chunks{importedChunk()};
+        Engine::TerrainNavigationBuildSettings settings;
+        settings.navigationResolution = 5;
+        settings.borderSampleCount = 0;
+        settings.borderPaddingWorld = 0.0f;
+        const auto request = Engine::terrainNavigationRequestFromImportedChunkNeighborhood(
+            chunks,
+            chunks.front().id,
+            settings,
+            identity());
+        const auto legacyRequest = Engine::terrainNavigationRequestFromGeneratedTile(generatedTile(), 5, identity());
+        ctx.expect(request.has_value() && legacyRequest.has_value(), "zero border requests were not built");
+        if (!request || !legacyRequest) {
+            return;
+        }
+        const Engine::TerrainNavigationBuildResult border = Engine::buildTerrainNavigationData(*request);
+        const Engine::TerrainNavigationBuildResult legacy = Engine::buildTerrainNavigationData(*legacyRequest);
+        ctx.expect(border.success && legacy.success && border.buildData && legacy.buildData, "zero border builds failed");
+        if (border.buildData && legacy.buildData) {
+            ctx.expect(sameBuildData(*border.buildData, *legacy.buildData), "zero border output differed from legacy output");
+        }
+    }
+
+    void seamProjectionSucceedsAcrossBorderAwareTiles(TestContext& ctx)
+    {
+        const std::vector<Engine::TerrainImportedChunk> chunks{
+            flatImportedChunk(0, 0, 0.0f, 0.0f),
+            flatImportedChunk(1, 0, 4.0f, 0.0f),
+        };
+        Engine::TerrainNavigationBuildSettings settings;
+        settings.navigationResolution = 9;
+        settings.borderSampleCount = 1;
+        Engine::NavigationSystem navigation;
+        Engine::NavBuildSettings buildSettings;
+        buildSettings.maxTiles = 8;
+        for (const Engine::TerrainImportedChunk& chunk : chunks) {
+            const auto request = Engine::terrainNavigationRequestFromImportedChunkNeighborhood(
+                chunks,
+                chunk.id,
+                settings,
+                identity());
+            ctx.expect(request.has_value(), "seam tile request was not built");
+            if (!request) {
+                return;
+            }
+            const Engine::TerrainNavigationBuildResult terrain = Engine::buildTerrainNavigationData(*request);
+            ctx.expect(terrain.success && terrain.buildData.has_value(), "seam terrain build failed");
+            if (!terrain.buildData) {
+                return;
+            }
+            const Engine::NavigationTileBuildResult tile =
+                Engine::NavigationSystem::buildTerrainTileData(*terrain.buildData, {}, buildSettings);
+            ctx.expect(tile.status == Engine::NavQueryStatus::Success && tile.tileData.has_value(),
+                "seam Detour tile build failed: " + tile.message);
+            if (tile.tileData) {
+                navigation.loadTerrainTileFromCache(*tile.tileData, tile.diagnostics);
+            }
+        }
+        const Engine::NavQueryResult left = navigation.nearestNavigablePoint({3.98f, 0.5f, 2.0f}, {});
+        const Engine::NavQueryResult right = navigation.nearestNavigablePoint({4.02f, 0.5f, 2.0f}, {});
+        ctx.expect(left.status == Engine::NavQueryStatus::Success, "left seam projection failed: " + left.message);
+        ctx.expect(right.status == Engine::NavQueryStatus::Success, "right seam projection failed: " + right.message);
+    }
+
     void invalidInputsFailCleanly(TestContext& ctx)
     {
         Engine::TerrainDataset dataset;
@@ -336,6 +454,8 @@ namespace {
         ctx.expect(baseManifest.identityHash != manifestFor(changedType).identityHash, "terrain source type did not affect nav cache identity");
 
         ctx.expect(baseManifest.identityHash != manifestFor(base, 3).identityHash, "navigation resolution did not affect nav cache identity");
+        ctx.expect(baseManifest.identityHash != manifestFor(base, 5, 1.0f, 1).identityHash,
+            "terrain navigation border settings did not affect nav cache identity");
     }
 }
 
@@ -348,6 +468,9 @@ int main()
         {"LegacyTerrainTileMatchesExistingBuildData", legacyTerrainTileMatchesExistingBuildData},
         {"GeneratedTileMatchesExistingStaticBuildData", generatedTileMatchesExistingStaticBuildData},
         {"NavigationResolutionReducesBuildGeometry", navigationResolutionReducesBuildGeometry},
+        {"BorderNeighborhoodProducesExpandedGeometry", borderNeighborhoodProducesExpandedGeometry},
+        {"ZeroBorderPreservesCompatibilityOutput", zeroBorderPreservesCompatibilityOutput},
+        {"SeamProjectionSucceedsAcrossBorderAwareTiles", seamProjectionSucceedsAcrossBorderAwareTiles},
         {"InvalidInputsFailCleanly", invalidInputsFailCleanly},
         {"AdapterBuildDataBuildsDetourTile", adapterBuildDataBuildsDetourTile},
         {"BlockersRemainExternal", blockersRemainExternal},

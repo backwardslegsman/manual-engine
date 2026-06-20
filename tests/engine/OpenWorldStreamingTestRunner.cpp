@@ -1355,6 +1355,224 @@ namespace {
             "physics collider settings change physics cache identity");
     }
 
+    void VariantKeysSeparatePayloadInstances(TestContext& ctx)
+    {
+        Engine::StreamingChunkManifestRecord low = Engine::makeTerrainStreamingManifestRecord(
+            terrainId(0, 0),
+            bounds(0.0f, 0.0f, 8.0f, 8.0f),
+            1,
+            1,
+            1,
+            Engine::StreamingPayloadKind::TerrainRenderLod,
+            "low");
+        low.key.variantId = "terrain_lod_0";
+        low.haloProfile = Engine::StreamingHaloProfile::LowDetailLive;
+        low.detailLevel = 0;
+
+        Engine::StreamingChunkManifestRecord high = low;
+        high.key.variantId = "terrain_lod_2";
+        high.haloProfile = Engine::StreamingHaloProfile::HighDetailLive;
+        high.detailLevel = 2;
+        high.debugName = "high";
+
+        ctx.expect(low.key != high.key, "variant IDs distinguish otherwise identical keys");
+        ctx.expect(Engine::hashStreamingManifestRecord(low) != Engine::hashStreamingManifestRecord(high), "variant IDs affect manifest hash");
+        ctx.expect(Engine::stableStreamingChunkKeyString(low.key).find("terrain_lod_0") != std::string::npos, "variant appears in stable key string");
+
+        Engine::StreamingReadDescriptorTable descriptors;
+        Engine::setStreamingReadDescriptor(
+            descriptors,
+            low.key,
+            low.payload,
+            Engine::hashStreamingManifestRecord(low),
+            Engine::fakeStreamingReadDescriptor(
+                Engine::StreamingReadStatus::Hit,
+                Engine::StreamingCachedPayload{Engine::StreamingMetadataPayload{"low"}}));
+        Engine::setStreamingReadDescriptor(
+            descriptors,
+            high.key,
+            high.payload,
+            Engine::hashStreamingManifestRecord(high),
+            Engine::fakeStreamingReadDescriptor(
+                Engine::StreamingReadStatus::Hit,
+                Engine::StreamingCachedPayload{Engine::StreamingMetadataPayload{"high"}}));
+
+        ctx.expect(Engine::findStreamingReadDescriptor(descriptors, low.key, low.payload) != nullptr, "low variant descriptor found");
+        ctx.expect(Engine::findStreamingReadDescriptor(descriptors, high.key, high.payload) != nullptr, "high variant descriptor found");
+    }
+
+    void LodProfilesProduceIndependentDecisions(TestContext& ctx)
+    {
+        Engine::StreamingChunkManifest manifest;
+        Engine::StreamingChunkManifestRecord low = Engine::makeTerrainStreamingManifestRecord(
+            terrainId(0, 0),
+            bounds(70.0f, 0.0f, 78.0f, 8.0f),
+            1,
+            1,
+            1,
+            Engine::StreamingPayloadKind::TerrainRenderLod);
+        low.key.variantId = "terrain_lod_low";
+        low.haloProfile = Engine::StreamingHaloProfile::LowDetailLive;
+        manifest.records.push_back(low);
+
+        Engine::StreamingChunkManifestRecord high = low;
+        high.key.variantId = "terrain_lod_high";
+        high.haloProfile = Engine::StreamingHaloProfile::HighDetailLive;
+        high.detailLevel = 2;
+        manifest.records.push_back(high);
+
+        Engine::StreamingHaloPlannerSettings settings = Engine::defaultStreamingHaloPlannerSettings();
+        settings.profilePolicies[static_cast<uint32_t>(Engine::StreamingPayloadKind::TerrainRenderLod)]
+            [static_cast<uint32_t>(Engine::StreamingHaloProfile::LowDetailLive)].activeRadius = 96.0f;
+        settings.profilePolicies[static_cast<uint32_t>(Engine::StreamingPayloadKind::TerrainRenderLod)]
+            [static_cast<uint32_t>(Engine::StreamingHaloProfile::LowDetailLive)].cacheRadius = 128.0f;
+        settings.profilePolicies[static_cast<uint32_t>(Engine::StreamingPayloadKind::TerrainRenderLod)]
+            [static_cast<uint32_t>(Engine::StreamingHaloProfile::HighDetailLive)].activeRadius = 24.0f;
+        settings.profilePolicies[static_cast<uint32_t>(Engine::StreamingPayloadKind::TerrainRenderLod)]
+            [static_cast<uint32_t>(Engine::StreamingHaloProfile::HighDetailLive)].cacheRadius = 48.0f;
+
+        const Engine::StreamingHaloPlan plan = Engine::planStreamingHalo(
+            manifest,
+            {0.0f, 0.0f, 0.0f},
+            {},
+            settings);
+
+        bool lowLive = false;
+        bool highCold = false;
+        for (const Engine::StreamingChunkResidencyDecision& decision : plan.decisions) {
+            lowLive |= decision.key.variantId == "terrain_lod_low" &&
+                decision.desired == Engine::StreamingResidencyState::LiveActive;
+            highCold |= decision.key.variantId == "terrain_lod_high" &&
+                decision.desired == Engine::StreamingResidencyState::ColdOnDisk;
+        }
+        ctx.expect(lowLive, "low-detail LOD live at broader radius");
+        ctx.expect(highCold, "high-detail LOD remains cold outside inner halo");
+        ctx.expect(plan.diagnostics.variantRecordCount == 2, "two variants counted");
+        ctx.expect(plan.diagnostics.highDetailCandidateCount == 1, "high-detail candidate counted");
+    }
+
+    void FarMetadataAndCacheOnlyProfilesStayCached(TestContext& ctx)
+    {
+        Engine::StreamingChunkManifest manifest;
+        Engine::StreamingChunkManifestRecord metadata = Engine::makeSceneStreamingManifestRecord(
+            "sector/far",
+            bounds(220.0f, 0.0f, 230.0f, 8.0f),
+            1,
+            1,
+            1,
+            Engine::StreamingPayloadKind::SceneChunk);
+        metadata.key.variantId = "scene_metadata";
+        metadata.haloProfile = Engine::StreamingHaloProfile::FarMetadata;
+        manifest.records.push_back(metadata);
+
+        const Engine::StreamingHaloPlan plan = Engine::planStreamingHalo(
+            manifest,
+            {0.0f, 0.0f, 0.0f},
+            {},
+            Engine::defaultStreamingHaloPlannerSettings());
+
+        ctx.expect(plan.decisions.size() == 1, "metadata decision emitted");
+        ctx.expect(plan.decisions.front().desired == Engine::StreamingResidencyState::CachedCpu, "far metadata caches without live promotion");
+        ctx.expect(plan.diagnostics.desiredChunksByProfile[static_cast<uint32_t>(Engine::StreamingHaloProfile::FarMetadata)] == 1, "far metadata profile counted");
+    }
+
+    void ProfileTransitionCapsDoNotBlockStandardLive(TestContext& ctx)
+    {
+        Engine::StreamingChunkManifest manifest;
+        for (int index = 0; index < 2; ++index) {
+            Engine::StreamingChunkManifestRecord high = Engine::makeTerrainStreamingManifestRecord(
+                terrainId(index, 0),
+                bounds(static_cast<float>(index * 2), 0.0f, static_cast<float>(index * 2 + 1), 1.0f),
+                1,
+                1,
+                1,
+                Engine::StreamingPayloadKind::TerrainRenderLod);
+            high.key.variantId = "terrain_lod_high_" + std::to_string(index);
+            high.haloProfile = Engine::StreamingHaloProfile::HighDetailLive;
+            manifest.records.push_back(high);
+        }
+        Engine::StreamingChunkManifestRecord standard = Engine::makeTerrainStreamingManifestRecord(
+            terrainId(99, 0),
+            bounds(0.0f, 4.0f, 1.0f, 5.0f),
+            1,
+            1,
+            1,
+            Engine::StreamingPayloadKind::TerrainRenderLod);
+        standard.key.variantId = "terrain_lod_standard";
+        standard.haloProfile = Engine::StreamingHaloProfile::StandardLive;
+        manifest.records.push_back(standard);
+
+        Engine::StreamingHaloPlannerSettings settings = Engine::defaultStreamingHaloPlannerSettings();
+        auto& highPolicy = settings.profilePolicies[static_cast<uint32_t>(Engine::StreamingPayloadKind::TerrainRenderLod)]
+            [static_cast<uint32_t>(Engine::StreamingHaloProfile::HighDetailLive)];
+        highPolicy.activeRadius = 20.0f;
+        highPolicy.cacheRadius = 30.0f;
+        highPolicy.maxTransitionsPerFrame = 1;
+        settings.profilePolicies[static_cast<uint32_t>(Engine::StreamingPayloadKind::TerrainRenderLod)]
+            [static_cast<uint32_t>(Engine::StreamingHaloProfile::StandardLive)].activeRadius = 20.0f;
+
+        const Engine::StreamingHaloPlan plan = Engine::planStreamingHalo(
+            manifest,
+            {0.0f, 0.0f, 0.0f},
+            {},
+            settings);
+
+        ctx.expect(plan.diagnostics.transitionLimitedByProfile[static_cast<uint32_t>(Engine::StreamingHaloProfile::HighDetailLive)] == 1, "only high-detail profile is capped");
+        bool standardLive = false;
+        for (const Engine::StreamingChunkResidencyDecision& decision : plan.decisions) {
+            standardLive |= decision.key.variantId == "terrain_lod_standard" &&
+                decision.desired == Engine::StreamingResidencyState::LiveActive &&
+                !decision.transitionLimited;
+        }
+        ctx.expect(standardLive, "standard live transition not blocked by high-detail cap");
+    }
+
+    void PredictivePrefetchIsCacheOnlyAndLowerPriority(TestContext& ctx)
+    {
+        Engine::StreamingChunkManifest manifest;
+        Engine::StreamingChunkManifestRecord active = Engine::makeTerrainStreamingManifestRecord(
+            terrainId(0, 0),
+            bounds(0.0f, 0.0f, 4.0f, 4.0f),
+            1,
+            1,
+            1,
+            Engine::StreamingPayloadKind::TerrainChunk);
+        manifest.records.push_back(active);
+        Engine::StreamingChunkManifestRecord predicted = Engine::makeTerrainStreamingManifestRecord(
+            terrainId(1, 0),
+            bounds(80.0f, 0.0f, 84.0f, 4.0f),
+            1,
+            1,
+            1,
+            Engine::StreamingPayloadKind::TerrainChunk);
+        manifest.records.push_back(predicted);
+
+        Engine::StreamingHaloPlannerSettings settings = plannerSettings(8.0f, 16.0f);
+        settings.payloadPolicies[static_cast<uint32_t>(Engine::StreamingPayloadKind::TerrainChunk)].cacheRadius = 48.0f;
+        settings.payloadPolicies[static_cast<uint32_t>(Engine::StreamingPayloadKind::TerrainChunk)].maxTransitionsPerFrame = 1;
+
+        Engine::StreamingFocusInput focus;
+        focus.position = {0.0f, 0.0f, 0.0f};
+        focus.velocity = glm::vec3{40.0f, 0.0f, 0.0f};
+        focus.predictionSeconds = 2.0f;
+        focus.maxPredictionDistance = 96.0f;
+        focus.goalFocusPoints.push_back({82.0f, 0.0f, 2.0f});
+
+        const Engine::StreamingHaloPlan plan = Engine::planStreamingHalo(manifest, focus, {}, settings);
+        ctx.expect(plan.diagnostics.activeFocusCandidateCount == 1, "active focus candidate counted");
+        ctx.expect(plan.diagnostics.predictiveCandidateCount == 1, "predictive candidate counted");
+        ctx.expect(plan.diagnostics.predictivePrefetchCount == 1, "predictive prefetch counted");
+        ctx.expect(plan.decisions.front().desired == Engine::StreamingResidencyState::LiveActive, "active live decision sorted first");
+        bool predictedLimitedToCold = false;
+        for (const Engine::StreamingChunkResidencyDecision& decision : plan.decisions) {
+            predictedLimitedToCold |= decision.key.terrainChunk.coord.x == 1 &&
+                decision.predictiveCandidate &&
+                decision.transitionLimited &&
+                decision.desired == Engine::StreamingResidencyState::ColdOnDisk;
+        }
+        ctx.expect(predictedLimitedToCold, "predictive cache transition is capped after active live work");
+    }
+
     void DebugUiHeaderHasStreamingPlaceholder(TestContext& ctx)
     {
         const std::string header = readSourceFile("src/Renderer/DebugUi.hpp");
@@ -1372,6 +1590,8 @@ namespace {
         ctx.expect(header.find("generationQueuedCount") != std::string::npos, "streaming generation stats exposed");
         ctx.expect(header.find("assetDependencyManifestCount") != std::string::npos, "streaming asset dependency stats exposed");
         ctx.expect(header.find("liveAssetTextureCount") != std::string::npos, "streaming live asset texture stats exposed");
+        ctx.expect(header.find("desiredChunksByProfile") != std::string::npos, "streaming profile stats exposed");
+        ctx.expect(header.find("predictivePrefetchCount") != std::string::npos, "streaming predictive prefetch stats exposed");
         ctx.expect(header.find("WorldSave") == std::string::npos, "legacy world save debug UI absent");
         ctx.expect(header.find("DebugPicking") == std::string::npos, "legacy picking debug UI absent");
         ctx.expect(header.find("InteractionDebug") == std::string::npos, "legacy interaction debug UI absent");
@@ -1421,6 +1641,11 @@ int main()
         {"FullHeightmapBakeWritesAllPayloads", FullHeightmapBakeWritesAllPayloads},
         {"BakedPayloadsReadThroughCacheHalo", BakedPayloadsReadThroughCacheHalo},
         {"BakeIdentityChangesWithSettings", BakeIdentityChangesWithSettings},
+        {"VariantKeysSeparatePayloadInstances", VariantKeysSeparatePayloadInstances},
+        {"LodProfilesProduceIndependentDecisions", LodProfilesProduceIndependentDecisions},
+        {"FarMetadataAndCacheOnlyProfilesStayCached", FarMetadataAndCacheOnlyProfilesStayCached},
+        {"ProfileTransitionCapsDoNotBlockStandardLive", ProfileTransitionCapsDoNotBlockStandardLive},
+        {"PredictivePrefetchIsCacheOnlyAndLowerPriority", PredictivePrefetchIsCacheOnlyAndLowerPriority},
         {"DebugUiHeaderHasStreamingPlaceholder", DebugUiHeaderHasStreamingPlaceholder},
     };
 

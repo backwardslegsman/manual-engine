@@ -79,7 +79,7 @@ namespace Engine {
 
     struct TerrainPhysicsColliderCreateDescriptor {
         bool enabled = true;
-        ScenePhysicsLayer layer;
+        ScenePhysicsLayer layer{4u};
         ScenePhysicsMaterial material;
         std::string debugName;
     };

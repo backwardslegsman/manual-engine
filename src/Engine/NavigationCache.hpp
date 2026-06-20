@@ -36,6 +36,8 @@ namespace Engine {
         AssetImportSettingsKey terrainImportSettings;
         std::string terrainSourceType = "unknown";
         std::string terrainNavigationAdapterVersion = "terrain_navigation_adapter_t5_v1";
+        float terrainNavigationBorderPaddingWorld = 0.0f;
+        uint32_t terrainNavigationBorderSampleCount = 0;
         std::string sceneGeometryHash;
         float sceneGeometryMaxSlopeDegrees = 45.0f;
         float sceneGeometryTileBoundsPadding = 0.45f;
@@ -124,6 +126,8 @@ namespace Engine {
             AssetImportSettingsKey terrainImportSettings = {},
             std::string terrainSourceType = "unknown",
             std::string terrainNavigationAdapterVersion = "terrain_navigation_adapter_t5_v1",
+            float terrainNavigationBorderPaddingWorld = 0.0f,
+            uint32_t terrainNavigationBorderSampleCount = 0,
             std::string sceneGeometryHash = {},
             float sceneGeometryMaxSlopeDegrees = 45.0f,
             float sceneGeometryTileBoundsPadding = 0.45f,

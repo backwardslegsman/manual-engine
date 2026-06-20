@@ -382,6 +382,7 @@ namespace Engine {
         result.bounds = request.bounds;
 
         if (terrainBase) {
+            result.rasterizationBounds = terrainBase->rasterizationBounds;
             result.vertices = terrainBase->vertices;
             result.indices = terrainBase->indices;
             result.blockingVertices = terrainBase->blockingVertices;

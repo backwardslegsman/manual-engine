@@ -141,10 +141,11 @@ Worker jobs must operate on immutable snapshots and return plain result structs.
 ### Navigation
 
 - Navmesh for the heightmap should be baked per tile/chunk using `TerrainNavigationAdapter` plus optional filtered scene geometry.
+- Terrain nav tiles should be generated from a border-expanded source sampling apron while retaining the original durable tile coord and tile bounds. This gives Recast neighbor geometry at chunk seams without creating extra runtime terrain chunks or changing nav tile identity.
 - Cache files store Detour tile bytes through `NavigationCache`.
 - Cache halo reads or builds tile bytes.
 - Active halo inserts tile bytes into `NavigationSystem`.
-- Geometry filters should include world-space slope and padded tile bounds. Future walkable/blocker/ignore tags should join the cache identity.
+- Geometry filters should include world-space slope and padded tile bounds. Scene/static geometry filtering should use the normal tile padding plus the terrain nav border padding so authored geometry near tile edges participates in seam builds. Future walkable/blocker/ignore tags should join the cache identity.
 
 ### Physics
 
@@ -297,28 +298,84 @@ Tests:
 
 ### Phase S6 - Scene Chunk Serialization Integration
 
-- Extend scene serialization from whole-scene core records to chunked scene actor/component payloads.
-- Deserialize chunk records into cache halo records.
-- Activate actors/components only in active halo.
-- Add actor migration policy for dynamic actors crossing chunk boundaries.
+Status: implemented as an Engine API plus tests, with no App streaming policy integration yet. `Engine::OpenWorldStreamingSceneChunks` adds durable scene chunk manifest helpers, scene-binary read descriptors, cached CPU scene chunk payloads, and main-thread promotion/demotion callbacks that restore core `Scene` actors, local transforms, hierarchy, and metadata-only components from existing Phase 13 scene binaries.
+
+- Scene chunk records use existing `StreamingChunkKeyKind::SceneChunk` and `StreamingPayloadKind::SceneChunk` with stable chunk IDs, world bounds, source/settings hashes, estimated bytes, ownership policy, debug names, and optional `AssetId` dependency metadata.
+- Cache-halo read/decode supports scene chunk binary payload files through `readSceneBinary`; valid payloads become `StreamingSceneChunkPayload` records, while corrupt/stale/invalid files are diagnostics and never mutate a live scene.
+- Active-halo promotion is callback-owned and main-thread-only. It validates the cached scene payload, creates actors with preserved `SceneObjectId`, restores hierarchy, attaches metadata-only components, and returns only a streaming runtime token for later demotion.
+- Demotion destroys only actors created by that chunk binding and can flush destroyed actor slots deterministically.
+- Actor ownership policy is explicit: `ChunkOwnedStatic` actors live only with the chunk; `Global` actors must already exist and are not duplicated or destroyed by the chunk; `Migratory` actors are claim-tracked by `SceneObjectId` so overlapping chunks cannot duplicate them. Automatic bounds-based migration is still deferred.
+- Scene chunk diagnostics and the Debug UI Streaming tab expose manifest, cached payload, promote/demote, created/destroyed actor/component, duplicate stable ID, invalid parent/component, and unsupported ownership counters.
+- S6 still does not stream renderer resources, physics bodies/colliders, nav tiles, terrain chunks, behavior hooks, Lua VM state, App gameplay, or `AssetCache` resources. Those remain separate payloads or later integration work.
 
 Tests:
 
-- stable `SceneObjectId` survives chunk unload/reload;
-- runtime handles are regenerated safely;
-- dynamic actor ownership does not duplicate actors across chunks.
+- scene chunk manifest records use stable IDs and exclude runtime handles;
+- valid scene binaries read into cache-halo `StreamingSceneChunkPayload` records;
+- corrupt scene binaries and invalid cached scene records fail before live mutation;
+- promotion/demotion round-trips actors, hierarchy, and metadata-only components while regenerating transient handles;
+- duplicate chunk-owned IDs are rejected;
+- `Global` and `Migratory` ownership policies prevent duplicate actors across chunks.
 
 ### Phase S7 - LOD And Multi-Halo Refinement
 
-- Add finer halos for high-detail render LODs, texture mips, AI behavior, animation ticking, particles/audio, and far metadata.
-- Add per-system residency policies and debug views.
-- Add predictive prefetch based on camera velocity and path/goal direction.
+Status: implemented as an Engine planner/API refinement plus tests, with no App streaming policy integration yet. `Engine::OpenWorldStreaming` now supports variant IDs on durable streaming keys, per-record halo profiles, per-profile residency policies, detail levels, priority bias, predictive focus input, and profile/prefetch diagnostics. Existing S1-S6 callers continue to use the default profile and empty variant ID.
+
+- Durable streaming identity now includes optional `variantId`, so one chunk can carry independent records such as `terrain_lod_0`, `terrain_lod_2`, `scene_metadata`, `texture_mip_high`, or future behavior/animation/audio variants.
+- Manifest records can specify `StreamingHaloProfile`, `detailLevel`, and `priorityBias`. Default profile behavior preserves the older per-payload active/cache policy.
+- Profile policies allow far metadata and cache-only records to warm CPU payloads without live promotion, while high-detail records use smaller active/cache radii and independent transition caps.
+- `StreamingFocusInput` adds current position, optional velocity prediction, prediction distance limits, and optional goal/path focus points. Predictive focus upgrades cold records to cache by default but does not request live promotion unless a policy explicitly allows predictive live work.
+- Decision ordering now prioritizes live work, cache work, profile priority, distance, priority bias, payload kind, and durable key. Transition caps are applied per payload/profile pair.
+- Debug UI streaming stats now expose profile counts, variant record counts, high-detail candidates, active vs predictive candidates, predictive prefetches, retained prefetches, and profile-limited transitions.
+- S7 still does not implement real texture mip streaming, behavior/animation tick migration, audio/particles, editor halos, or default App streaming integration.
 
 Tests:
 
-- high-detail resources promote only in inner halos;
-- far metadata stays cheap;
-- prefetch does not evict active resources under pressure.
+- variant keys distinguish multiple payload records for the same durable chunk;
+- old empty-variant/default-profile records preserve S1-S6 behavior;
+- terrain render LOD variants produce independent decisions;
+- far metadata and cache-only profiles stay cached without live promotion;
+- high-detail profile records promote only in inner halos;
+- per-profile caps limit high-detail transitions without blocking standard live records;
+- predictive velocity/goal focus prefetches cache records without requesting live promotion by default;
+- active-focus work outranks predictive prefetch under transition pressure.
+
+### Phase S8 - Modern Runtime Streaming Integration And Roadmap Closure
+
+Status: implemented as the roadmap completion milestone. `Engine::OpenWorldStreamingRuntime` now coordinates saved-build validation, S1 halo planning, S2 cache reads, S4 generation hooks, and S3 live promotion/demotion for the modern default runtime. The Debug and Release modern default scene validates `generated/open_world_streaming/modern_default/manifest.yaml`, rebuilds heightmap-derived streaming cache data when the saved build is missing or version/source/settings identities change, and feeds real streaming diagnostics into the Debug UI.
+
+- The modern default streaming runtime coordinator wraps the existing planner, cache halo, generation halo, and live halo. The coordinator owns transient residency snapshots, queue updates, generation policy, promotion/demotion callback wiring, and debug diagnostics for the default scene, while live-system mutation remains callback-owned.
+- Build the startup streaming manifest from the full-heightmap bake manifest, scene chunk records, terrain render LOD records, navigation tile records, physics collider records, and asset dependency records. Manifest records must keep using durable terrain chunk IDs, scene chunk IDs, `AssetId`s, variant IDs, source hashes, settings hashes, and version strings; no runtime handles may enter the manifest.
+- On startup, validate the saved streaming build on disk before the modern scene starts. A build is current only when its source file hashes, import settings, chunk sizing, render LOD settings, nav settings, slope/tile filtering settings, physics collider settings, asset dependency identities, scene chunk schema, payload versions, and streaming bake/runtime version strings match the active runtime.
+- If no current streaming build exists, or if any relevant version/source/settings identity changed, rebuild the heightmap-derived streaming data explicitly before using it. The rebuild may run as startup/tool work with progress diagnostics, but it must not be hidden inside frame setters or repeated every frame. The output becomes the new saved streaming build for later launches.
+- Reuse current saved build artifacts when validation succeeds. Repeated startup with unchanged inputs should avoid heightmap import, render LOD generation, nav tile generation, and physics collider generation except for cache reads needed by the cache halo.
+- Feed camera/player focus into `planStreamingHalo` each frame. Predictive focus should use camera/player velocity and optional path/goal hints to warm cache halo records without promoting them live unless the profile policy explicitly allows predictive live promotion.
+- Wire cache-halo reads for terrain chunks, terrain render LOD payloads, navigation tile bytes, terrain physics collider payloads, scene binary chunks, and metadata-only asset dependencies. Cache misses/stale/corrupt records use read-only or generation-on-miss policy according to runtime settings, and generation jobs run through `AsyncWorkQueue`.
+- Wire live-halo promotion and demotion callbacks for the default scene:
+  - terrain render LOD payloads create/destroy renderer terrain handles under a main-thread budget;
+  - navigation tile payloads insert/remove live `NavigationSystem` tiles under a main-thread budget;
+  - terrain physics collider payloads create/destroy `ScenePhysicsWorld` static terrain colliders under a main-thread budget;
+  - scene chunk payloads promote/demote core scene actors/components through `OpenWorldStreamingSceneChunks`;
+  - static mesh and texture asset dependencies promote/demote through `OpenWorldStreamingAssets` and `AssetCache`;
+  - unsupported material, skinned mesh, animation, behavior, audio, particle, and editor payload variants remain metadata/diagnostic records until their owners provide streamable callbacks.
+- Keep active-halo demotion from losing cache-halo CPU residency. Leaving the cache halo releases CPU cache payloads or queues generated-cache writes only when policy requires it.
+- Add an explicit startup/build status line and Debug UI streaming counters for build validation, rebuild reason, bake progress, source/version mismatch, cache reuse, queue sizes, CPU timings, cache hit/miss/stale/corrupt/write counts, generation jobs, live promotions/demotions, live resource counts, and last failures.
+- Compatibility modes remain available, but the Debug and Release modern default scene uses the S8 streaming runtime for heightmap-derived streaming build validation and terrain/nav/physics/render payload residency instead of relying on eager fixed-patch startup as the normal path.
+- Adjacent streamed nav tiles are connected through `NavigationConnectivitySystem` portal records. Navigation tile promotion refreshes the promoted tile plus cardinal neighbors, tile demotion removes/relinks affected connectivity, and `SceneNavigationService` can stitch loaded-tile routes through connected portals when a direct Detour path is unavailable. Terrain nav tiles are now also baked from border-aware sample aprons (`terrain_navigation_adapter_border_v1`) so seam continuity is primarily handled by the tile bytes themselves, with portals remaining as the routing/debug layer.
+
+Tests:
+
+- missing saved streaming build triggers an explicit heightmap bake/rebuild and writes a reusable build manifest;
+- unchanged source/settings/version identities reuse the saved streaming build on the next startup;
+- changing the heightmap source hash, import settings, render LOD settings, nav settings, slope/tile filtering settings, physics collider settings, scene chunk schema, asset dependency identity, or payload version invalidates the saved build and rebuilds only the affected payload classes where practical;
+- modern default runtime feeds camera/player focus into the planner and updates desired residency without blocking frame time;
+- cache halo asynchronously reads terrain chunk, terrain LOD, nav tile, physics collider, scene chunk, and asset dependency records from the saved build;
+- generation-on-miss runs only when runtime policy enables it and never mutates live renderer, navigation, physics, scene, or App state from worker jobs;
+- active halo promotes/demotes renderer terrain, nav tiles, terrain physics colliders, scene chunks, and supported asset dependencies under main-thread budgets;
+- leaving active halo demotes live resources while retaining cached CPU payloads inside cache halo;
+- leaving cache halo releases CPU payloads or queues dirty generated writes according to policy;
+- Debug UI displays build validation/rebuild status, queue sizes, timings, cache results, generation jobs, live resource counts, and last failures from the real runtime coordinator;
+- runtime handles never appear in saved streaming build manifests, derived cache files, serialized scene chunks, or debug/export payloads.
 
 ## Debug Counters And Timings
 
@@ -369,11 +426,13 @@ Debug draw should include:
 - Should cache halo preload renderer resources or stop at CPU payloads for the first pass?
 - Should full-heightmap bake be a standalone executable/tool target or an in-App debug command first?
 - What compression format should chunk payloads use after the raw binary format is validated?
-- How much border padding is required for nav/physics seams at terrain chunk boundaries?
+- How much border padding is required for physics seams at terrain chunk boundaries? Terrain nav seams now use border-aware bake settings in cache identity.
 - Which dynamic actor classes are global versus chunk-owned versus migratory?
 
 ## Acceptance For First Usable Streaming Version
 
+- Default Debug and Release modern scenes use the S8 streaming runtime instead of eager fixed-patch terrain/nav/physics loading.
+- Startup validates a saved streaming build and rebuilds the heightmap-derived build data when it is missing, stale, corrupt, or version/source/settings identity no longer matches.
 - Moving the camera updates desired residency without blocking frame time.
 - Cache halo asynchronously reads terrain/nav/physics/scene payloads.
 - Active halo promotes cached chunks under a main-thread budget.

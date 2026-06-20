@@ -91,10 +91,16 @@ namespace Renderer::DebugUi {
         uint32_t cacheMisses = 0;
         uint32_t cacheStale = 0;
         uint32_t cacheWrites = 0;
+        uint32_t connectivityChunks = 0;
+        uint32_t connectivityPortals = 0;
+        uint32_t connectivityConnectedPortals = 0;
+        uint32_t connectivityPartialChunks = 0;
+        uint32_t connectivityBlockedChunks = 0;
         std::string lastBuildStatus;
         std::string lastBuildMessage;
         std::string lastQueryStatus;
         std::string lastQueryMessage;
+        std::string connectivityStatus;
         std::string cacheIdentity;
     };
 
@@ -146,6 +152,8 @@ namespace Renderer::DebugUi {
         std::array<uint32_t, 8> desiredChunksByState{};
         std::array<uint32_t, 8> actualChunksByState{};
         std::array<uint32_t, 7> desiredChunksByPayload{};
+        std::array<uint32_t, 10> desiredChunksByProfile{};
+        std::array<uint32_t, 10> transitionLimitedByProfile{};
         std::array<uint32_t, 7> transitionCountThisFrame{};
         std::array<uint32_t, 7> queuedByLane{};
         std::array<uint32_t, 7> activeJobsByLane{};
@@ -204,8 +212,25 @@ namespace Renderer::DebugUi {
         uint32_t unsupportedAssetDependencyCount = 0;
         uint32_t sharedAssetReferenceCount = 0;
         uint64_t assetReleaseLatencyMicroseconds = 0;
+        uint32_t sceneChunkManifestCount = 0;
+        uint32_t cachedSceneChunkPayloadCount = 0;
+        uint32_t promotedSceneChunkCount = 0;
+        uint32_t demotedSceneChunkCount = 0;
+        uint32_t sceneChunkActorsCreated = 0;
+        uint32_t sceneChunkComponentsCreated = 0;
+        uint32_t sceneChunkActorsDestroyed = 0;
+        uint32_t sceneChunkDuplicateStableIdCount = 0;
+        uint32_t sceneChunkInvalidParentCount = 0;
+        uint32_t sceneChunkInvalidComponentCount = 0;
+        uint32_t sceneChunkUnsupportedOwnershipCount = 0;
         uint32_t hysteresisChurnCount = 0;
         uint32_t evictionBlockedCount = 0;
+        uint32_t variantRecordCount = 0;
+        uint32_t activeFocusCandidateCount = 0;
+        uint32_t predictiveCandidateCount = 0;
+        uint32_t predictivePrefetchCount = 0;
+        uint32_t prefetchRetainedCount = 0;
+        uint32_t highDetailCandidateCount = 0;
         bool hasLastFailure = false;
         std::string lastFailureLane;
         std::string lastFailurePayload;
@@ -235,6 +260,8 @@ namespace Renderer::DebugUi {
     struct ModernNavigationDebugControls {
         bool rebuildNavigationRequested = false;
         bool clearCacheStatsRequested = false;
+        bool requestCharacterNavigationTest = false;
+        bool clearCharacterPathRequested = false;
     };
 
     struct ModernDebugUiState {

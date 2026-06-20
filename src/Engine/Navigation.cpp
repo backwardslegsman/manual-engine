@@ -49,6 +49,7 @@ namespace Engine {
                 buildData.indices.size() % 3 == 0 &&
                 buildData.blockingIndices.size() % 3 == 0 &&
                 validAabb(buildData.bounds) &&
+                (!buildData.rasterizationBounds.has_value() || validAabb(*buildData.rasterizationBounds)) &&
                 std::ranges::all_of(buildData.vertices, finiteVec3) &&
                 std::ranges::all_of(buildData.blockingVertices, finiteVec3) &&
                 std::ranges::all_of(buildData.indices, [&](uint32_t index) {
@@ -319,6 +320,7 @@ namespace Engine {
         const int vertCount = static_cast<int>(buildVertices.size());
         const int triCount = static_cast<int>(buildIndices.size() / 3);
         const int terrainTriCount = static_cast<int>(buildData.indices.size() / 3);
+        const Renderer::Aabb rasterizationBounds = buildData.rasterizationBounds.value_or(buildData.bounds);
 
         NavigationTileDiagnostics diagnostics;
         diagnostics.coord = buildData.coord;
@@ -351,12 +353,12 @@ namespace Engine {
         cfg.detailSampleDist = settings.detailSampleDist < 0.9f ? 0.0f : cfg.cs * settings.detailSampleDist;
         cfg.detailSampleMaxError = cfg.ch * settings.detailSampleMaxError;
         cfg.borderSize = static_cast<int>(settings.tileBorderSize);
-        cfg.bmin[0] = buildData.bounds.min.x;
-        cfg.bmin[1] = buildData.bounds.min.y;
-        cfg.bmin[2] = buildData.bounds.min.z;
-        cfg.bmax[0] = buildData.bounds.max.x;
-        cfg.bmax[1] = buildData.bounds.max.y;
-        cfg.bmax[2] = buildData.bounds.max.z;
+        cfg.bmin[0] = rasterizationBounds.min.x;
+        cfg.bmin[1] = rasterizationBounds.min.y;
+        cfg.bmin[2] = rasterizationBounds.min.z;
+        cfg.bmax[0] = rasterizationBounds.max.x;
+        cfg.bmax[1] = rasterizationBounds.max.y;
+        cfg.bmax[2] = rasterizationBounds.max.z;
         rcCalcGridSize(cfg.bmin, cfg.bmax, cfg.cs, &cfg.width, &cfg.height);
         diagnostics.heightfieldWidth = static_cast<uint32_t>(std::max(cfg.width, 0));
         diagnostics.heightfieldHeight = static_cast<uint32_t>(std::max(cfg.height, 0));

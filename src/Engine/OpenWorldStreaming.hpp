@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -20,6 +21,8 @@
 namespace Engine {
     struct NavigationCacheManifest;
     struct NavigationCacheSettings;
+    struct SceneSerializationSettings;
+    struct SceneSerializedScene;
     struct TerrainDerivedCacheManifest;
 
     enum class StreamingResidencyState : uint32_t {
@@ -71,6 +74,23 @@ namespace Engine {
     inline constexpr uint32_t StreamingPayloadKindCount =
         static_cast<uint32_t>(StreamingPayloadKind::Count);
 
+    enum class StreamingHaloProfile : uint32_t {
+        Default,
+        FarMetadata,
+        CacheOnly,
+        LowDetailLive,
+        StandardLive,
+        HighDetailLive,
+        Behavior,
+        Animation,
+        AudioParticle,
+        Editing,
+        Count,
+    };
+
+    inline constexpr uint32_t StreamingHaloProfileCount =
+        static_cast<uint32_t>(StreamingHaloProfile::Count);
+
     enum class StreamingChunkKeyKind : uint32_t {
         None,
         TerrainSourceChunk,
@@ -84,6 +104,7 @@ namespace Engine {
         TerrainLodMeshCache,
         NavigationTileCache,
         TerrainPhysicsColliderCache,
+        SceneChunkBinary,
         MetadataOnly,
         Unsupported,
         Fake,
@@ -197,6 +218,7 @@ namespace Engine {
         TerrainSourceChunkId terrainChunk;
         AssetId asset;
         std::string stableId;
+        std::string variantId;
     };
 
     [[nodiscard]] bool operator==(const StreamingChunkKey& lhs, const StreamingChunkKey& rhs);
@@ -213,6 +235,9 @@ namespace Engine {
         uint64_t estimatedBytes = 0;
         std::array<bool, StreamingPayloadKindCount> availablePayloads{};
         StreamingDirtyFlags dirtyFlags = StreamingDirtyFlags::None;
+        StreamingHaloProfile haloProfile = StreamingHaloProfile::Default;
+        uint32_t detailLevel = 0;
+        int32_t priorityBias = 0;
         std::string debugName;
     };
 
@@ -225,10 +250,23 @@ namespace Engine {
         float cacheRadius = 160.0f;
         float hysteresis = 16.0f;
         uint32_t maxTransitionsPerFrame = 64;
+        bool liveAllowed = true;
+        bool predictiveLiveAllowed = false;
     };
 
     struct StreamingHaloPlannerSettings {
         std::array<StreamingPayloadResidencyPolicy, StreamingPayloadKindCount> payloadPolicies{};
+        std::array<
+            std::array<StreamingPayloadResidencyPolicy, StreamingHaloProfileCount>,
+            StreamingPayloadKindCount> profilePolicies{};
+    };
+
+    struct StreamingFocusInput {
+        glm::vec3 position{0.0f};
+        std::optional<glm::vec3> velocity;
+        float predictionSeconds = 0.0f;
+        float maxPredictionDistance = 0.0f;
+        std::vector<glm::vec3> goalFocusPoints;
     };
 
     struct StreamingChunkResidencyInput {
@@ -246,12 +284,19 @@ namespace Engine {
         bool transitionCandidate = false;
         bool transitionLimited = false;
         bool hysteresisRetained = false;
+        StreamingHaloProfile haloProfile = StreamingHaloProfile::Default;
+        uint32_t detailLevel = 0;
+        int32_t priorityBias = 0;
+        bool predictiveCandidate = false;
+        bool activeFocusCandidate = false;
     };
 
     struct OpenWorldStreamingDiagnostics {
         std::array<uint32_t, StreamingResidencyStateCount> desiredChunksByState{};
         std::array<uint32_t, StreamingResidencyStateCount> actualChunksByState{};
         std::array<uint32_t, StreamingPayloadKindCount> desiredChunksByPayload{};
+        std::array<uint32_t, StreamingHaloProfileCount> desiredChunksByProfile{};
+        std::array<uint32_t, StreamingHaloProfileCount> transitionLimitedByProfile{};
         std::array<uint32_t, StreamingTransitionLaneCount> transitionCountThisFrame{};
         std::array<StreamingLaneDiagnostics, StreamingTransitionLaneCount> lanes{};
         std::array<StreamingPayloadCacheDiagnostics, StreamingPayloadKindCount> payloads{};
@@ -290,6 +335,17 @@ namespace Engine {
         uint32_t unsupportedAssetDependencyCount = 0;
         uint32_t sharedAssetReferenceCount = 0;
         uint64_t assetReleaseLatencyMicroseconds = 0;
+        uint32_t sceneChunkManifestCount = 0;
+        uint32_t cachedSceneChunkPayloadCount = 0;
+        uint32_t promotedSceneChunkCount = 0;
+        uint32_t demotedSceneChunkCount = 0;
+        uint32_t sceneChunkActorsCreated = 0;
+        uint32_t sceneChunkComponentsCreated = 0;
+        uint32_t sceneChunkActorsDestroyed = 0;
+        uint32_t sceneChunkDuplicateStableIdCount = 0;
+        uint32_t sceneChunkInvalidParentCount = 0;
+        uint32_t sceneChunkInvalidComponentCount = 0;
+        uint32_t sceneChunkUnsupportedOwnershipCount = 0;
         uint32_t mainThreadPromoteItemsRun = 0;
         uint32_t mainThreadPromoteItemsDeferred = 0;
         uint32_t mainThreadDemoteItemsRun = 0;
@@ -297,6 +353,12 @@ namespace Engine {
         uint64_t estimatedResidentBytes = 0;
         uint32_t hysteresisChurnCount = 0;
         uint32_t evictionBlockedCount = 0;
+        uint32_t variantRecordCount = 0;
+        uint32_t activeFocusCandidateCount = 0;
+        uint32_t predictiveCandidateCount = 0;
+        uint32_t predictivePrefetchCount = 0;
+        uint32_t prefetchRetainedCount = 0;
+        uint32_t highDetailCandidateCount = 0;
     };
 
     struct StreamingHaloPlan {
@@ -342,12 +404,21 @@ namespace Engine {
         std::string label;
     };
 
+    struct StreamingSceneChunkPayload {
+        std::string stableChunkId;
+        uint32_t actorCount = 0;
+        uint32_t componentCount = 0;
+        std::vector<AssetId> assetDependencies;
+        std::shared_ptr<const SceneSerializedScene> scene;
+    };
+
     using StreamingCachedPayload = std::variant<
         std::monostate,
         StreamingTerrainChunkPayload,
         StreamingTerrainLodMeshPayload,
         StreamingNavigationTilePayload,
         StreamingTerrainPhysicsColliderPayload,
+        StreamingSceneChunkPayload,
         StreamingMetadataPayload>;
 
     struct StreamingRuntimeToken {
@@ -405,6 +476,9 @@ namespace Engine {
         std::shared_ptr<const NavigationCacheSettings> navigationSettings;
         std::shared_ptr<const NavigationCacheManifest> navigationManifest;
         ChunkCoord navigationCoord;
+        std::filesystem::path sceneChunkPath;
+        std::string sceneChunkStableId;
+        std::vector<AssetId> sceneChunkAssetDependencies;
         StreamingReadStatus fakeStatus = StreamingReadStatus::Hit;
         uint64_t fakeBytes = 0;
         std::string fakeMessage;
@@ -541,6 +615,11 @@ namespace Engine {
         [[nodiscard]] std::optional<StreamingCachedPayload> cachedPayload(
             const StreamingChunkKey& key,
             StreamingPayloadKind payload) const;
+        void storeCachedPayload(
+            const StreamingChunkKey& key,
+            StreamingPayloadKind payload,
+            StreamingCachedPayload cachedPayload,
+            uint64_t manifestRecordHash = 0);
 
     private:
         struct Record {
@@ -671,6 +750,7 @@ namespace Engine {
     [[nodiscard]] const char* streamingResidencyStateName(StreamingResidencyState state);
     [[nodiscard]] const char* streamingTransitionLaneName(StreamingTransitionLane lane);
     [[nodiscard]] const char* streamingPayloadKindName(StreamingPayloadKind kind);
+    [[nodiscard]] const char* streamingHaloProfileName(StreamingHaloProfile profile);
     [[nodiscard]] const char* streamingReadStatusName(StreamingReadStatus status);
     [[nodiscard]] const char* streamingPromotionStatusName(StreamingPromotionStatus status);
     [[nodiscard]] OpenWorldStreamingDiagnostics makeEmptyOpenWorldStreamingDiagnostics();
@@ -708,6 +788,10 @@ namespace Engine {
         const NavigationCacheSettings& settings,
         const NavigationCacheManifest& manifest,
         ChunkCoord coord);
+    [[nodiscard]] StreamingReadDescriptor sceneChunkBinaryReadDescriptor(
+        std::filesystem::path path,
+        std::string stableChunkId = {},
+        std::vector<AssetId> assetDependencies = {});
     [[nodiscard]] StreamingReadDescriptor metadataOnlyStreamingReadDescriptor(std::string label = {});
     [[nodiscard]] StreamingReadDescriptor unsupportedStreamingReadDescriptor(std::string message = {});
     [[nodiscard]] StreamingReadDescriptor fakeStreamingReadDescriptor(
@@ -738,6 +822,11 @@ namespace Engine {
         uint64_t settingsHash,
         uint64_t estimatedBytes,
         std::string debugName = {});
+    [[nodiscard]] StreamingHaloPlan planStreamingHalo(
+        const StreamingChunkManifest& manifest,
+        const StreamingFocusInput& focus,
+        const std::vector<StreamingChunkResidencyInput>& currentResidency,
+        const StreamingHaloPlannerSettings& settings);
     [[nodiscard]] StreamingHaloPlan planStreamingHalo(
         const StreamingChunkManifest& manifest,
         const glm::vec3& focus,

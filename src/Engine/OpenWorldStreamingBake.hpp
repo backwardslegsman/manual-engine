@@ -32,6 +32,8 @@ namespace Engine {
         float sceneGeometryMaxSlopeDegrees = 45.0f;
         float sceneGeometryTileBoundsPadding = 0.45f;
         std::string sceneGeometryAdapterVersion = "none";
+        float terrainNavigationBorderPaddingWorld = 0.0f;
+        uint32_t terrainNavigationBorderSampleCount = 0;
     };
 
     struct OpenWorldStreamingBakeDiagnostics {

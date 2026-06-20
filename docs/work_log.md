@@ -1619,3 +1619,73 @@ Changed:
 
 Rationale:
 - Open-world streaming needs asset dependencies to move through the same cache/live halo model as terrain, nav, and physics data while keeping renderer resource acquisition explicit and main-thread-owned.
+
+## 2026-06-20 - Phase S6 Scene Chunk Serialization Integration
+
+Changed:
+- Added scene chunk streaming payload support to the open-world cache halo using the existing Phase 13 scene binary format.
+- Added Engine::OpenWorldStreamingSceneChunks for durable scene chunk manifest records, scene binary read descriptors, and main-thread scene actor/component promotion and demotion callbacks.
+- Added explicit chunk-owned, global, and migratory actor ownership policy diagnostics without automatic bounds-based actor migration.
+- Extended Streaming debug stats with scene chunk cache, promotion, demotion, actor/component, duplicate ID, invalid reference, and ownership counters.
+- Added focused scene chunk streaming tests for binary readback, activation/demotion, duplicate stable IDs, and ownership policy behavior.
+
+Rationale:
+- Open-world streaming needs scene actor/component chunks to use the same cache/live halo model as terrain, nav, physics, and assets while preserving stable SceneObjectId identity and keeping transient scene handles out of durable payloads.
+
+
+## 2026-06-20 - Phase S7 LOD And Multi-Halo Refinement
+
+Changed:
+- Added streaming key variant IDs so one durable chunk can carry independent records for LODs, metadata, texture-mip variants, and future behavior/animation/audio payloads.
+- Added streaming halo profiles, per-profile policies, detail levels, priority bias, and profile-aware transition caps while preserving default S1-S6 behavior.
+- Added predictive focus planning from velocity and goal/path hints; predictive records prefetch cache residency by default and do not request live promotion unless explicitly allowed.
+- Extended Streaming diagnostics and Debug UI stats with profile, variant, high-detail, active-focus, predictive-focus, prefetch, and profile-limited transition counters.
+- Extended open-world streaming tests for variant identity, terrain LOD profile decisions, far metadata/cache-only behavior, profile caps, and predictive prefetch priority.
+
+Rationale:
+- Open-world streaming needs multiple detail records per chunk before terrain LOD, far metadata, high-resolution assets, animation, behavior, and future audio/particle residency can be tuned independently without replacing the S1-S6 cache/live transition model.
+
+## 2026-06-20 - Open World Streaming S8 Roadmap Completion Milestone
+
+Changed:
+- Added Phase S8 to `docs/open_world_streaming_roadmap.md` as the planned modern runtime streaming integration and roadmap closure milestone.
+- Defined saved streaming build validation for the default scene, including source hashes, import settings, render LOD settings, nav settings, slope/tile filtering, physics collider settings, scene chunk schema, asset dependencies, and version strings.
+- Documented the required rebuild behavior when no current heightmap-derived streaming build exists on disk or when a relevant version/source/settings identity changes.
+- Extended first-usable streaming acceptance to require Debug and Release modern defaults to use the streaming runtime and to validate/rebuild saved build data before use.
+
+Rationale:
+- The streaming roadmap should not be considered complete until the modern default scene uses the S1-S7 streaming stack and can bootstrap missing or stale heightmap-derived streaming data without falling back to eager fixed-patch loading.
+
+## 2026-06-20 - Phase S8 Modern Runtime Streaming Integration
+
+Changed:
+- Added `Engine::OpenWorldStreamingRuntime` as the S8 coordinator over saved-build validation, halo planning, async cache reads, optional generation, and budgeted live promotion/demotion.
+- Added saved modern-default streaming build manifests under `generated/open_world_streaming/modern_default/manifest.yaml`, with fingerprint validation over heightmap source identity, import settings, render LOD settings, nav settings, slope/tile filtering, physics collider settings, and streaming version strings.
+- Added a focused open-world streaming runtime test target covering missing-build rebuilds, saved-build reuse, setting invalidation, async cache reads, live callback promotion/demotion, and handle-free saved manifests.
+- Wired the modern default scene to initialize the S8 runtime, rebuild/reuse heightmap-derived streaming data at startup, update streaming residency from camera focus each frame, and feed real streaming diagnostics into the Debug UI.
+
+Rationale:
+- The open-world streaming roadmap needs a concrete runtime closure point where baked heightmap-derived payloads become the default scene's residency source instead of remaining Engine-only planning/cache APIs.
+
+## 2026-06-20 - Modern Adjacent Nav Tile Connectivity
+
+Changed:
+- Added terrain-independent `NavigationConnectivitySystem` rebuild/step paths that sample live `NavigationSystem` tile bounds and tile-local nearest-poly queries instead of requiring legacy `TerrainSystem`.
+- Added portal height-delta validation, modern scene navigation portal route stitching through `SceneNavigationService::findPathAcrossLoadedTiles`, and modern Debug UI connectivity counters/portal debug lines.
+- Wired the modern streaming nav tile promotion/demotion callbacks to refresh connectivity for the promoted tile and cardinal neighbors, or remove/relink connectivity when a tile leaves the live halo.
+- Extended navigation and navigation runtime tests for terrain-free connectivity, missing neighbors, steep seam rejection, and cross-loaded-tile portal route stitching.
+
+Rationale:
+- Streamed open-world navigation needs explicit adjacent-tile seam connectivity that works independently of the legacy procedural terrain path and can degrade cleanly when neighbor tiles are missing.
+
+## 2026-06-20 - Seamless Chunk Navigation Geometry
+
+Changed:
+- Added border-aware terrain navigation build settings and request fields so nav tiles can rasterize an expanded source sample apron while keeping the original durable tile coord and output tile bounds.
+- Added dataset/imported-neighborhood terrain nav request helpers that sample adjacent chunks, clamp heightmap-edge apron samples deterministically, and report border padding/sample diagnostics.
+- Updated full-heightmap bake, modern runtime navigation rebuilds, navigation cache identity, and saved streaming build fingerprints to include the border generator version and apron settings so old seam-gap tile bytes are stale.
+- Preserved async/cache-first streaming behavior: S2 still reads cached tile bytes, S3/S8 still promote tile bytes on the main thread, and generation-on-miss uses the same border-aware request path.
+- Extended terrain navigation and navigation runtime tests for border geometry, zero-padding compatibility, cache identity invalidation, and seam projection across adjacent tiles.
+
+Rationale:
+- Open-world terrain chunks should not leave narrow navmesh gaps at tile seams. Border-apron nav baking gives Recast neighbor context without changing terrain chunk ownership, renderer/physics payloads, nav tile identity, or streaming promotion flow.

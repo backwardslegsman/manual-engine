@@ -59,6 +59,8 @@ add_executable(manual_engine
     src/Engine/OpenWorldStreaming.cpp
     src/Engine/OpenWorldStreamingAssets.cpp
     src/Engine/OpenWorldStreamingBake.cpp
+    src/Engine/OpenWorldStreamingRuntime.cpp
+    src/Engine/OpenWorldStreamingSceneChunks.cpp
     src/Engine/OrbitCamera.cpp
     src/Engine/PersistentObjectEditor.cpp
     src/Engine/Picking.cpp
@@ -175,6 +177,7 @@ add_executable(manual_engine_navigation_runtime_tests
     src/Engine/Biome.cpp
     src/Engine/ChunkTypes.cpp
     src/Engine/Navigation.cpp
+    src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationRuntime.cpp
     src/Engine/Scene/Scene.cpp
     src/Engine/Terrain.cpp
@@ -203,6 +206,7 @@ add_executable(manual_engine_navigation_scene_geometry_tests
     src/Engine/ChunkTypes.cpp
     src/Engine/ImportedSceneResources.cpp
     src/Engine/Navigation.cpp
+    src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationRuntime.cpp
     src/Engine/NavigationSceneGeometry.cpp
     src/Engine/Scene/AuthoredSceneAdapter.cpp
@@ -304,14 +308,18 @@ add_executable(manual_engine_open_world_streaming_tests
     src/Engine/OpenWorldStreaming.cpp
     src/Engine/OpenWorldStreamingAssets.cpp
     src/Engine/OpenWorldStreamingBake.cpp
+    src/Engine/OpenWorldStreamingSceneChunks.cpp
     src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Reflection.cpp
     src/Engine/Scene/Scene.cpp
+    src/Engine/SceneSerialization.cpp
     src/Engine/Terrain.cpp
     src/Engine/TerrainDataset.cpp
     src/Engine/TerrainDerivedCache.cpp
     src/Engine/TerrainImport.cpp
     src/Engine/TerrainNavigationAdapter.cpp
     src/Engine/TerrainPhysicsColliderAdapter.cpp
+    src/Engine/TerrainSerializationPrep.cpp
 )
 
 target_include_directories(manual_engine_open_world_streaming_tests
@@ -339,6 +347,93 @@ target_link_libraries(manual_engine_open_world_streaming_tests
 )
 
 add_test(NAME manual_engine_open_world_streaming_tests COMMAND manual_engine_open_world_streaming_tests)
+
+add_executable(manual_engine_open_world_streaming_runtime_tests
+    tests/engine/OpenWorldStreamingRuntimeTestRunner.cpp
+    tests/navigation/RendererStubs.cpp
+    src/Assets/Assimp/Importer.cpp
+    src/Assets/HeightmapImporter.cpp
+    src/Engine/AsyncWorkQueue.cpp
+    src/Engine/AssetRegistry.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/FrameBudget.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationCache.cpp
+    src/Engine/OpenWorldStreaming.cpp
+    src/Engine/OpenWorldStreamingBake.cpp
+    src/Engine/OpenWorldStreamingRuntime.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Reflection.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/SceneSerialization.cpp
+    src/Engine/Terrain.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainDerivedCache.cpp
+    src/Engine/TerrainImport.cpp
+    src/Engine/TerrainNavigationAdapter.cpp
+    src/Engine/TerrainPhysicsColliderAdapter.cpp
+    src/Engine/TerrainSerializationPrep.cpp
+)
+
+target_include_directories(manual_engine_open_world_streaming_runtime_tests
+    PRIVATE
+        src
+        ${Stb_INCLUDE_DIR}
+)
+
+target_compile_definitions(manual_engine_open_world_streaming_runtime_tests
+    PRIVATE
+        MANUAL_ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(manual_engine_open_world_streaming_runtime_tests
+    PRIVATE
+        glm::glm
+        assimp::assimp
+        Jolt::Jolt
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        RecastNavigation::DetourTileCache
+        RecastNavigation::DetourCrowd
+        RecastNavigation::DebugUtils
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_open_world_streaming_runtime_tests COMMAND manual_engine_open_world_streaming_runtime_tests)
+
+add_executable(manual_engine_open_world_scene_chunk_streaming_tests
+    tests/engine/OpenWorldSceneChunkStreamingTestRunner.cpp
+    src/Engine/AsyncWorkQueue.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/FrameBudget.cpp
+    src/Engine/NavigationCache.cpp
+    src/Engine/OpenWorldStreaming.cpp
+    src/Engine/OpenWorldStreamingSceneChunks.cpp
+    src/Engine/Reflection.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/SceneSerialization.cpp
+    src/Engine/TerrainDerivedCache.cpp
+    src/Engine/TerrainSerializationPrep.cpp
+)
+
+target_include_directories(manual_engine_open_world_scene_chunk_streaming_tests
+    PRIVATE
+        src
+)
+
+target_compile_definitions(manual_engine_open_world_scene_chunk_streaming_tests
+    PRIVATE
+        MANUAL_ENGINE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+target_link_libraries(manual_engine_open_world_scene_chunk_streaming_tests
+    PRIVATE
+        glm::glm
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_open_world_scene_chunk_streaming_tests COMMAND manual_engine_open_world_scene_chunk_streaming_tests)
 
 add_executable(manual_engine_terrain_dataset_tests
     tests/terrain/TerrainDatasetTestRunner.cpp
@@ -613,6 +708,7 @@ add_executable(manual_engine_scene_reflection_tests
     src/Engine/Biome.cpp
     src/Engine/ChunkTypes.cpp
     src/Engine/Navigation.cpp
+    src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationRuntime.cpp
     src/Engine/Physics/ScenePhysics.cpp
     src/Engine/Reflection.cpp
@@ -650,6 +746,7 @@ add_executable(manual_engine_scene_behavior_hooks_tests
     src/Engine/Biome.cpp
     src/Engine/ChunkTypes.cpp
     src/Engine/Navigation.cpp
+    src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationRuntime.cpp
     src/Engine/Physics/ScenePhysics.cpp
     src/Engine/Reflection.cpp
@@ -688,6 +785,7 @@ add_executable(manual_engine_scene_lua_scripting_tests
     src/Engine/Biome.cpp
     src/Engine/ChunkTypes.cpp
     src/Engine/Navigation.cpp
+    src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationRuntime.cpp
     src/Engine/Physics/ScenePhysics.cpp
     src/Engine/Reflection.cpp
@@ -748,6 +846,7 @@ add_executable(manual_engine_scene_terrain_alignment_tests
     src/Engine/Biome.cpp
     src/Engine/ChunkTypes.cpp
     src/Engine/Navigation.cpp
+    src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationRuntime.cpp
     src/Engine/Physics/ScenePhysics.cpp
     src/Engine/Scene/Scene.cpp
@@ -780,6 +879,7 @@ add_executable(manual_engine_scene_character_movement_tests
     src/Engine/Biome.cpp
     src/Engine/ChunkTypes.cpp
     src/Engine/Navigation.cpp
+    src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationRuntime.cpp
     src/Engine/Physics/ScenePhysics.cpp
     src/Engine/Scene/Scene.cpp
@@ -812,6 +912,7 @@ add_executable(manual_engine_scene_world_migration_tests
     src/Engine/Biome.cpp
     src/Engine/ChunkTypes.cpp
     src/Engine/Navigation.cpp
+    src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationRuntime.cpp
     src/Engine/ObjectId.cpp
     src/Engine/Physics/ScenePhysics.cpp

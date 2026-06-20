@@ -40,6 +40,47 @@
         return "Unknown";
     }
 
+    std::vector<Engine::ChunkCoord> chunkAndCardinalNeighbors(Engine::ChunkCoord coord)
+    {
+        return {
+            coord,
+            {coord.x + 1, coord.z},
+            {coord.x - 1, coord.z},
+            {coord.x, coord.z + 1},
+            {coord.x, coord.z - 1},
+        };
+    }
+
+    std::vector<Engine::ChunkCoord> loadedNavigationTileCoords(const Engine::NavigationSystem& navigation)
+    {
+        std::vector<Engine::ChunkCoord> coords;
+        for (const Engine::NavigationTileDiagnostics& diagnostics : navigation.allTileDiagnostics()) {
+            coords.push_back(diagnostics.coord);
+        }
+        std::ranges::sort(coords, [](Engine::ChunkCoord lhs, Engine::ChunkCoord rhs) {
+            return lhs.x == rhs.x ? lhs.z < rhs.z : lhs.x < rhs.x;
+        });
+        coords.erase(std::unique(coords.begin(), coords.end()), coords.end());
+        return coords;
+    }
+
+    std::string rebuildModernNavigationConnectivityFromLoadedTiles(
+        Engine::NavigationConnectivitySystem& connectivity,
+        const Engine::NavigationSystem& navigation)
+    {
+        const std::vector<Engine::ChunkCoord> loaded = loadedNavigationTileCoords(navigation);
+        if (loaded.empty()) {
+            connectivity.clear();
+            return "No live navigation tiles are loaded; connectivity was cleared.";
+        }
+        connectivity.rebuild(loaded, navigation, Engine::NavAgentSettings{});
+        const Engine::NavigationConnectivityStats stats = connectivity.stats();
+        return "Rebuilt navigation connectivity from " + std::to_string(loaded.size()) +
+            " live tiles: chunks " + std::to_string(stats.chunkCount) +
+            ", portals " + std::to_string(stats.totalPortals) +
+            ", connected " + std::to_string(stats.connectedPortals) + ".";
+    }
+
     AppSceneSelection parseSceneSelection(int argc, char** argv)
     {
         AppSceneSelection selection;
@@ -380,12 +421,17 @@
         Engine::RendererSceneRenderBackend renderBackend;
         Engine::ScenePhysicsWorld physics{scene};
         Engine::NavigationSystem navigation;
-        Engine::SceneNavigationService navigationService{navigation};
+        Engine::NavigationConnectivitySystem navigationConnectivity;
+        Engine::SceneNavigationService navigationService{navigation, &navigationConnectivity};
         Engine::SceneNavigationGeometryRegistry sceneNavigationGeometry;
         Engine::SceneCharacterMovementSystem characters{scene, physics};
         Engine::SceneAnimatedModelAdapter animatedAdapter{scene, renderBridge};
         Engine::TerrainDataset terrain;
         Engine::TerrainPhysicsColliderAdapter terrainPhysics;
+        Engine::OpenWorldStreamingRuntime streamingRuntime;
+        Engine::AsyncWorkQueue streamingAsync;
+        Engine::MainThreadWorkQueue streamingMainThread;
+        Engine::FrameBudget streamingBudget;
         Engine::TerrainMaterialRenderBinding terrainMaterial;
         Engine::TerrainSourceHandle terrainSource;
         Engine::SceneActorHandle playerActor;
@@ -394,6 +440,11 @@
         std::vector<ModernAuthoredAssetRuntime> authoredAssets;
         std::vector<ModernAnimatedAssetRuntime> animatedAssets;
         std::vector<Engine::ScenePhysicsBodyHandle> authoredPhysicsBodies;
+        std::unordered_map<uint64_t, Engine::TerrainChunkHandle> streamingTerrainChunks;
+        std::unordered_map<uint64_t, Renderer::TerrainHandle> streamingTerrainHandles;
+        std::unordered_map<uint64_t, Engine::NavigationTileHandle> streamingNavigationTiles;
+        std::unordered_map<uint64_t, Engine::TerrainPhysicsColliderHandle> streamingPhysicsColliders;
+        uint64_t nextStreamingToken = 1;
         Engine::CachedTexture terrainFallbackTexture;
         Renderer::MaterialHandle terrainFallbackMaterial;
         Renderer::Aabb bounds{{-64.0f, -8.0f, -64.0f}, {64.0f, 32.0f, 64.0f}};
@@ -412,13 +463,36 @@
         uint32_t animatedAssetCount = 0;
         uint32_t warningCount = 0;
         bool loadedHeightmap = false;
+        bool usingOpenWorldStreaming = false;
         bool schedulerStarted = false;
+        std::string navigationStatus = "Navigation connectivity has not been rebuilt yet.";
 
         void shutdown(Engine::AssetCache& assetCache)
         {
             if (scene.lifecycleState() == Engine::SceneLifecycleState::Started) {
                 scene.stop();
             }
+            for (auto& [_, terrain] : streamingTerrainHandles) {
+                Renderer::destroyTerrainTile(terrain);
+            }
+            streamingTerrainHandles.clear();
+            for (auto& [_, tile] : streamingNavigationTiles) {
+                (void)tile;
+            }
+            navigationConnectivity.clear();
+            navigation.clear();
+            streamingNavigationTiles.clear();
+            for (auto& [_, collider] : streamingPhysicsColliders) {
+                terrainPhysics.destroyCollider(scene, physics, collider);
+            }
+            streamingPhysicsColliders.clear();
+            for (auto& [_, chunk] : streamingTerrainChunks) {
+                terrain.unloadChunk(chunk);
+            }
+            streamingTerrainChunks.clear();
+            streamingRuntime.shutdown();
+            streamingAsync.shutdown();
+            streamingMainThread.clear();
             renderBridge.releaseRendererResources(renderBackend);
             for (Engine::ScenePhysicsBodyHandle body : authoredPhysicsBodies) {
                 physics.destroyBody(body);
@@ -779,6 +853,90 @@
         return position;
     }
 
+    std::string requestModernCharacterNavigationTest(
+        ModernDefaultSceneRuntime& runtime,
+        glm::vec3 cameraPosition)
+    {
+        if (!Engine::isValid(runtime.playerCharacter)) {
+            ++runtime.warningCount;
+            return "Cannot request navigation test path: player character is invalid.";
+        }
+        if (runtime.navigation.allTileDiagnostics().empty()) {
+            ++runtime.warningCount;
+            return "Cannot request navigation test path: no live navigation tiles are loaded.";
+        }
+        if (runtime.navigationConnectivity.stats().chunkCount == 0) {
+            runtime.navigationStatus =
+                rebuildModernNavigationConnectivityFromLoadedTiles(runtime.navigationConnectivity, runtime.navigation);
+        }
+
+        Engine::NavigationQueryFilter filter;
+        filter.requireLoadedTiles = true;
+        filter.allowPartialPath = false;
+        filter.captureDebug = true;
+
+        const Engine::NavigationProjectionResult projected =
+            runtime.navigationService.projectPoint(cameraPosition, {}, filter);
+        if (projected.status != Engine::NavigationRuntimeStatus::Success) {
+            ++runtime.warningCount;
+            return "Cannot request navigation test path: camera position did not project onto loaded navmesh: " +
+                projected.message;
+        }
+
+        Engine::SceneCharacterPathRequest request;
+        request.goal = projected.point;
+        request.filter = filter;
+        request.waypointAcceptanceRadius = 0.75f;
+        request.allowPartialPath = false;
+
+        if (!runtime.characters.requestPathTo(runtime.playerCharacter, request)) {
+            const std::optional<Engine::SceneCharacterState> state =
+                runtime.characters.state(runtime.playerCharacter);
+            ++runtime.warningCount;
+            return state ? "Navigation test path request failed: " + state->lastMessage
+                         : "Navigation test path request failed.";
+        }
+
+        const std::optional<Engine::SceneCharacterState> state =
+            runtime.characters.state(runtime.playerCharacter);
+        return "Navigation test path accepted to camera-projected goal; path points " +
+            std::to_string(state ? state->activePath.points.size() : 0u) + ".";
+    }
+
+    Engine::SceneCharacterHandle createModernPlayerCharacter(ModernDefaultSceneRuntime& runtime)
+    {
+        Engine::SceneCharacterDescriptor character;
+        character.actor = runtime.playerActor;
+        character.radius = 0.45f;
+        character.height = 1.8f;
+        character.maxSpeed = 7.0f;
+        character.snapDistance = 10000.0f;
+        character.debugName = "modern.player";
+        return runtime.characters.createCharacter(character);
+    }
+
+    bool resetModernPlayerAboveTerrain(
+        ModernDefaultSceneRuntime& runtime,
+        float verticalOffset = 24.0f)
+    {
+        if (!Engine::isValid(runtime.playerActor)) {
+            return false;
+        }
+        std::optional<Engine::SceneTransform> transform = runtime.scene.localTransform(runtime.playerActor);
+        if (!transform.has_value()) {
+            return false;
+        }
+        const float terrainY = runtime.terrain.sampleHeight(transform->translation.x, transform->translation.z)
+            .value_or(runtime.focus.y);
+        transform->translation.y = terrainY + verticalOffset;
+        runtime.scene.setLocalTransform(runtime.playerActor, *transform);
+        if (Engine::isValid(runtime.playerCharacter)) {
+            runtime.characters.destroyCharacter(runtime.playerCharacter);
+        }
+        runtime.playerCharacter = createModernPlayerCharacter(runtime);
+        return Engine::isValid(runtime.playerCharacter);
+    }
+
     Engine::TerrainSourceDescriptor modernFallbackTerrainSourceDescriptor()
     {
         Engine::TerrainSourceDescriptor descriptor;
@@ -793,6 +951,358 @@
         descriptor.procedural.resolution = descriptor.defaultResolution;
         descriptor.procedural.heightScale = 8.0f;
         return descriptor;
+    }
+
+    Engine::OpenWorldStreamingRuntimeSettings modernStreamingRuntimeSettings(
+        std::string sceneGeometryHash = {})
+    {
+        Engine::OpenWorldStreamingRuntimeSettings settings;
+        settings.savedBuildManifestPath = "generated/open_world_streaming/modern_default/manifest.yaml";
+        const std::filesystem::path heightmapPath = resolveAuthoredScenePath(DefaultHeightmapPath);
+        settings.bake.heightmap.sourcePath = heightmapPath;
+        settings.bake.heightmap.sourceIdOverride = modernAssetIdForPath(heightmapPath, "modern_heightmap_streaming");
+        settings.bake.heightmap.sampleSpacing = 1.0f;
+        settings.bake.heightmap.heightScale = 80.0f;
+        settings.bake.heightmap.heightOffset = 0.0f;
+        settings.bake.heightmap.sourceOrigin = {-256.0f, 0.0f, 256.0f};
+        settings.bake.heightmap.chunkWorldSize = 64.0f;
+        settings.bake.heightmap.chunkResolution = 33;
+        settings.bake.terrainCache.rootPath = "generated/terrain_cache/modern_default";
+        settings.bake.terrainCache.policy = Engine::TerrainDerivedCachePolicy::ReadOnly;
+        settings.bake.navigationCache.rootPath = "generated/navigation_cache/modern_default";
+        settings.bake.navigationCache.worldId = "modern_default_streaming";
+        settings.bake.navigationResolution = 17;
+        settings.bake.physicsColliderResolution = 17;
+        settings.bake.renderLods = {
+            {0, 33, 2.0f},
+            {1, 17, 2.0f},
+        };
+        Engine::NavAgentSettings agent;
+        settings.bake.navAgent = agent;
+        settings.bake.terrainNavigationBorderPaddingWorld = std::max(
+            agent.radius * 2.0f,
+            settings.bake.navBuild.cellSize * 4.0f);
+        const float navigationStep = settings.bake.heightmap.chunkWorldSize /
+            static_cast<float>(std::max(settings.bake.navigationResolution, 2u) - 1u);
+        settings.bake.terrainNavigationBorderSampleCount = static_cast<uint32_t>(std::ceil(
+            settings.bake.terrainNavigationBorderPaddingWorld / std::max(navigationStep, 0.0001f)));
+        settings.bake.sceneGeometryHash = std::move(sceneGeometryHash);
+        settings.bake.sceneGeometryMaxSlopeDegrees = agent.maxSlopeDegrees;
+        settings.bake.sceneGeometryTileBoundsPadding = agent.radius + settings.bake.terrainNavigationBorderPaddingWorld;
+        settings.bake.sceneGeometryAdapterVersion = "modern_scene_nav_geometry_slope_v1";
+
+        for (Engine::StreamingPayloadResidencyPolicy& policy : settings.planner.payloadPolicies) {
+            policy.activeRadius = 192.0f;
+            policy.cacheRadius = 320.0f;
+            policy.hysteresis = 32.0f;
+            policy.maxTransitionsPerFrame = 4;
+        }
+        for (auto& payloadProfiles : settings.planner.profilePolicies) {
+            for (Engine::StreamingPayloadResidencyPolicy& policy : payloadProfiles) {
+                policy.activeRadius = 192.0f;
+                policy.cacheRadius = 320.0f;
+                policy.hysteresis = 32.0f;
+                policy.maxTransitionsPerFrame = 4;
+            }
+        }
+        for (uint32_t payload = 0; payload < Engine::StreamingPayloadKindCount; ++payload) {
+            settings.planner.profilePolicies[payload][static_cast<uint32_t>(Engine::StreamingHaloProfile::HighDetailLive)]
+                .activeRadius = 96.0f;
+            settings.planner.profilePolicies[payload][static_cast<uint32_t>(Engine::StreamingHaloProfile::HighDetailLive)]
+                .cacheRadius = 192.0f;
+            settings.planner.profilePolicies[payload][static_cast<uint32_t>(Engine::StreamingHaloProfile::CacheOnly)]
+                .liveAllowed = false;
+            settings.planner.profilePolicies[payload][static_cast<uint32_t>(Engine::StreamingHaloProfile::FarMetadata)]
+                .liveAllowed = false;
+            settings.planner.profilePolicies[payload][static_cast<uint32_t>(Engine::StreamingHaloProfile::FarMetadata)]
+                .cacheRadius = 512.0f;
+        }
+        settings.cache.maxReadJobsQueuedPerUpdate = 8;
+        settings.cache.maxCompletedJobsMergedPerUpdate = 16;
+        settings.generation.policy = Engine::StreamingDerivedGenerationPolicy::ReadOnly;
+        settings.promotion.maxPromotesQueuedPerUpdate = 8;
+        settings.promotion.maxDemotesQueuedPerUpdate = 8;
+        return settings;
+    }
+
+    Renderer::Aabb boundsFromStreamingManifest(const Engine::StreamingChunkManifest& manifest)
+    {
+        Renderer::Aabb bounds{
+            {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()},
+            {-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()},
+        };
+        for (const Engine::StreamingChunkManifestRecord& record : manifest.records) {
+            if (record.payload == Engine::StreamingPayloadKind::TerrainChunk) {
+                includeBounds(bounds, {record.bounds.min, record.bounds.max});
+            }
+        }
+        if (bounds.min.x > bounds.max.x) {
+            return {{-64.0f, -8.0f, -64.0f}, {64.0f, 32.0f, 64.0f}};
+        }
+        return bounds;
+    }
+
+    Engine::TerrainSourceDescriptor modernStreamingTerrainSourceDescriptor(
+        const Engine::OpenWorldStreamingRuntimeSettings& settings)
+    {
+        Engine::TerrainSourceDescriptor source;
+        source.sourceId = settings.bake.heightmap.sourceIdOverride.value_or(modernAssetIdForPath(
+            settings.bake.heightmap.sourcePath,
+            "modern_heightmap_streaming"));
+        source.type = Engine::TerrainDatasetSourceType::HeightmapImported;
+        source.bounds = {{-256.0f, -80.0f, -256.0f}, {256.0f, 80.0f, 256.0f}};
+        source.defaultChunkSize = settings.bake.heightmap.chunkWorldSize;
+        source.defaultResolution = settings.bake.heightmap.chunkResolution;
+        source.settings = Engine::terrainHeightmapImportSettingsKey(settings.bake.heightmap);
+        source.debugName = "modern.default.streaming_heightmap";
+        return source;
+    }
+
+    const Engine::StreamingReadDescriptorEntry* modernStreamingDescriptor(
+        const ModernDefaultSceneRuntime& runtime,
+        const Engine::StreamingPromotionRequest& request)
+    {
+        return Engine::findStreamingReadDescriptor(
+            runtime.streamingRuntime.readDescriptors(),
+            request.key,
+            request.payload);
+    }
+
+    Renderer::MeshVertex meshVertexFromTerrainCpu(const Engine::TerrainCpuMeshVertex& vertex)
+    {
+        return {
+            vertex.position.x,
+            vertex.position.y,
+            vertex.position.z,
+            vertex.normal.x,
+            vertex.normal.y,
+            vertex.normal.z,
+            vertex.tangent.x,
+            vertex.tangent.y,
+            vertex.tangent.z,
+            vertex.tangent.w,
+            vertex.uv0.x,
+            vertex.uv0.y,
+            vertex.uv1.x,
+            vertex.uv1.y,
+            vertex.color,
+        };
+    }
+
+    Engine::StreamingPromotionCallbacks modernStreamingCallbacks(ModernDefaultSceneRuntime& runtime)
+    {
+        Engine::StreamingPromotionCallbacks callbacks;
+        callbacks.promote = [&runtime](
+            const Engine::StreamingPromotionRequest& request,
+            const Engine::StreamingCachedPayload& payload) {
+            Engine::StreamingPromotionResult result;
+            result.status = Engine::StreamingPromotionStatus::UnsupportedPayload;
+            result.message = "Unsupported modern default streaming payload.";
+            const uint64_t token = runtime.nextStreamingToken++;
+            result.liveToken = {token};
+
+            if (request.payload == Engine::StreamingPayloadKind::TerrainChunk) {
+                const auto* terrain = std::get_if<Engine::StreamingTerrainChunkPayload>(&payload);
+                if (!terrain) {
+                    result.status = Engine::StreamingPromotionStatus::CallbackFailed;
+                    result.message = "Terrain chunk payload type mismatch.";
+                    return result;
+                }
+                Engine::TerrainImportedChunk chunk;
+                chunk.id = terrain->chunkId;
+                chunk.coord = terrain->chunkId.coord;
+                chunk.origin = terrain->origin;
+                chunk.size = terrain->size;
+                chunk.resolution = terrain->resolution;
+                chunk.heights = terrain->heights;
+                chunk.warnings = terrain->warnings;
+                Engine::TerrainChunkHandle handle = runtime.terrain.loadImportedChunk(runtime.terrainSource, chunk);
+                if (!Engine::isValid(handle)) {
+                    result.status = Engine::StreamingPromotionStatus::CallbackFailed;
+                    result.message = "Failed to load streamed terrain chunk into TerrainDataset.";
+                    return result;
+                }
+                runtime.streamingTerrainChunks[token] = handle;
+                result.liveResources.sceneComponents = static_cast<uint32_t>(runtime.streamingTerrainChunks.size());
+                result.status = Engine::StreamingPromotionStatus::Success;
+                result.message = "Promoted terrain CPU chunk.";
+                return result;
+            }
+
+            if (request.payload == Engine::StreamingPayloadKind::TerrainRenderLod) {
+                const Engine::StreamingReadDescriptorEntry* descriptor = modernStreamingDescriptor(runtime, request);
+                if (!descriptor || !descriptor->descriptor.terrainChunkManifest) {
+                    result.status = Engine::StreamingPromotionStatus::MissingCachedPayload;
+                    result.message = "Missing terrain LOD descriptor for promotion.";
+                    return result;
+                }
+                const Engine::TerrainDerivedCacheLodMeshReadResult read =
+                    Engine::TerrainDerivedCache::readLodMesh(*descriptor->descriptor.terrainChunkManifest);
+                if (read.status != Engine::TerrainDerivedCacheStatus::Hit || !read.payload) {
+                    result.status = Engine::StreamingPromotionStatus::MissingCachedPayload;
+                    result.message = "Terrain LOD payload was not readable during promotion.";
+                    return result;
+                }
+                std::vector<Renderer::MeshVertex> vertices;
+                vertices.reserve(read.payload->vertices.size());
+                for (const Engine::TerrainCpuMeshVertex& vertex : read.payload->vertices) {
+                    vertices.push_back(meshVertexFromTerrainCpu(vertex));
+                }
+                Renderer::TerrainHandle terrain = Renderer::createTerrainTile(
+                    vertices,
+                    read.payload->indices,
+                    runtime.terrainFallbackMaterial);
+                Renderer::setTerrainRenderLayer(terrain, Renderer::RenderLayer::Terrain);
+                Renderer::setTerrainMaxDrawDistance(terrain, 500.0f);
+                if (runtime.terrainMaterial.materialSet.id != UINT32_MAX) {
+                    Renderer::setTerrainMaterialSet(terrain, runtime.terrainMaterial.materialSet);
+                }
+                runtime.streamingTerrainHandles[token] = terrain;
+                ++runtime.terrainRendererCount;
+                result.liveResources.terrainRenderHandles =
+                    static_cast<uint32_t>(runtime.streamingTerrainHandles.size());
+                result.status = Engine::StreamingPromotionStatus::Success;
+                result.message = "Promoted terrain render LOD.";
+                return result;
+            }
+
+            if (request.payload == Engine::StreamingPayloadKind::NavigationTile) {
+                const auto* tile = std::get_if<Engine::StreamingNavigationTilePayload>(&payload);
+                if (!tile) {
+                    result.status = Engine::StreamingPromotionStatus::CallbackFailed;
+                    result.message = "Navigation tile payload type mismatch.";
+                    return result;
+                }
+                Engine::NavigationTileCacheData cacheData;
+                cacheData.coord = tile->coord;
+                cacheData.bounds = {tile->bounds.min, tile->bounds.max};
+                cacheData.detourTileData = tile->detourTileData;
+                Engine::NavigationTileHandle handle = runtime.navigation.loadTerrainTileFromCache(cacheData);
+                if (handle.id == UINT32_MAX) {
+                    result.status = Engine::StreamingPromotionStatus::CallbackFailed;
+                    result.message = "Failed to insert streamed navigation tile.";
+                    return result;
+                }
+                runtime.streamingNavigationTiles[token] = handle;
+                const std::vector<Engine::ChunkCoord> dirtyConnectivity =
+                    chunkAndCardinalNeighbors(cacheData.coord);
+                runtime.navigationConnectivity.rebuildChunks(
+                    dirtyConnectivity,
+                    runtime.navigation,
+                    Engine::NavAgentSettings{});
+                const Engine::NavigationConnectivityStats connectivityStats = runtime.navigationConnectivity.stats();
+                runtime.navigationStatus = "Updated streamed navigation connectivity: chunks " +
+                    std::to_string(connectivityStats.chunkCount) +
+                    ", portals " + std::to_string(connectivityStats.totalPortals) +
+                    ", connected " + std::to_string(connectivityStats.connectedPortals) + ".";
+                ++runtime.terrainNavTileCount;
+                result.liveResources.navigationTiles =
+                    static_cast<uint32_t>(runtime.streamingNavigationTiles.size());
+                result.status = Engine::StreamingPromotionStatus::Success;
+                result.message = "Promoted navigation tile.";
+                return result;
+            }
+
+            if (request.payload == Engine::StreamingPayloadKind::PhysicsCollider) {
+                const Engine::StreamingReadDescriptorEntry* descriptor = modernStreamingDescriptor(runtime, request);
+                if (!descriptor || !descriptor->descriptor.terrainChunkManifest) {
+                    result.status = Engine::StreamingPromotionStatus::MissingCachedPayload;
+                    result.message = "Missing terrain physics descriptor for promotion.";
+                    return result;
+                }
+                const Engine::TerrainDerivedCachePhysicsColliderReadResult read =
+                    Engine::TerrainDerivedCache::readPhysicsCollider(*descriptor->descriptor.terrainChunkManifest);
+                if (read.status != Engine::TerrainDerivedCacheStatus::Hit || !read.payload) {
+                    result.status = Engine::StreamingPromotionStatus::MissingCachedPayload;
+                    result.message = "Terrain physics collider payload was not readable during promotion.";
+                    return result;
+                }
+                Engine::TerrainPhysicsColliderCreateDescriptor create;
+                create.layer = {4u};
+                create.debugName = "streamed terrain physics";
+                Engine::TerrainPhysicsColliderHandle handle =
+                    runtime.terrainPhysics.createStaticCollider(runtime.scene, runtime.physics, *read.payload, create);
+                if (!Engine::isValid(handle)) {
+                    result.status = Engine::StreamingPromotionStatus::CallbackFailed;
+                    result.message = "Failed to create streamed terrain physics collider.";
+                    return result;
+                }
+                runtime.streamingPhysicsColliders[token] = handle;
+                ++runtime.terrainPhysicsColliderCount;
+                result.liveResources.physicsColliders =
+                    static_cast<uint32_t>(runtime.streamingPhysicsColliders.size());
+                result.status = Engine::StreamingPromotionStatus::Success;
+                result.message = "Promoted terrain physics collider.";
+                return result;
+            }
+
+            if (request.payload == Engine::StreamingPayloadKind::AssetDependency) {
+                result.status = Engine::StreamingPromotionStatus::Success;
+                result.liveResources.assetDependencies = 1;
+                result.message = "Promoted metadata-only asset dependency.";
+                return result;
+            }
+
+            return result;
+        };
+
+        callbacks.demote = [&runtime](
+            const Engine::StreamingDemotionRequest& request,
+            Engine::StreamingRuntimeToken token) {
+            Engine::StreamingPromotionResult result;
+            result.status = Engine::StreamingPromotionStatus::Success;
+            if (request.payload == Engine::StreamingPayloadKind::TerrainChunk) {
+                if (auto it = runtime.streamingTerrainChunks.find(token.value);
+                    it != runtime.streamingTerrainChunks.end()) {
+                    runtime.terrain.unloadChunk(it->second);
+                    runtime.streamingTerrainChunks.erase(it);
+                }
+                return result;
+            }
+            if (request.payload == Engine::StreamingPayloadKind::TerrainRenderLod) {
+                if (auto it = runtime.streamingTerrainHandles.find(token.value);
+                    it != runtime.streamingTerrainHandles.end()) {
+                    Renderer::destroyTerrainTile(it->second);
+                    runtime.streamingTerrainHandles.erase(it);
+                    runtime.terrainRendererCount =
+                        static_cast<uint32_t>(runtime.streamingTerrainHandles.size());
+                }
+                return result;
+            }
+            if (request.payload == Engine::StreamingPayloadKind::NavigationTile) {
+                if (auto it = runtime.streamingNavigationTiles.find(token.value);
+                    it != runtime.streamingNavigationTiles.end()) {
+                    runtime.navigation.destroyTile({
+                        request.key.terrainChunk.coord.x,
+                        request.key.terrainChunk.coord.z,
+                    });
+                    runtime.navigationConnectivity.removeChunk({
+                        request.key.terrainChunk.coord.x,
+                        request.key.terrainChunk.coord.z,
+                    });
+                    runtime.navigationConnectivity.relinkChunkAndNeighbors({
+                        request.key.terrainChunk.coord.x,
+                        request.key.terrainChunk.coord.z,
+                    });
+                    runtime.streamingNavigationTiles.erase(it);
+                    runtime.terrainNavTileCount =
+                        static_cast<uint32_t>(runtime.streamingNavigationTiles.size());
+                }
+                return result;
+            }
+            if (request.payload == Engine::StreamingPayloadKind::PhysicsCollider) {
+                if (auto it = runtime.streamingPhysicsColliders.find(token.value);
+                    it != runtime.streamingPhysicsColliders.end()) {
+                    runtime.terrainPhysics.destroyCollider(runtime.scene, runtime.physics, it->second);
+                    runtime.streamingPhysicsColliders.erase(it);
+                    runtime.terrainPhysicsColliderCount =
+                        static_cast<uint32_t>(runtime.streamingPhysicsColliders.size());
+                }
+                return result;
+            }
+            return result;
+        };
+        return callbacks;
     }
 
     bool addModernTerrainChunk(
@@ -854,6 +1364,7 @@
                 Engine::buildTerrainPhysicsCollider(*physicsRequest);
             if (physicsData.success && physicsData.payload) {
                 Engine::TerrainPhysicsColliderCreateDescriptor descriptor;
+                descriptor.layer = {4u};
                 descriptor.debugName = "modern terrain " +
                     std::to_string(data->coord.x) + "," + std::to_string(data->coord.z);
                 physicsCollider = runtime.terrainPhysics.createStaticCollider(
@@ -982,6 +1493,64 @@
         return !runtime.terrainChunks.empty();
     }
 
+    bool initializeModernStreamingTerrain(
+        ModernDefaultSceneRuntime& runtime,
+        Engine::AssetCache& assetCache)
+    {
+        runtime.terrainFallbackTexture = assetCache.acquireSolidTexture(82, 124, 72, 255);
+        runtime.terrainFallbackMaterial =
+            createMaterial("modern.terrain.streaming.fallback", runtime.terrainFallbackTexture.handle);
+
+        const std::array<Engine::TerrainSampleBiomeMaterialInput, 1> terrainMaterials{{
+            {"heightmap", {82, 124, 72, 255}},
+        }};
+        const Engine::TerrainMaterialSet materialSet =
+            Engine::makeSampleProceduralTerrainMaterialSet(terrainMaterials, {82, 124, 72, 255});
+        Engine::TerrainMaterialRenderCreateResult materialResult =
+            Engine::createTerrainMaterialResources(assetCache, materialSet);
+        if (materialResult.success) {
+            runtime.terrainMaterial = std::move(materialResult.binding);
+        } else {
+            ++runtime.warningCount;
+        }
+
+        Engine::OpenWorldStreamingRuntimeSettings settings = modernStreamingRuntimeSettings();
+        SDL_Log("Modern streaming build validation started: %s",
+            settings.savedBuildManifestPath.generic_string().c_str());
+        runtime.streamingRuntime = Engine::OpenWorldStreamingRuntime{settings};
+        const Engine::OpenWorldStreamingBuildResult& build = runtime.streamingRuntime.initializeFromSavedBuild();
+        if (!build.success) {
+            SDL_Log("Modern streaming build validation failed: %s", build.message.c_str());
+            ++runtime.warningCount;
+            return false;
+        }
+        if (build.rebuilt) {
+            SDL_Log("Modern streaming build rebuilt: %s (%u chunks, %u payload writes).",
+                build.message.c_str(),
+                build.bakeDiagnostics.importedChunkCount,
+                build.bakeDiagnostics.terrainChunkWrites +
+                    build.bakeDiagnostics.renderLodWrites +
+                    build.bakeDiagnostics.navigationTileWrites +
+                    build.bakeDiagnostics.physicsColliderWrites);
+        } else {
+            SDL_Log("Modern streaming build reused: %s", build.message.c_str());
+        }
+
+        Engine::TerrainSourceDescriptor source = modernStreamingTerrainSourceDescriptor(settings);
+        const Renderer::Aabb manifestBounds = boundsFromStreamingManifest(runtime.streamingRuntime.manifest());
+        source.bounds = {manifestBounds.min, manifestBounds.max};
+        runtime.bounds = manifestBounds;
+        runtime.terrainSource = runtime.terrain.registerSource(source);
+        if (!Engine::isValid(runtime.terrainSource)) {
+            SDL_Log("Modern streaming terrain source registration failed.");
+            ++runtime.warningCount;
+            return false;
+        }
+        runtime.loadedHeightmap = true;
+        SDL_Log("Modern runtime streaming active.");
+        return true;
+    }
+
     void rebuildModernNavigationWithSceneGeometry(
         ModernDefaultSceneRuntime& runtime,
         const Engine::TerrainSourceDescriptor& source)
@@ -995,7 +1564,12 @@
         Engine::NavAgentSettings agent;
         Engine::SceneNavigationGeometryBuildSettings geometrySettings;
         geometrySettings.maxWalkableSlopeDegrees = agent.maxSlopeDegrees;
-        geometrySettings.tileBoundsPadding = agent.radius;
+        const float navigationBorderPadding = std::max(
+            agent.radius * 2.0f,
+            runtime.navigation.settings().cellSize * 4.0f);
+        const uint32_t navigationBorderSamples = static_cast<uint32_t>(std::ceil(
+            navigationBorderPadding / std::max(source.defaultChunkSize / 16.0f, 0.0001f)));
+        geometrySettings.tileBoundsPadding = agent.radius + navigationBorderPadding;
 
         Engine::NavigationCacheSettings cacheSettings;
         cacheSettings.worldId = "modern_default_scene";
@@ -1015,6 +1589,8 @@
             terrainIdentity.importSettings,
             modernTerrainSourceTypeName(terrainIdentity.sourceType),
             Engine::TerrainNavigationAdapterVersion,
+            navigationBorderPadding,
+            navigationBorderSamples,
             modernSceneGeometryHash(runtime),
             geometrySettings.maxWalkableSlopeDegrees,
             geometrySettings.tileBoundsPadding,
@@ -1043,11 +1619,16 @@
                 ++runtime.navigationCacheMissCount;
             }
 
+            Engine::TerrainNavigationBuildSettings navSettings;
+            navSettings.navigationResolution = 17;
+            navSettings.borderPaddingWorld = navigationBorderPadding;
+            navSettings.borderSampleCount = navigationBorderSamples;
             const std::optional<Engine::TerrainNavigationBuildRequest> navRequest =
-                Engine::terrainNavigationRequestFromDatasetChunk(
+                Engine::terrainNavigationRequestFromDatasetNeighborhood(
                     runtime.terrain,
-                    chunkRuntime.chunk,
-                    17,
+                    runtime.terrainSource,
+                    {chunkRuntime.coord.x, chunkRuntime.coord.z},
+                    navSettings,
                     terrainIdentity);
             if (!navRequest) {
                 ++runtime.warningCount;
@@ -1089,16 +1670,25 @@
                 ++runtime.warningCount;
             }
         }
+        runtime.navigationStatus =
+            rebuildModernNavigationConnectivityFromLoadedTiles(runtime.navigationConnectivity, runtime.navigation);
+        SDL_Log("%s", runtime.navigationStatus.c_str());
     }
 
     std::unique_ptr<ModernDefaultSceneRuntime> startModernDefaultSceneRuntime(Engine::AssetCache& assetCache)
     {
         auto runtime = std::make_unique<ModernDefaultSceneRuntime>();
         runtime->characters.setNavigationService(&runtime->navigationService);
+        Engine::NavigationConnectivitySettings connectivitySettings = runtime->navigationConnectivity.settings();
+        connectivitySettings.requireCenterReachability = false;
+        runtime->navigationConnectivity.setSettings(connectivitySettings);
         runtime->bounds = {{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()},
             {-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()}};
 
-        (void)loadModernHeightmapTerrain(*runtime, assetCache);
+        runtime->usingOpenWorldStreaming = initializeModernStreamingTerrain(*runtime, assetCache);
+        if (!runtime->usingOpenWorldStreaming) {
+            (void)loadModernHeightmapTerrain(*runtime, assetCache);
+        }
         const std::optional<Engine::TerrainSourceDescriptor> terrainSource =
             runtime->terrain.sourceMetadata(runtime->terrainSource);
 
@@ -1147,21 +1737,15 @@
             3.0f);
 
         runtime->scene.updateWorldTransforms();
-        if (terrainSource) {
+        if (terrainSource && !runtime->usingOpenWorldStreaming) {
             rebuildModernNavigationWithSceneGeometry(*runtime, *terrainSource);
         }
 
         runtime->playerActor = runtime->scene.createActor({0x4d4f4445524e01ull});
         Engine::SceneTransform playerTransform;
-        playerTransform.translation = modernTerrainRelativePosition(*runtime, focus, {0.0f, 4.0f, -30.0f});
+        playerTransform.translation = modernTerrainRelativePosition(*runtime, focus, {0.0f, 24.0f, -30.0f});
         runtime->scene.setLocalTransform(runtime->playerActor, playerTransform);
-        Engine::SceneCharacterDescriptor character;
-        character.actor = runtime->playerActor;
-        character.radius = 0.45f;
-        character.height = 1.8f;
-        character.maxSpeed = 7.0f;
-        character.debugName = "modern.player";
-        runtime->playerCharacter = runtime->characters.createCharacter(character);
+        runtime->playerCharacter = createModernPlayerCharacter(*runtime);
         if (!Engine::isValid(runtime->playerCharacter)) {
             ++runtime->warningCount;
         }
@@ -1183,6 +1767,7 @@
         runtime->schedulerStarted = runtime->scene.lifecycleState() == Engine::SceneLifecycleState::Started;
         runtime->status = "Modern default scene: terrain " +
             std::string{runtime->loadedHeightmap ? "heightmap" : "procedural fallback"} +
+            std::string{runtime->usingOpenWorldStreaming ? " streaming" : " eager"} +
             ", terrain chunks " + std::to_string(runtime->terrainChunks.size()) +
             ", authored nav sources " + std::to_string(runtime->authoredNavigationSourceCount) +
             ", authored physics bodies " + std::to_string(runtime->authoredPhysicsBodyCount) +

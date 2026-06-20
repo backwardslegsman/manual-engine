@@ -28,6 +28,8 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 
 namespace {
+    constexpr uint32_t TerrainGroundLayer = 4u;
+
     namespace ObjectLayers {
         constexpr JPH::ObjectLayer NonMoving = 0;
         constexpr JPH::ObjectLayer Moving = 1;
@@ -229,6 +231,100 @@ namespace {
         consider(dzMin, {0.0f, 0.0f, -1.0f}, best, normal);
         consider(dzMax, {0.0f, 0.0f, 1.0f}, best, normal);
         return normal;
+    }
+
+    struct VerticalSweepHit {
+        float t = std::numeric_limits<float>::max();
+        glm::vec3 position{0.0f};
+        glm::vec3 normal{0.0f, 1.0f, 0.0f};
+    };
+
+    bool pointInTriangleXZ(
+        const glm::vec3& point,
+        const glm::vec3& a,
+        const glm::vec3& b,
+        const glm::vec3& c,
+        float& u,
+        float& v,
+        float& w)
+    {
+        const glm::vec2 p{point.x, point.z};
+        const glm::vec2 pa{a.x, a.z};
+        const glm::vec2 pb{b.x, b.z};
+        const glm::vec2 pc{c.x, c.z};
+        const glm::vec2 v0 = pb - pa;
+        const glm::vec2 v1 = pc - pa;
+        const glm::vec2 v2 = p - pa;
+        const float d00 = glm::dot(v0, v0);
+        const float d01 = glm::dot(v0, v1);
+        const float d11 = glm::dot(v1, v1);
+        const float d20 = glm::dot(v2, v0);
+        const float d21 = glm::dot(v2, v1);
+        const float denom = d00 * d11 - d01 * d01;
+        if (std::abs(denom) <= 0.000001f) {
+            return false;
+        }
+        v = (d11 * d20 - d01 * d21) / denom;
+        w = (d00 * d21 - d01 * d20) / denom;
+        u = 1.0f - v - w;
+        constexpr float Tolerance = 0.0001f;
+        return u >= -Tolerance && v >= -Tolerance && w >= -Tolerance;
+    }
+
+    std::optional<VerticalSweepHit> verticalCapsuleTriangleMeshSweep(
+        const Engine::ScenePhysicsTriangleMeshShape& mesh,
+        const glm::vec3& bodyPosition,
+        const Engine::ScenePhysicsCapsuleShape& capsule,
+        const glm::vec3& start,
+        const glm::vec3& end)
+    {
+        const glm::vec3 delta = end - start;
+        if (glm::length2(glm::vec2{delta.x, delta.z}) > 0.000001f ||
+            std::abs(delta.y) <= 0.000001f) {
+            return std::nullopt;
+        }
+
+        VerticalSweepHit best;
+        for (size_t index = 0; index + 2 < mesh.indices.size(); index += 3) {
+            const uint32_t ia = mesh.indices[index];
+            const uint32_t ib = mesh.indices[index + 1];
+            const uint32_t ic = mesh.indices[index + 2];
+            if (ia >= mesh.vertices.size() || ib >= mesh.vertices.size() || ic >= mesh.vertices.size()) {
+                continue;
+            }
+            const glm::vec3 a = bodyPosition + mesh.vertices[ia];
+            const glm::vec3 b = bodyPosition + mesh.vertices[ib];
+            const glm::vec3 c = bodyPosition + mesh.vertices[ic];
+            float u = 0.0f;
+            float v = 0.0f;
+            float w = 0.0f;
+            if (!pointInTriangleXZ(start, a, b, c, u, v, w)) {
+                continue;
+            }
+            glm::vec3 normal = glm::cross(b - a, c - a);
+            if (glm::length2(normal) <= 0.000001f) {
+                continue;
+            }
+            normal = glm::normalize(normal);
+            if (normal.y < 0.0f) {
+                normal = -normal;
+            }
+            const float surfaceY = a.y * u + b.y * v + c.y * w;
+            const float contactY = surfaceY + capsule.halfHeight + capsule.radius;
+            const float t = (contactY - start.y) / delta.y;
+            if (t < -0.0001f || t > 1.0001f || t >= best.t) {
+                continue;
+            }
+            best.t = std::clamp(t, 0.0f, 1.0f);
+            best.position = start + delta * best.t;
+            best.position.y = contactY;
+            best.normal = normal;
+        }
+
+        if (best.t == std::numeric_limits<float>::max()) {
+            return std::nullopt;
+        }
+        return best;
     }
 }
 
@@ -1102,6 +1198,7 @@ namespace Engine {
         }
 
         const glm::vec3 inflation{capsule.radius, capsule.halfHeight + capsule.radius, capsule.radius};
+        const bool verticalSweep = glm::length2(glm::vec2{end.x - start.x, end.z - start.z}) <= 0.000001f;
         float bestT = std::numeric_limits<float>::max();
         ScenePhysicsHit bestHit;
         for (uint32_t bodyIndex = 0; bodyIndex < impl_->bodies.size(); ++bodyIndex) {
@@ -1115,15 +1212,47 @@ namespace Engine {
             }
             bounds->min -= inflation;
             bounds->max += inflation;
-            std::optional<float> t = rayAabb(start, end, *bounds);
-            if (!t || *t > bestT) {
+            const std::optional<float> boundsT = rayAabb(start, end, *bounds);
+            if (!boundsT || *boundsT > bestT) {
                 continue;
             }
-            bestT = *t;
+
+            const bool hasTriangleMesh = std::ranges::any_of(body.colliders, [&](SceneColliderHandle colliderHandle) {
+                const Impl::ColliderRecord* collider = impl_->record(colliderHandle);
+                return collider && collider->shape.type == ScenePhysicsShapeType::StaticTriangleMesh;
+            });
+            if (verticalSweep && hasTriangleMesh && body.descriptor.layer.value != TerrainGroundLayer) {
+                continue;
+            }
+            if (verticalSweep && hasTriangleMesh) {
+                for (SceneColliderHandle colliderHandle : body.colliders) {
+                    const Impl::ColliderRecord* collider = impl_->record(colliderHandle);
+                    if (!collider || collider->shape.type != ScenePhysicsShapeType::StaticTriangleMesh) {
+                        continue;
+                    }
+                    if (const std::optional<VerticalSweepHit> hit = verticalCapsuleTriangleMeshSweep(
+                            collider->shape.triangleMesh,
+                            body.position,
+                            capsule,
+                            start,
+                            end);
+                        hit && hit->t < bestT) {
+                        bestT = hit->t;
+                        bestHit.body = {bodyIndex, body.generation};
+                        bestHit.collider = colliderHandle;
+                        bestHit.actor = body.descriptor.actor;
+                        bestHit.position = hit->position;
+                        bestHit.normal = hit->normal;
+                        bestHit.distance = glm::length(hit->position - start);
+                    }
+                }
+                continue;
+            }
+            bestT = *boundsT;
             bestHit.body = {bodyIndex, body.generation};
             bestHit.collider = body.colliders.empty() ? SceneColliderHandle{} : body.colliders.front();
             bestHit.actor = body.descriptor.actor;
-            bestHit.position = start + (end - start) * *t;
+            bestHit.position = start + (end - start) * *boundsT;
             bestHit.normal = normalForPointOnAabb(bestHit.position, *bounds);
             bestHit.distance = glm::length(bestHit.position - start);
         }

@@ -102,6 +102,17 @@ namespace Engine {
             imported.metadata.importSettings,
             TerrainDatasetSourceType::HeightmapImported,
         };
+        const float navigationStep = settings.heightmap.chunkWorldSize /
+            static_cast<float>(std::max(settings.navigationResolution, 2u) - 1u);
+        const float defaultBorderPadding = std::max(
+            settings.navAgent.radius * 2.0f,
+            settings.navBuild.cellSize * 4.0f);
+        const float navigationBorderPadding = settings.terrainNavigationBorderPaddingWorld > 0.0f
+            ? settings.terrainNavigationBorderPaddingWorld
+            : defaultBorderPadding;
+        const uint32_t navigationBorderSamples = settings.terrainNavigationBorderSampleCount > 0
+            ? settings.terrainNavigationBorderSampleCount
+            : static_cast<uint32_t>(std::ceil(navigationBorderPadding / std::max(navigationStep, 0.0001f)));
 
         const NavigationCacheManifest navigationManifest = NavigationCache::buildManifest(
             settings.navigationCache,
@@ -118,6 +129,8 @@ namespace Engine {
             imported.metadata.importSettings,
             "heightmap_imported",
             TerrainNavigationAdapterVersion,
+            navigationBorderPadding,
+            navigationBorderSamples,
             settings.sceneGeometryHash,
             settings.sceneGeometryMaxSlopeDegrees,
             settings.sceneGeometryTileBoundsPadding,
@@ -143,20 +156,22 @@ namespace Engine {
                 const TerrainDerivedCacheWriteResult write =
                     TerrainDerivedCache::writeChunk(baked.terrainChunkManifest, cachedChunk);
                 recordTerrainWrite(result.diagnostics, write, result.diagnostics.terrainChunkWrites);
-                result.streamingManifest.records.push_back(makeTerrainStreamingManifestRecord(
-                    chunk.id,
-                    baked.bounds,
-                    stableHashString(result.sourceHash),
-                    stableHashString(baked.terrainChunkManifest.identityHash),
-                    write.bytes,
-                    StreamingPayloadKind::TerrainChunk,
-                    "baked terrain chunk"));
-                setStreamingReadDescriptor(
-                    result.readDescriptors,
-                    result.streamingManifest.records.back().key,
-                    StreamingPayloadKind::TerrainChunk,
-                    hashStreamingManifestRecord(result.streamingManifest.records.back()),
-                    terrainChunkCacheReadDescriptor(baked.terrainChunkManifest));
+                if (write.status == TerrainDerivedCacheStatus::WriteSuccess) {
+                    result.streamingManifest.records.push_back(makeTerrainStreamingManifestRecord(
+                        chunk.id,
+                        baked.bounds,
+                        stableHashString(result.sourceHash),
+                        stableHashString(baked.terrainChunkManifest.identityHash),
+                        write.bytes,
+                        StreamingPayloadKind::TerrainChunk,
+                        "baked terrain chunk"));
+                    setStreamingReadDescriptor(
+                        result.readDescriptors,
+                        result.streamingManifest.records.back().key,
+                        StreamingPayloadKind::TerrainChunk,
+                        hashStreamingManifestRecord(result.streamingManifest.records.back()),
+                        terrainChunkCacheReadDescriptor(baked.terrainChunkManifest));
+                }
             }
 
             if (settings.bakeRenderLods) {
@@ -171,34 +186,45 @@ namespace Engine {
                         TerrainDerivedCache::writeLodMesh(lodManifest, lodPayload);
                     recordTerrainWrite(result.diagnostics, write, result.diagnostics.renderLodWrites);
                     baked.renderLodManifests.push_back(lodManifest);
-                    result.streamingManifest.records.push_back(makeTerrainStreamingManifestRecord(
-                        chunk.id,
-                        baked.bounds,
-                        stableHashString(result.sourceHash),
-                        stableHashString(lodManifest.identityHash),
-                        write.bytes,
-                        StreamingPayloadKind::TerrainRenderLod,
-                        "baked terrain render lod"));
-                    setStreamingReadDescriptor(
-                        result.readDescriptors,
-                        result.streamingManifest.records.back().key,
-                        StreamingPayloadKind::TerrainRenderLod,
-                        hashStreamingManifestRecord(result.streamingManifest.records.back()),
-                        terrainLodMeshCacheReadDescriptor(lodManifest));
+                    if (write.status == TerrainDerivedCacheStatus::WriteSuccess) {
+                        result.streamingManifest.records.push_back(makeTerrainStreamingManifestRecord(
+                            chunk.id,
+                            baked.bounds,
+                            stableHashString(result.sourceHash),
+                            stableHashString(lodManifest.identityHash),
+                            write.bytes,
+                            StreamingPayloadKind::TerrainRenderLod,
+                            "baked terrain render lod"));
+                        result.streamingManifest.records.back().key.variantId =
+                            "terrain_lod_" + std::to_string(lod.lodIndex);
+                        result.streamingManifest.records.back().haloProfile = lod.lodIndex == 0
+                            ? StreamingHaloProfile::HighDetailLive
+                            : StreamingHaloProfile::LowDetailLive;
+                        result.streamingManifest.records.back().detailLevel = lod.lodIndex;
+                        setStreamingReadDescriptor(
+                            result.readDescriptors,
+                            result.streamingManifest.records.back().key,
+                            StreamingPayloadKind::TerrainRenderLod,
+                            hashStreamingManifestRecord(result.streamingManifest.records.back()),
+                            terrainLodMeshCacheReadDescriptor(lodManifest));
+                    }
                 }
             }
 
             if (settings.bakeNavigationTiles) {
-                TerrainNavigationBuildRequest navRequest;
-                navRequest.chunkId = chunk.id;
-                navRequest.coord = baked.coord;
-                navRequest.origin = chunk.origin;
-                navRequest.size = chunk.size;
-                navRequest.sourceResolution = chunk.resolution;
-                navRequest.navigationResolution = settings.navigationResolution;
-                navRequest.heights = chunk.heights;
-                navRequest.identity = navIdentity;
-                const TerrainNavigationBuildResult terrainNav = buildTerrainNavigationData(navRequest);
+                TerrainNavigationBuildSettings navSettings;
+                navSettings.navigationResolution = settings.navigationResolution;
+                navSettings.borderPaddingWorld = navigationBorderPadding;
+                navSettings.borderSampleCount = navigationBorderSamples;
+                const std::optional<TerrainNavigationBuildRequest> navRequest =
+                    terrainNavigationRequestFromImportedChunkNeighborhood(
+                        imported.chunks,
+                        chunk.id,
+                        navSettings,
+                        navIdentity);
+                const TerrainNavigationBuildResult terrainNav = navRequest
+                    ? buildTerrainNavigationData(*navRequest)
+                    : TerrainNavigationBuildResult{};
                 if (terrainNav.success && terrainNav.buildData) {
                     const NavigationTileBuildResult tile = NavigationSystem::buildTerrainTileData(
                         *terrainNav.buildData,
@@ -208,6 +234,22 @@ namespace Engine {
                         const NavigationCacheWriteResult write =
                             NavigationCache::writeTileCache(settings.navigationCache, navigationManifest, *tile.tileData);
                         recordNavigationWrite(result.diagnostics, write);
+                        if (write.status == NavigationCacheOperationStatus::WriteSuccess) {
+                            result.streamingManifest.records.push_back(makeTerrainStreamingManifestRecord(
+                                chunk.id,
+                                baked.bounds,
+                                stableHashString(result.sourceHash),
+                                stableHashString(navigationManifest.identityHash),
+                                static_cast<uint64_t>(tile.tileData->detourTileData.size()),
+                                StreamingPayloadKind::NavigationTile,
+                                "baked navigation tile"));
+                            setStreamingReadDescriptor(
+                                result.readDescriptors,
+                                result.streamingManifest.records.back().key,
+                                StreamingPayloadKind::NavigationTile,
+                                hashStreamingManifestRecord(result.streamingManifest.records.back()),
+                                navigationTileCacheReadDescriptor(settings.navigationCache, navigationManifest, baked.coord));
+                        }
                     } else {
                         ++result.diagnostics.failedPayloadCount;
                         result.diagnostics.warnings.push_back(tile.message);
@@ -216,20 +258,6 @@ namespace Engine {
                     ++result.diagnostics.failedPayloadCount;
                     result.diagnostics.warnings.push_back(terrainNav.diagnostics.message);
                 }
-                result.streamingManifest.records.push_back(makeTerrainStreamingManifestRecord(
-                    chunk.id,
-                    baked.bounds,
-                    stableHashString(result.sourceHash),
-                    stableHashString(navigationManifest.identityHash),
-                    0,
-                    StreamingPayloadKind::NavigationTile,
-                    "baked navigation tile"));
-                setStreamingReadDescriptor(
-                    result.readDescriptors,
-                    result.streamingManifest.records.back().key,
-                    StreamingPayloadKind::NavigationTile,
-                    hashStreamingManifestRecord(result.streamingManifest.records.back()),
-                    navigationTileCacheReadDescriptor(settings.navigationCache, navigationManifest, baked.coord));
             }
 
             if (settings.bakePhysicsColliders) {
@@ -251,20 +279,22 @@ namespace Engine {
                     const TerrainDerivedCacheWriteResult write =
                         TerrainDerivedCache::writePhysicsCollider(baked.physicsColliderManifest, *physics.payload);
                     recordTerrainWrite(result.diagnostics, write, result.diagnostics.physicsColliderWrites);
-                    result.streamingManifest.records.push_back(makeTerrainStreamingManifestRecord(
-                        chunk.id,
-                        baked.bounds,
-                        stableHashString(result.sourceHash),
-                        stableHashString(baked.physicsColliderManifest.identityHash),
-                        write.bytes,
-                        StreamingPayloadKind::PhysicsCollider,
-                        "baked terrain physics collider"));
-                    setStreamingReadDescriptor(
-                        result.readDescriptors,
-                        result.streamingManifest.records.back().key,
-                        StreamingPayloadKind::PhysicsCollider,
-                        hashStreamingManifestRecord(result.streamingManifest.records.back()),
-                        terrainPhysicsColliderCacheReadDescriptor(baked.physicsColliderManifest));
+                    if (write.status == TerrainDerivedCacheStatus::WriteSuccess) {
+                        result.streamingManifest.records.push_back(makeTerrainStreamingManifestRecord(
+                            chunk.id,
+                            baked.bounds,
+                            stableHashString(result.sourceHash),
+                            stableHashString(baked.physicsColliderManifest.identityHash),
+                            write.bytes,
+                            StreamingPayloadKind::PhysicsCollider,
+                            "baked terrain physics collider"));
+                        setStreamingReadDescriptor(
+                            result.readDescriptors,
+                            result.streamingManifest.records.back().key,
+                            StreamingPayloadKind::PhysicsCollider,
+                            hashStreamingManifestRecord(result.streamingManifest.records.back()),
+                            terrainPhysicsColliderCacheReadDescriptor(baked.physicsColliderManifest));
+                    }
                 } else {
                     ++result.diagnostics.failedPayloadCount;
                     result.diagnostics.warnings.push_back(physics.diagnostics.message);

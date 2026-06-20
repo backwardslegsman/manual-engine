@@ -48,6 +48,8 @@ namespace Engine {
         float edgeBandWidth = 4.0f;
         float portalMergeDistance = 2.0f;
         float neighborLinkDistance = 6.0f;
+        float maxPortalHeightDelta = 0.65f;
+        bool requireCenterReachability = true;
     };
 
     struct NavigationConnectivityStats {
@@ -65,6 +67,7 @@ namespace Engine {
         uint32_t rejectedNoNearestPolyCount = 0;
         uint32_t rejectedEdgeBandCount = 0;
         uint32_t rejectedCenterReachabilityCount = 0;
+        uint32_t rejectedHeightDeltaCount = 0;
         uint32_t mergedDuplicateCount = 0;
     };
 
@@ -120,21 +123,38 @@ namespace Engine {
             const NavigationSystem& navigation,
             const TerrainSystem& terrain,
             const NavAgentSettings& agent);
+        void rebuild(
+            const std::vector<ChunkCoord>& loadedNavChunks,
+            const NavigationSystem& navigation,
+            const NavAgentSettings& agent);
         void rebuildChunk(
             ChunkCoord coord,
             const NavigationSystem& navigation,
             const TerrainSystem& terrain,
+            const NavAgentSettings& agent);
+        void rebuildChunk(
+            ChunkCoord coord,
+            const NavigationSystem& navigation,
             const NavAgentSettings& agent);
         void rebuildChunks(
             std::span<const ChunkCoord> coords,
             const NavigationSystem& navigation,
             const TerrainSystem& terrain,
             const NavAgentSettings& agent);
+        void rebuildChunks(
+            std::span<const ChunkCoord> coords,
+            const NavigationSystem& navigation,
+            const NavAgentSettings& agent);
         NavigationConnectivityBuildHandle beginRebuild(NavigationConnectivityBuildRequest request);
         NavigationConnectivityBuildStepResult stepRebuild(
             NavigationConnectivityBuildHandle handle,
             const NavigationSystem& navigation,
             const TerrainSystem& terrain,
+            const NavAgentSettings& agent,
+            uint32_t maxSamples);
+        NavigationConnectivityBuildStepResult stepRebuild(
+            NavigationConnectivityBuildHandle handle,
+            const NavigationSystem& navigation,
             const NavAgentSettings& agent,
             uint32_t maxSamples);
         void cancelRebuild(NavigationConnectivityBuildHandle handle);
@@ -160,7 +180,7 @@ namespace Engine {
             float t,
             const Renderer::Aabb& bounds,
             const NavigationSystem& navigation,
-            const TerrainSystem& terrain,
+            const TerrainSystem* terrain,
             const NavAgentSettings& agent,
             NavigationPortalEdgeDiagnostics& diagnostics) const;
         bool shouldMergePortal(const std::vector<ChunkNavPortal>& portals, const glm::vec3& position) const;

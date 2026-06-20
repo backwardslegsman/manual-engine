@@ -143,6 +143,11 @@ namespace Engine {
             glm::vec3 end,
             const NavigationAgentConfig& agent = {},
             const NavigationQueryFilter& filter = {});
+        [[nodiscard]] NavigationPathResult findPathAcrossLoadedTiles(
+            glm::vec3 start,
+            glm::vec3 end,
+            const NavigationAgentConfig& agent = {},
+            const NavigationQueryFilter& filter = {});
         [[nodiscard]] NavigationPathResult findPathFromActor(
             Scene& scene,
             SceneActorHandle actor,

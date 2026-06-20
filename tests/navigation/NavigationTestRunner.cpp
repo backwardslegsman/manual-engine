@@ -1067,6 +1067,72 @@ namespace {
         ctx.expect(accepted + rejected <= samples, "portal diagnostics counted more outcomes than samples");
     }
 
+    void terrainFreeConnectivityLinksAdjacentTiles(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationSystem navigation;
+        Engine::NavAgentSettings agent;
+        if (!addTiles(terrain, navigation, {{{0, 0}, heights(0.0f), {}}, {{1, 0}, heights(0.0f), {}}}, agent, ctx)) {
+            return;
+        }
+
+        Engine::NavigationConnectivitySystem connectivity;
+        connectivity.rebuild({{0, 0}, {1, 0}}, navigation, agent);
+        const Engine::NavigationConnectivityStats stats = connectivity.stats();
+        ctx.expect(stats.chunkCount == 2, "terrain-free connectivity did not build both chunks");
+        ctx.expect(stats.totalPortals > 0, "terrain-free connectivity produced no portals");
+        ctx.expect(stats.connectedPortals > 0, "terrain-free connectivity did not connect adjacent portals");
+    }
+
+    void missingNeighborLeavesPortalUnconnected(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationSystem navigation;
+        Engine::NavAgentSettings agent;
+        if (!addTiles(terrain, navigation, {{{0, 0}, heights(0.0f), {}}}, agent, ctx)) {
+            return;
+        }
+
+        Engine::NavigationConnectivitySystem connectivity;
+        connectivity.rebuild({{0, 0}}, navigation, agent);
+        const Engine::NavigationConnectivityStats stats = connectivity.stats();
+        ctx.expect(stats.totalPortals > 0, "single tile connectivity produced no edge portals");
+        ctx.expect(stats.connectedPortals == 0, "single tile unexpectedly reported connected neighbor portals");
+    }
+
+    void heightDeltaRejectsSteepTileSeam(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationSystem navigation;
+        Engine::NavAgentSettings agent;
+        agent.maxClimb = 10.0f;
+        if (!addTiles(
+                terrain,
+                navigation,
+                {{{0, 0}, heights(0.0f), {}}, {{1, 0}, heights(3.0f), {}}},
+                agent,
+                ctx)) {
+            return;
+        }
+
+        Engine::NavigationConnectivitySettings settings;
+        settings.maxPortalHeightDelta = 0.25f;
+        Engine::NavigationConnectivitySystem connectivity{settings};
+        connectivity.rebuild({{0, 0}, {1, 0}}, navigation, agent);
+        const Engine::NavigationConnectivityStats stats = connectivity.stats();
+        ctx.expect(stats.totalPortals > 0, "height delta setup produced no portals to reject");
+        ctx.expect(stats.connectedPortals == 0, "steep seam unexpectedly connected portals");
+        const Engine::ChunkPortalDiagnostics* diagnostics = connectivity.portalDiagnostics({0, 0});
+        ctx.expect(diagnostics != nullptr, "missing diagnostics for height delta rejection");
+        if (diagnostics) {
+            uint32_t rejectedHeight = 0;
+            for (const Engine::NavigationPortalEdgeDiagnostics& edge : diagnostics->edges) {
+                rejectedHeight += edge.rejectedHeightDeltaCount;
+            }
+            ctx.expect(rejectedHeight > 0, "height delta rejection was not diagnosed");
+        }
+    }
+
     void phasedConnectivityMatchesSynchronousRebuild(TestContext& ctx)
     {
         Engine::TerrainSystem terrain = makeTerrain();
@@ -1577,6 +1643,8 @@ namespace {
                 {"terrain", "1", "default"},
                 "heightmap_imported",
                 "terrain_navigation_adapter_t5_v1",
+                0.0f,
+                0u,
                 std::move(sceneHash),
                 slope,
                 padding,
@@ -1903,6 +1971,9 @@ int main()
         {"ManualInputCancelsPath", manualInputCancelsPath},
         {"TileDiagnosticsAfterLiveBuild", tileDiagnosticsAfterLiveBuild},
         {"PortalDiagnosticsAfterConnectivityBuild", portalDiagnosticsAfterConnectivityBuild},
+        {"TerrainFreeConnectivityLinksAdjacentTiles", terrainFreeConnectivityLinksAdjacentTiles},
+        {"MissingNeighborLeavesPortalUnconnected", missingNeighborLeavesPortalUnconnected},
+        {"HeightDeltaRejectsSteepTileSeam", heightDeltaRejectsSteepTileSeam},
         {"PhasedConnectivityMatchesSynchronousRebuild", phasedConnectivityMatchesSynchronousRebuild},
         {"PhasedConnectivityMaxSamplesSplitsWork", phasedConnectivityMaxSamplesSplitsWork},
         {"PhasedConnectivityCancelStopsMutation", phasedConnectivityCancelStopsMutation},

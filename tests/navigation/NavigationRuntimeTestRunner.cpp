@@ -13,6 +13,7 @@
 #include <glm/glm.hpp>
 
 #include "Engine/Navigation.hpp"
+#include "Engine/NavigationConnectivity.hpp"
 #include "Engine/NavigationRuntime.hpp"
 #include "Engine/Scene/Scene.hpp"
 #include "Engine/Terrain.hpp"
@@ -79,13 +80,15 @@ namespace {
         buildData.bounds.max = glm::max(buildData.bounds.max, bounds.max);
     }
 
-    bool addFlatTile(
+    bool addFlatTileAt(
         Engine::TerrainSystem& terrain,
         Engine::NavigationSystem& navigation,
         TestContext& ctx,
+        Engine::ChunkCoord coord,
+        float height,
         std::vector<Renderer::Aabb> blockers = {})
     {
-        const Engine::TerrainTileHandle tile = terrain.createTileFromHeights({0, 0}, heights(0.0f));
+        const Engine::TerrainTileHandle tile = terrain.createTileFromHeights(coord, heights(height));
         if (tile.id == UINT32_MAX) {
             ctx.expect(false, "failed to create CPU terrain tile");
             return false;
@@ -104,6 +107,15 @@ namespace {
             return false;
         }
         return true;
+    }
+
+    bool addFlatTile(
+        Engine::TerrainSystem& terrain,
+        Engine::NavigationSystem& navigation,
+        TestContext& ctx,
+        std::vector<Renderer::Aabb> blockers = {})
+    {
+        return addFlatTileAt(terrain, navigation, ctx, {0, 0}, 0.0f, std::move(blockers));
     }
 
     std::filesystem::path runtimeHeaderPath()
@@ -285,6 +297,87 @@ namespace {
             "diagnostics reset did not restore default status");
     }
 
+    void crossLoadedTilesUsesDirectPathWhenAvailable(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationSystem navigation;
+        if (!addFlatTileAt(terrain, navigation, ctx, {0, 0}, 0.0f) ||
+            !addFlatTileAt(terrain, navigation, ctx, {1, 0}, 0.0f)) {
+            return;
+        }
+        Engine::NavigationConnectivitySystem connectivity;
+        connectivity.rebuild({{0, 0}, {1, 0}}, navigation, Engine::NavAgentSettings{});
+        Engine::SceneNavigationService service{navigation, &connectivity};
+
+        const Engine::NavigationPathResult result =
+            service.findPathAcrossLoadedTiles({2.0f, 0.0f, 8.0f}, {30.0f, 0.0f, 8.0f});
+        ctx.expect(result.status == Engine::NavigationRuntimeStatus::Success,
+            "cross-loaded direct path failed: " + result.message);
+        ctx.expect(result.path.complete, "cross-loaded direct path was incomplete");
+    }
+
+    void crossLoadedTilesStitchesPortalRoute(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationSystem navigation;
+        if (!addFlatTileAt(terrain, navigation, ctx, {0, 0}, 0.0f) ||
+            !addFlatTileAt(terrain, navigation, ctx, {2, 0}, 0.0f)) {
+            return;
+        }
+
+        Engine::ChunkNavConnectivity startConnectivity;
+        startConnectivity.coord = {0, 0};
+        startConnectivity.biomeId = "test";
+        startConnectivity.traversalCost = ChunkSize;
+        startConnectivity.partial = true;
+        startConnectivity.portalsByEdge[static_cast<uint32_t>(Engine::NavEdgeDirection::East)].push_back({
+            Engine::NavEdgeDirection::East,
+            {15.0f, 0.0f, 8.0f},
+            {2, 0},
+            true,
+            true,
+            {33.0f, 0.0f, 8.0f},
+        });
+        Engine::ChunkNavConnectivity goalConnectivity;
+        goalConnectivity.coord = {2, 0};
+        goalConnectivity.biomeId = "test";
+        goalConnectivity.traversalCost = ChunkSize;
+        goalConnectivity.partial = true;
+
+        Engine::NavigationConnectivitySystem connectivity;
+        connectivity.loadCacheData({{startConnectivity, goalConnectivity}});
+        Engine::SceneNavigationService service{navigation, &connectivity};
+
+        const Engine::NavigationPathResult direct =
+            service.findPath({2.0f, 0.0f, 8.0f}, {46.0f, 0.0f, 8.0f});
+        ctx.expect(direct.status != Engine::NavigationRuntimeStatus::Success || !direct.path.complete,
+            "test setup unexpectedly had a direct Detour path");
+
+        const Engine::NavigationPathResult stitched =
+            service.findPathAcrossLoadedTiles({2.0f, 0.0f, 8.0f}, {46.0f, 0.0f, 8.0f});
+        ctx.expect(stitched.status == Engine::NavigationRuntimeStatus::Success,
+            "stitched portal route failed: " + stitched.message);
+        ctx.expect(stitched.path.complete, "stitched portal route was incomplete");
+        ctx.expect(stitched.path.points.size() >= 4, "stitched portal route did not include seam waypoints");
+    }
+
+    void crossLoadedTilesMissingConnectivityFailsCleanly(TestContext& ctx)
+    {
+        Engine::TerrainSystem terrain = makeTerrain();
+        Engine::NavigationSystem navigation;
+        if (!addFlatTileAt(terrain, navigation, ctx, {0, 0}, 0.0f) ||
+            !addFlatTileAt(terrain, navigation, ctx, {2, 0}, 0.0f)) {
+            return;
+        }
+        Engine::SceneNavigationService service{navigation};
+
+        const Engine::NavigationPathResult result =
+            service.findPathAcrossLoadedTiles({2.0f, 0.0f, 8.0f}, {46.0f, 0.0f, 8.0f});
+        ctx.expect(result.status != Engine::NavigationRuntimeStatus::Success,
+            "missing connectivity unexpectedly produced a route");
+        ctx.expect(!result.message.empty(), "missing connectivity failure had no message");
+    }
+
     void publicHeaderDoesNotExposeRecastDetour(TestContext& ctx)
     {
         const std::filesystem::path path = runtimeHeaderPath();
@@ -309,6 +402,9 @@ int main()
         {"SceneActorPathUsesWorldTransform", sceneActorPathUsesWorldTransform},
         {"InvalidInputsFailCleanly", invalidInputsFailCleanly},
         {"DiagnosticsAndDebugRequestsAreRecorded", diagnosticsAndDebugRequestsAreRecorded},
+        {"CrossLoadedTilesUsesDirectPathWhenAvailable", crossLoadedTilesUsesDirectPathWhenAvailable},
+        {"CrossLoadedTilesStitchesPortalRoute", crossLoadedTilesStitchesPortalRoute},
+        {"CrossLoadedTilesMissingConnectivityFailsCleanly", crossLoadedTilesMissingConnectivityFailsCleanly},
         {"PublicHeaderDoesNotExposeRecastDetour", publicHeaderDoesNotExposeRecastDetour},
     };
 

@@ -15,6 +15,7 @@ namespace Engine {
     namespace {
         constexpr float Epsilon = 0.0001f;
         constexpr float SweepLift = 0.02f;
+        constexpr float MaxFallSpeed = 80.0f;
 
         [[nodiscard]] bool finite(float value)
         {
@@ -239,7 +240,8 @@ namespace Engine {
         effective.filter.allowPartialPath = request.allowPartialPath;
         ++diagnostics_.pathQueryCount;
         const glm::vec3 start = glm::vec3((*world)[3]);
-        NavigationPathResult path = navigation_->findPath(start, request.goal, request.agent, effective.filter);
+        NavigationPathResult path =
+            navigation_->findPathAcrossLoadedTiles(start, request.goal, request.agent, effective.filter);
         if (path.status != NavigationRuntimeStatus::Success || !path.path.complete || path.path.points.empty()) {
             target->state.activePath = {};
             target->state.activeWaypointIndex = 0;
@@ -310,7 +312,9 @@ namespace Engine {
                 character.state.grounded = false;
                 character.state.mode = SceneCharacterMovementMode::Falling;
                 character.state.floorDistance = ground.hit ? ground.distance : character.descriptor.snapDistance;
-                character.state.velocity.y -= character.descriptor.gravity * deltaSeconds;
+                character.state.velocity.y = std::max(
+                    character.state.velocity.y - character.descriptor.gravity * deltaSeconds,
+                    -MaxFallSpeed);
             }
 
         const bool manualInput = glm::length2(xz(character.input.direction)) > Epsilon;
@@ -482,6 +486,10 @@ namespace Engine {
             record.descriptor.physicsFilter);
         appendDebug({SceneCharacterDebugRequestType::GroundProbe, SceneCharacterMovementStatus::Success, handle, position, end});
         if (sweep.status != ScenePhysicsQueryStatus::Success || !sweep.hit.has_value()) {
+            ScenePhysicsShapeDescriptor snapVolume = capsuleShape(record.descriptor);
+            snapVolume.capsule.halfHeight += record.descriptor.snapDistance * 0.5f;
+            const glm::vec3 overlapCenter = (position + end) * 0.5f;
+            (void)physics_.overlap(snapVolume, overlapCenter, record.descriptor.physicsFilter);
             return result;
         }
         result.hit = true;
