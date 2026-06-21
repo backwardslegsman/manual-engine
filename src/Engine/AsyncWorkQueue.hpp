@@ -47,6 +47,7 @@ namespace Engine {
         void cancel(AsyncJobHandle handle);
         std::vector<AsyncCompletedJob> pollCompleted();
         void shutdown();
+        void restart(uint32_t workerCount = defaultWorkerCount());
 
         uint32_t pendingCount() const;
         uint32_t workerCount() const;

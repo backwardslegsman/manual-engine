@@ -1,4 +1,5 @@
 #include <cmath>
+#include <algorithm>
 #include <functional>
 #include <iostream>
 #include <optional>
@@ -75,6 +76,19 @@ namespace {
         shape.type = Engine::ScenePhysicsShapeType::Capsule;
         shape.capsule.radius = radius;
         shape.capsule.halfHeight = halfHeight;
+        return shape;
+    }
+
+    Engine::ScenePhysicsShapeDescriptor triangleMesh()
+    {
+        Engine::ScenePhysicsShapeDescriptor shape;
+        shape.type = Engine::ScenePhysicsShapeType::StaticTriangleMesh;
+        shape.triangleMesh.vertices = {
+            {0.0f, 0.0f, 0.0f},
+            {1.0f, 0.0f, 0.0f},
+            {0.0f, 0.0f, 1.0f},
+        };
+        shape.triangleMesh.indices = {0, 1, 2};
         return shape;
     }
 
@@ -289,6 +303,24 @@ namespace {
         ctx.expect(result.hit.has_value() && result.hit->actor == wall, "capsule sweep hit wrong actor");
     }
 
+    void missedCapsuleSweepDebugBoundsFollowSweepEnd(TestContext& ctx)
+    {
+        Engine::Scene scene;
+        Engine::ScenePhysicsWorld physics(scene);
+        const Engine::ScenePhysicsSweepResult result =
+            physics.sweepCapsule({0.35f, 0.5f}, {1.0f, 2.0f, 3.0f}, {4.0f, 2.0f, 3.0f});
+
+        ctx.expect(result.status == Engine::ScenePhysicsQueryStatus::NoHit, "empty scene capsule sweep unexpectedly hit");
+        const std::vector<Engine::ScenePhysicsDebugRequest> requests = physics.debugRequests();
+        ctx.expect(!requests.empty(), "missed capsule sweep did not record debug request");
+        if (!requests.empty()) {
+            ctx.expect(requests.back().type == Engine::ScenePhysicsDebugRequestType::Sweep,
+                "last debug request was not a sweep");
+            ctx.expect(nearlyEqual(requests.back().position, {4.0f, 2.0f, 3.0f}),
+                "missed capsule sweep debug bounds did not follow sweep end");
+        }
+    }
+
     void closestPointReportsExpectedResult(TestContext& ctx)
     {
         Engine::Scene scene;
@@ -326,6 +358,85 @@ namespace {
         const Engine::ScenePhysicsRaycastResult result = physics.raycast({0.0f, 5.0f, 0.0f}, {0.0f, -5.0f, 0.0f}, filter);
         ctx.expect(result.status == Engine::ScenePhysicsQueryStatus::Success, "filtered raycast missed included layer");
         ctx.expect(result.hit.has_value() && result.hit->body == secondBody, "filtered raycast hit wrong layer");
+    }
+
+    void debugColliderShapesExposeLiveShapesAndPoses(TestContext& ctx)
+    {
+        Engine::Scene scene;
+        Engine::ScenePhysicsWorld physics(scene);
+
+        const Engine::SceneActorHandle boxActor = scene.createActor();
+        scene.setLocalTransform(boxActor, transformAt({1.0f, 2.0f, 3.0f}));
+        const Engine::ScenePhysicsBodyHandle boxBody =
+            createBodyWithCollider(physics, boxActor, Engine::ScenePhysicsMotionType::Static, box({0.5f, 0.25f, 0.75f}));
+
+        const Engine::SceneActorHandle sphereActor = scene.createActor();
+        scene.setLocalTransform(sphereActor, transformAt({2.0f, 3.0f, 4.0f}));
+        const Engine::ScenePhysicsBodyHandle sphereBody =
+            createBodyWithCollider(physics, sphereActor, Engine::ScenePhysicsMotionType::Static, sphere(0.4f));
+
+        const Engine::SceneActorHandle capsuleActor = scene.createActor();
+        scene.setLocalTransform(capsuleActor, transformAt({3.0f, 4.0f, 5.0f}));
+        const Engine::ScenePhysicsBodyHandle capsuleBody =
+            createBodyWithCollider(physics, capsuleActor, Engine::ScenePhysicsMotionType::Kinematic, capsule(0.35f, 0.8f));
+
+        const Engine::SceneActorHandle meshActor = scene.createActor();
+        scene.setLocalTransform(meshActor, transformAt({4.0f, 5.0f, 6.0f}));
+        const Engine::ScenePhysicsBodyHandle meshBody =
+            createBodyWithCollider(physics, meshActor, Engine::ScenePhysicsMotionType::Static, triangleMesh());
+
+        const std::vector<Engine::ScenePhysicsDebugColliderShape> shapes = physics.debugColliderShapes();
+        ctx.expect(shapes.size() == 4, "debug collider shape snapshot did not include all live colliders");
+
+        auto findShape = [&](Engine::ScenePhysicsBodyHandle body) -> const Engine::ScenePhysicsDebugColliderShape* {
+            const auto it = std::find_if(shapes.begin(), shapes.end(), [&](const Engine::ScenePhysicsDebugColliderShape& shape) {
+                return shape.body == body;
+            });
+            return it == shapes.end() ? nullptr : &(*it);
+        };
+
+        const Engine::ScenePhysicsDebugColliderShape* boxShape = findShape(boxBody);
+        const Engine::ScenePhysicsDebugColliderShape* sphereShape = findShape(sphereBody);
+        const Engine::ScenePhysicsDebugColliderShape* capsuleShape = findShape(capsuleBody);
+        const Engine::ScenePhysicsDebugColliderShape* meshShape = findShape(meshBody);
+        ctx.expect(boxShape && boxShape->shape.type == Engine::ScenePhysicsShapeType::Box &&
+                nearlyEqual(boxShape->position, {1.0f, 2.0f, 3.0f}),
+            "box collider debug shape missing pose or type");
+        ctx.expect(sphereShape && sphereShape->shape.type == Engine::ScenePhysicsShapeType::Sphere &&
+                nearlyEqual(sphereShape->position, {2.0f, 3.0f, 4.0f}),
+            "sphere collider debug shape missing pose or type");
+        ctx.expect(capsuleShape && capsuleShape->shape.type == Engine::ScenePhysicsShapeType::Capsule &&
+                capsuleShape->motionType == Engine::ScenePhysicsMotionType::Kinematic,
+            "capsule collider debug shape missing type or body metadata");
+        ctx.expect(meshShape && meshShape->shape.type == Engine::ScenePhysicsShapeType::StaticTriangleMesh &&
+                meshShape->shape.triangleMesh.indices.size() == 3,
+            "triangle mesh collider debug shape missing mesh data");
+    }
+
+    void debugColliderShapesExcludeDisabledAndDestroyedBodies(TestContext& ctx)
+    {
+        Engine::Scene scene;
+        Engine::ScenePhysicsWorld physics(scene);
+
+        const Engine::SceneActorHandle liveActor = scene.createActor();
+        const Engine::ScenePhysicsBodyHandle liveBody =
+            createBodyWithCollider(physics, liveActor, Engine::ScenePhysicsMotionType::Static, box(0.5f));
+
+        const Engine::SceneActorHandle disabledActor = scene.createActor();
+        const Engine::ScenePhysicsBodyHandle disabledBody =
+            createBodyWithCollider(physics, disabledActor, Engine::ScenePhysicsMotionType::Static, sphere(0.5f));
+        ctx.expect(physics.setBodyEnabled(disabledBody, false), "failed to disable physics body");
+
+        const Engine::SceneActorHandle destroyedActor = scene.createActor();
+        const Engine::ScenePhysicsBodyHandle destroyedBody =
+            createBodyWithCollider(physics, destroyedActor, Engine::ScenePhysicsMotionType::Static, capsule(0.25f, 0.5f));
+        ctx.expect(physics.destroyBody(destroyedBody), "failed to destroy physics body");
+
+        const std::vector<Engine::ScenePhysicsDebugColliderShape> shapes = physics.debugColliderShapes();
+        ctx.expect(shapes.size() == 1, "debug collider shape snapshot included disabled or destroyed colliders");
+        if (!shapes.empty()) {
+            ctx.expect(shapes.front().body == liveBody && shapes.front().enabled, "debug collider shape snapshot did not keep live body");
+        }
     }
 
     void schedulerRunsFixedPhysicsOrder(TestContext& ctx)
@@ -421,8 +532,11 @@ int main()
         {"RaycastHitAndMiss", raycastHitAndMiss},
         {"OverlapReturnsDeterministicHits", overlapReturnsDeterministicHits},
         {"CapsuleSweepDetectsBlockingShape", capsuleSweepDetectsBlockingShape},
+        {"MissedCapsuleSweepDebugBoundsFollowSweepEnd", missedCapsuleSweepDebugBoundsFollowSweepEnd},
         {"ClosestPointReportsExpectedResult", closestPointReportsExpectedResult},
         {"LayerFilterIncludesAndExcludesBodies", layerFilterIncludesAndExcludesBodies},
+        {"DebugColliderShapesExposeLiveShapesAndPoses", debugColliderShapesExposeLiveShapesAndPoses},
+        {"DebugColliderShapesExcludeDisabledAndDestroyedBodies", debugColliderShapesExcludeDisabledAndDestroyedBodies},
         {"SchedulerRunsFixedPhysicsOrder", schedulerRunsFixedPhysicsOrder},
         {"PreRenderCanObservePhysicsWriteback", preRenderCanObservePhysicsWriteback},
         {"DiagnosticsAndDebugRequestsUpdate", diagnosticsAndDebugRequestsUpdate},

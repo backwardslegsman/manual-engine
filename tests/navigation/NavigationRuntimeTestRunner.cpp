@@ -11,7 +11,9 @@
 #include <vector>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
+#include "Engine/CursorTrace.hpp"
 #include "Engine/Navigation.hpp"
 #include "Engine/NavigationConnectivity.hpp"
 #include "Engine/NavigationRuntime.hpp"
@@ -164,6 +166,61 @@ namespace {
         ctx.expect(service.diagnostics().missingTileCount == 1, "missing tile diagnostic was not counted");
     }
 
+    void cursorRayUnprojectsFromScreenCenter(TestContext& ctx)
+    {
+        const glm::vec3 cameraPosition{8.0f, 20.0f, 8.0f};
+        const glm::mat4 view = glm::lookAt(cameraPosition, glm::vec3{8.0f, 0.0f, 8.0f}, glm::vec3{0.0f, 0.0f, -1.0f});
+        const glm::mat4 projection = glm::perspective(glm::radians(60.0f), 1.0f, 0.1f, 100.0f);
+
+        const Engine::CursorWorldRay ray =
+            Engine::cursorWorldRayFromViewProjection({400.0f, 400.0f}, {800, 800}, projection * view);
+        ctx.expect(ray.status == Engine::CursorTraceStatus::Success, "cursor ray failed: " + ray.message);
+        ctx.expect(std::abs(ray.direction.x) < 0.01f, "center cursor ray had unexpected x direction");
+        ctx.expect(ray.direction.y < -0.99f, "center cursor ray did not point downward");
+        ctx.expect(std::abs(ray.direction.z) < 0.01f, "center cursor ray had unexpected z direction");
+    }
+
+    void cursorRayProjectsOntoNavigation(TestContext& ctx)
+    {
+        Engine::NavigationSystem navigation;
+        if (!addFlatTile(navigation, ctx)) {
+            return;
+        }
+        Engine::SceneNavigationService service{navigation};
+
+        const glm::vec3 cameraPosition{8.0f, 20.0f, 8.0f};
+        const glm::mat4 view = glm::lookAt(cameraPosition, glm::vec3{8.0f, 0.0f, 8.0f}, glm::vec3{0.0f, 0.0f, -1.0f});
+        const glm::mat4 projection = glm::perspective(glm::radians(60.0f), 1.0f, 0.1f, 100.0f);
+        const Engine::CursorWorldRay ray =
+            Engine::cursorWorldRayFromViewProjection({400.0f, 400.0f}, {800, 800}, projection * view);
+
+        Engine::NavigationQueryFilter filter;
+        filter.requireLoadedTiles = true;
+        const Engine::CursorNavigationProjectionResult result =
+            Engine::projectCursorRayToNavigation(service, ray, {}, filter, 64.0f, 0.5f);
+        ctx.expect(result.status == Engine::CursorTraceStatus::Success,
+            "cursor ray did not project onto navigation: " + result.message);
+        ctx.expect(std::abs(result.projection.point.x - 8.0f) < 1.0f &&
+                std::abs(result.projection.point.z - 8.0f) < 1.0f,
+            "cursor navigation projection was not near the screen-center target");
+        ctx.expect(result.distance > 10.0f, "cursor navigation projection accepted a point far above the tile");
+    }
+
+    void invalidCursorRayInputsFailCleanly(TestContext& ctx)
+    {
+        const Engine::CursorWorldRay invalidViewport =
+            Engine::cursorWorldRayFromViewProjection({100.0f, 100.0f}, {0, 800}, glm::mat4{1.0f});
+        ctx.expect(invalidViewport.status == Engine::CursorTraceStatus::InvalidInput,
+            "invalid viewport did not fail cursor ray construction");
+
+        Engine::NavigationSystem navigation;
+        Engine::SceneNavigationService service{navigation};
+        const Engine::CursorNavigationProjectionResult result =
+            Engine::projectCursorRayToNavigation(service, invalidViewport);
+        ctx.expect(result.status == Engine::CursorTraceStatus::InvalidInput,
+            "invalid cursor ray did not fail navigation projection");
+    }
+
     void localPathReturnsDeterministicPoints(TestContext& ctx)
     {        Engine::NavigationSystem navigation;
         if (!addFlatTile(navigation, ctx)) {
@@ -308,6 +365,22 @@ namespace {
         ctx.expect(result.path.complete, "cross-loaded direct path was incomplete");
     }
 
+    void crossLoadedTilesUsesTileLocalPathForElevatedSameTile(TestContext& ctx)
+    {        Engine::NavigationSystem navigation;
+        if (!addFlatTileAt(navigation, ctx, {0, 0}, 0.0f)) {
+            return;
+        }
+        Engine::NavigationConnectivitySystem connectivity;
+        connectivity.rebuild({{0, 0}}, navigation, Engine::NavAgentSettings{});
+        Engine::SceneNavigationService service{navigation, &connectivity};
+
+        const Engine::NavigationPathResult result =
+            service.findPathAcrossLoadedTiles({2.0f, 6.0f, 8.0f}, {14.0f, 6.0f, 8.0f});
+        ctx.expect(result.status == Engine::NavigationRuntimeStatus::Success,
+            "elevated same-tile path failed: " + result.message);
+        ctx.expect(result.path.complete, "elevated same-tile path was incomplete");
+    }
+
     void crossLoadedTilesStitchesPortalRoute(TestContext& ctx)
     {        Engine::NavigationSystem navigation;
         if (!addFlatTileAt(navigation, ctx, {0, 0}, 0.0f) ||
@@ -351,6 +424,43 @@ namespace {
         ctx.expect(stitched.path.points.size() >= 4, "stitched portal route did not include seam waypoints");
     }
 
+    void crossLoadedTilesSnapsElevatedEndpointsBeforeStitching(TestContext& ctx)
+    {        Engine::NavigationSystem navigation;
+        if (!addFlatTileAt(navigation, ctx, {0, 0}, 0.0f) ||
+            !addFlatTileAt(navigation, ctx, {2, 0}, 0.0f)) {
+            return;
+        }
+
+        Engine::ChunkNavConnectivity startConnectivity;
+        startConnectivity.coord = {0, 0};
+        startConnectivity.biomeId = "test";
+        startConnectivity.traversalCost = ChunkSize;
+        startConnectivity.partial = true;
+        startConnectivity.portalsByEdge[static_cast<uint32_t>(Engine::NavEdgeDirection::East)].push_back({
+            Engine::NavEdgeDirection::East,
+            {15.0f, 0.0f, 8.0f},
+            {2, 0},
+            true,
+            true,
+            {33.0f, 0.0f, 8.0f},
+        });
+        Engine::ChunkNavConnectivity goalConnectivity;
+        goalConnectivity.coord = {2, 0};
+        goalConnectivity.biomeId = "test";
+        goalConnectivity.traversalCost = ChunkSize;
+        goalConnectivity.partial = true;
+
+        Engine::NavigationConnectivitySystem connectivity;
+        connectivity.loadCacheData({{startConnectivity, goalConnectivity}});
+        Engine::SceneNavigationService service{navigation, &connectivity};
+
+        const Engine::NavigationPathResult stitched =
+            service.findPathAcrossLoadedTiles({2.0f, 8.0f, 8.0f}, {46.0f, 8.0f, 8.0f});
+        ctx.expect(stitched.status == Engine::NavigationRuntimeStatus::Success,
+            "elevated endpoint portal route failed: " + stitched.message);
+        ctx.expect(stitched.path.complete, "elevated endpoint portal route was incomplete");
+    }
+
     void crossLoadedTilesMissingConnectivityFailsCleanly(TestContext& ctx)
     {        Engine::NavigationSystem navigation;
         if (!addFlatTileAt(navigation, ctx, {0, 0}, 0.0f) ||
@@ -383,6 +493,9 @@ int main()
     const std::vector<std::pair<std::string_view, std::function<void(TestContext&)>>> tests = {
         {"ProjectionSucceedsOnLoadedTile", projectionSucceedsOnLoadedTile},
         {"ProjectionReportsMissingTile", projectionReportsMissingTile},
+        {"CursorRayUnprojectsFromScreenCenter", cursorRayUnprojectsFromScreenCenter},
+        {"CursorRayProjectsOntoNavigation", cursorRayProjectsOntoNavigation},
+        {"InvalidCursorRayInputsFailCleanly", invalidCursorRayInputsFailCleanly},
         {"LocalPathReturnsDeterministicPoints", localPathReturnsDeterministicPoints},
         {"BlockedPathFailsCleanly", blockedPathFailsCleanly},
         {"ReachabilityWrapsPathStatus", reachabilityWrapsPathStatus},
@@ -391,7 +504,9 @@ int main()
         {"InvalidInputsFailCleanly", invalidInputsFailCleanly},
         {"DiagnosticsAndDebugRequestsAreRecorded", diagnosticsAndDebugRequestsAreRecorded},
         {"CrossLoadedTilesUsesDirectPathWhenAvailable", crossLoadedTilesUsesDirectPathWhenAvailable},
+        {"CrossLoadedTilesUsesTileLocalPathForElevatedSameTile", crossLoadedTilesUsesTileLocalPathForElevatedSameTile},
         {"CrossLoadedTilesStitchesPortalRoute", crossLoadedTilesStitchesPortalRoute},
+        {"CrossLoadedTilesSnapsElevatedEndpointsBeforeStitching", crossLoadedTilesSnapsElevatedEndpointsBeforeStitching},
         {"CrossLoadedTilesMissingConnectivityFailsCleanly", crossLoadedTilesMissingConnectivityFailsCleanly},
         {"PublicHeaderDoesNotExposeRecastDetour", publicHeaderDoesNotExposeRecastDetour},
     };

@@ -162,6 +162,7 @@ namespace Engine {
         // treat NoTile/NoNearestPoly/NoPath as normal gameplay outcomes.
         NavQueryResult nearestNavigablePoint(glm::vec3 point, const NavAgentSettings& agent) const;
         NavQueryResult nearestNavigablePointInTile(ChunkCoord coord, glm::vec3 point, const NavAgentSettings& agent) const;
+        NavQueryResult findPathInTile(ChunkCoord coord, glm::vec3 start, glm::vec3 end, const NavAgentSettings& agent) const;
         NavQueryResult findPath(glm::vec3 start, glm::vec3 end, const NavAgentSettings& agent) const;
         bool isNavigable(glm::vec3 point, const NavAgentSettings& agent) const;
         NavQueryStatus lastBuildStatus() const;

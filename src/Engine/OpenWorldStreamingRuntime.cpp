@@ -686,6 +686,39 @@ namespace Engine {
     {
     }
 
+    OpenWorldStreamingBuildResult rebuildOpenWorldStreamingSavedBuild(
+        const OpenWorldStreamingRuntimeSettings& settings)
+    {
+        OpenWorldStreamingBuildResult result;
+        result.fingerprint = openWorldStreamingRuntimeFingerprint(settings);
+        result.sourceHash = TerrainDerivedCache::hashFile(settings.bake.heightmap.sourcePath);
+
+        const OpenWorldStreamingBakeManifest bake = bakeOpenWorldHeightmap(settings.bake);
+        result.bakeDiagnostics = bake.diagnostics;
+        result.sourceHash = bake.sourceHash;
+        result.rebuilt = true;
+        if (bake.streamingManifest.records.empty() || bake.readDescriptors.entries.empty()) {
+            result.status = OpenWorldStreamingBuildStatus::Failed;
+            result.success = false;
+            result.message = bake.diagnostics.message.empty()
+                ? "Open-world streaming rebuild produced no records."
+                : bake.diagnostics.message;
+            return result;
+        }
+
+        if (!writeSavedBuild(settings.savedBuildManifestPath, result.fingerprint, bake)) {
+            result.status = OpenWorldStreamingBuildStatus::Failed;
+            result.success = false;
+            result.message = "Open-world streaming rebuild completed but saved manifest write failed.";
+            return result;
+        }
+
+        result.status = OpenWorldStreamingBuildStatus::RebuiltSavedBuild;
+        result.success = true;
+        result.message = "Rebuilt saved open-world streaming build.";
+        return result;
+    }
+
     const OpenWorldStreamingBuildResult& OpenWorldStreamingRuntime::initializeFromSavedBuild()
     {
         initialized_ = false;
@@ -725,36 +758,27 @@ namespace Engine {
             return build_;
         }
 
-        const OpenWorldStreamingBakeManifest bake = bakeOpenWorldHeightmap(settings_.bake);
-        build_.bakeDiagnostics = bake.diagnostics;
-        build_.sourceHash = bake.sourceHash;
-        if (bake.streamingManifest.records.empty() || bake.readDescriptors.entries.empty()) {
+        build_ = rebuildOpenWorldStreamingSavedBuild(settings_);
+        if (build_.success &&
+            loadSavedBuild(
+                settings_.savedBuildManifestPath,
+                build_.fingerprint,
+                settings_.validatePayloadFiles,
+                manifest_,
+                readDescriptors_,
+                build_)) {
+            build_.status = OpenWorldStreamingBuildStatus::RebuiltSavedBuild;
+            build_.success = true;
+            build_.rebuilt = true;
+            build_.message = "Rebuilt saved open-world streaming build.";
+            initialized_ = true;
+        } else if (build_.success) {
             build_.status = OpenWorldStreamingBuildStatus::Failed;
             build_.success = false;
-            build_.rebuilt = true;
-            build_.message = bake.diagnostics.message.empty()
-                ? "Open-world streaming rebuild produced no records."
-                : bake.diagnostics.message;
-            rebuildMergedDiagnostics();
-            return build_;
+            build_.message = build_.reason.empty()
+                ? "Open-world streaming rebuild completed but saved manifest reload failed."
+                : build_.reason;
         }
-
-        if (!writeSavedBuild(settings_.savedBuildManifestPath, build_.fingerprint, bake)) {
-            build_.status = OpenWorldStreamingBuildStatus::Failed;
-            build_.success = false;
-            build_.rebuilt = true;
-            build_.message = "Open-world streaming rebuild completed but saved manifest write failed.";
-            rebuildMergedDiagnostics();
-            return build_;
-        }
-
-        manifest_ = bake.streamingManifest;
-        readDescriptors_ = bake.readDescriptors;
-        build_.status = OpenWorldStreamingBuildStatus::RebuiltSavedBuild;
-        build_.success = true;
-        build_.rebuilt = true;
-        build_.message = "Rebuilt saved open-world streaming build.";
-        initialized_ = true;
         rebuildMergedDiagnostics();
         return build_;
     }

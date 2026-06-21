@@ -85,6 +85,22 @@ namespace Engine {
         cancelled_.clear();
     }
 
+    void AsyncWorkQueue::restart(uint32_t workerCount)
+    {
+        shutdown();
+        {
+            std::lock_guard lock(mutex_);
+            shuttingDown_ = false;
+        }
+        const uint32_t count = std::max(workerCount, 1u);
+        workers_.reserve(count);
+        for (uint32_t index = 0; index < count; ++index) {
+            workers_.emplace_back([this](std::stop_token stopToken) {
+                workerMain(stopToken);
+            });
+        }
+    }
+
     uint32_t AsyncWorkQueue::pendingCount() const
     {
         std::lock_guard lock(mutex_);

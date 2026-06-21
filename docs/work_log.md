@@ -1702,3 +1702,159 @@ Changed:
 
 Rationale:
 - Future roadmap work should not have to distinguish modern systems from vestigial compatibility paths. Removing the old stack makes `Scene`, `TerrainDataset`, streaming, scene physics, scene character movement, and scene navigation the single active architecture.
+
+## 2026-06-20 - Cursor Ray Navigation Targeting
+
+Changed:
+- Added `Engine::CursorTrace` to convert cursor screen coordinates plus the active view-projection matrix into renderer-independent world rays.
+- Added a navigation projection helper that samples a cursor ray against loaded `SceneNavigationService` tiles without building or streaming navigation data.
+- Updated the modern debug navigation action to arm a cursor path test, then use the next viewport click to path the character toward the cursor-projected navmesh point instead of projecting the camera position or the debug UI button position.
+- Added debug draw for the exact cursor projection ray and the projected nav hit marker used by the request.
+- Added navigation runtime tests for cursor ray construction, cursor-to-nav projection, and invalid cursor input handling.
+
+Rationale:
+- Click-to-move, actor selection, and future in-engine GUI hit testing need a proper screen-to-world cursor boundary. Treating the camera position as the click target made navigation tests fragile and unrelated to the actual cursor location.
+
+## 2026-06-21 - Grounded Character Terrain Sweep Retry
+
+Changed:
+- Added transient physics query exclusions for one body/collider and used them in scene character movement follow-up sweeps.
+- Grounded characters now track their current walkable triangle-mesh ground hit and retry horizontal blocking sweeps with that ground collider excluded when the first sweep starts against it.
+- Added a regression test proving terrain mesh bounds no longer block grounded horizontal movement while a separate static wall still blocks the character.
+
+Rationale:
+- Accepted navigation paths could be drawn while character movement stayed still because coarse terrain triangle-mesh bounds were treated as horizontal blockers. Retrying only against the current walkable ground preserves normal blocking while allowing terrain path following.
+
+## 2026-06-21 - Character Movement Terminal Diagnostics
+
+Changed:
+- Added Debug-build terminal logs for scene character path acceptance/rejection, active movement summaries, grounded/falling state, movement sweep hits, terrain-ground retry decisions, and final blockers.
+- Added App-side click-to-navigation logs for cursor ray projection, projected nav target, player start position, accepted point count, and character status.
+
+Rationale:
+- The default scene can show a valid path trace while the character remains stationary. Terminal diagnostics make it possible to identify whether the stop happens at path request, grounding, desired direction, terrain retry, or a specific blocking collider.
+
+## 2026-06-21 - Static Mesh Bounds Movement Retry
+
+Changed:
+- Extended grounded horizontal character movement to retry through a bounded list of zero-distance static triangle-mesh bounds hits, not only the tracked walkable ground mesh or first authored mesh.
+- Added a focused regression where a grounded character starts inside overlapping non-ground static triangle mesh broad bounds and still moves, while box blockers remain blocking.
+
+Rationale:
+- Runtime diagnostics showed the default character was pinned by alternating authored static triangle mesh bounds hits with side normals before any real movement occurred.
+
+## 2026-06-21 - Capsule Sweep Debug Bounds Follow Misses
+
+Changed:
+- Updated physics capsule sweep debug requests to place missed sweep bounds at the sweep end position instead of the default hit position.
+- Added a scene physics regression covering missed sweep debug bounds placement.
+
+Rationale:
+- Character movement could advance while the visible debug AABB appeared stuck because successful, non-blocking sweeps recorded no hit position and drew their bounds at the origin.
+
+## 2026-06-21 - Physics Collider Shape Debug Draw
+
+Changed:
+- Added transient scene-physics collider shape snapshots for live enabled bodies.
+- Added a separate modern debug UI toggle and line cap for drawing live collider shapes as wireframes.
+- Drew boxes, spheres, capsules, and static triangle mesh colliders from their actual shape data instead of generic AABBs.
+
+Rationale:
+- Physics setup and character collision debugging need to show the actual collider geometry, including capsule-shaped character bodies and terrain/static mesh triangle edges.
+
+## 2026-06-21 - Editor Roadmap
+
+Changed:
+- Added `docs/editor_roadmap.md` covering a separate editor executable, durable editor project profiles, settings reflection, ImGui editor panels, rebuild orchestration, live apply, and future hook/Lua tool scripting.
+
+Rationale:
+- Editor-style workflows need a durable roadmap before implementation so build settings, reflection metadata, derived-data rebuilds, and runtime/editor boundaries stay explicit.
+
+## 2026-06-21 - Editor Target Launch Boundary
+
+Changed:
+- Added a `manual_engine_editor` target with its own App entrypoint.
+- Added a shared modern scene launch API so the sample and editor boot the same modern default scene stack.
+- Labeled the editor window/debug scene mode separately without adding project profiles, reflected settings panels, or rebuild orchestration.
+
+Rationale:
+- E1 needs a separate editor executable that reuses the current runtime composition before later editor settings and rebuild workflows are layered on top.
+
+## 2026-06-21 - Editor Project Settings Profile
+
+Changed:
+- Added App-side `EditorProjectSettings` load/save/validate helpers backed by yaml-cpp.
+- Added `projects/default.editor.yaml` with modern-default terrain, cache, nav, physics, streaming, renderer debug, debug draw, and editor camera defaults.
+- Wired `manual_engine_editor` to load the profile at startup and fall back to built-in defaults when the file is missing or invalid.
+
+Rationale:
+- E2 needs durable editor state that can drive saved-build identity and later reflected settings UI without serializing runtime handles or introducing rebuild orchestration yet.
+
+## 2026-06-21 - Editor Settings Reflection
+
+Changed:
+- Added App-side `EditorSettingsReflection` descriptors and reflected get/set helpers for `EditorProjectSettings`.
+- Reflected first-slice terrain, cache, render LOD, navigation, physics, streaming, renderer, debug draw, and camera settings with editor-visible metadata and explicit-apply flags.
+- Added focused tests for descriptor coverage, indexed render LOD targets, representative reads/writes, validation rejection, and default metadata parity.
+
+Rationale:
+- E3 needs a metadata/access boundary that future editor panels can enumerate without hand-coded field wiring, while keeping profile mutation validated and separate from live runtime systems.
+
+## 2026-06-21 - Editor UI Panels
+
+Changed:
+- Added App-side editor UI state, generated property rows, dirty summaries, and validated reflected edit helpers for `EditorProjectSettings`.
+- Wired `manual_engine_editor` to show a separate Dear ImGui editor window with Project Settings, Rebuild, Diagnostics, and Runtime/Viewport tabs.
+- Added focused headless tests for editor UI model initialization, reflected row generation, advanced filtering, dirty classification, invalid edit rejection, and indexed render LOD rows.
+
+Rationale:
+- E4 needs editable in-memory project settings and visible rebuild-required diagnostics before adding profile persistence, live apply, or rebuild orchestration.
+
+## 2026-06-21 - Editor Rebuild Orchestrator
+
+Changed:
+- Added a public Engine API to explicitly rebuild saved open-world streaming builds through the existing full heightmap bake and saved-manifest write path.
+- Added an App-side editor rebuild coordinator that computes dirty domains from reflected editor settings, runs saved-build rebuild commands, records diagnostics, and marks successful rebuilds as requiring runtime reload.
+- Wired the editor Rebuild tab to terrain, render LOD, navigation, physics, full saved-build, and lightweight-profile apply commands without saving YAML or hot-swapping live runtime resources.
+- Added focused coordinator tests covering dirty-domain classification, invalid/failed rebuild handling, successful saved-build writes, baseline advancement, and domain buttons using the full backend.
+
+Rationale:
+- E5 needs explicit rebuild controls and saved-build diagnostics before live runtime reload/apply behavior is added in the next phase.
+
+## 2026-06-21 - Editor Live Apply And Streaming Reload
+
+Changed:
+- Added explicit editor live-apply commands for lightweight renderer/debug/camera settings, with validation before mutating the running editor viewport and baseline advancement only after success.
+- Added a streaming-only reload path in App composition that preflights rebuilt saved manifests, releases streaming-owned terrain render/nav/physics/chunk resources, restarts pending streaming work, and reinitializes `OpenWorldStreamingRuntime` without restarting authored scene state.
+- Added live-apply regression tests for lightweight apply, invalid validation failures, reload-required state, reload failure diagnostics, saved manifest validation, and manual sample target wiring.
+
+Rationale:
+- E6 needs editor changes to apply predictably through explicit validated commands while keeping profile YAML saving, partial rebuilds, and full-scene restart behavior out of scope.
+
+## 2026-06-21 - Editor Hooks And Lua Tool Scripting
+
+Changed:
+- Added App-side editor tool hooks and a one-shot Lua tool scripting runtime that discovers scripts from `scripts/editor` and exposes only reflected editor settings plus validated editor commands.
+- Added a Tool Scripts ImGui panel to rescan and run scripts, show status, logs, command diagnostics, and recent tool events without startup autorun or profile YAML persistence.
+- Marked editor settings as script-visible while preserving read-only and explicit-apply metadata, and added a sample validation script plus focused tool scripting tests.
+
+Rationale:
+- E7 needs automation hooks for editor settings and rebuild workflows without reusing scene behavior Lua or exposing live Engine/Renderer/App storage to scripts.
+
+## 2026-06-21 - Editor Roadmap Closure
+
+Changed:
+- Marked `docs/editor_roadmap.md` complete for the E1-E7 first editor vertical slice.
+- Added completed capability, closure acceptance, and future-roadmap notes so remaining editor expansion is not implied as unfinished E1-E7 work.
+- Ignored generated editor project settings test output so closure artifacts stay limited to committed profile, script, App source, and test files.
+
+Rationale:
+- The current editor roadmap has reached its intended first-slice scope; future editor expansion should be planned separately instead of leaving completed phases open-ended.
+
+## 2026-06-21 - Actor Authoring Roadmap
+
+Changed:
+- Added `docs/actor_authoring_roadmap.md` covering editor-authored scene actors, typed component descriptors, behavior bindings, serialization/rebind, editor placement, streaming spawn/despawn semantics, and a future FLECS bridge.
+
+Rationale:
+- Actor placement and component-driven gameplay need their own roadmap on top of the completed editor foundation, with `Engine::Scene` remaining the actor authority and FLECS deferred as a later game-state mirror.

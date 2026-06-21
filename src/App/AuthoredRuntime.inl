@@ -162,6 +162,9 @@
         bool loadedHeightmap = false;
         bool usingOpenWorldStreaming = false;
         bool schedulerStarted = false;
+        bool cursorTraceDebugVisible = false;
+        Engine::CursorWorldRay lastCursorTraceRay;
+        Engine::CursorNavigationProjectionResult lastCursorTraceProjection;
         std::string navigationStatus = "Navigation connectivity has not been rebuilt yet.";
 
         void shutdown(Engine::AssetCache& assetCache)
@@ -534,6 +537,13 @@
         }
 
         placeSceneRoots(runtime.scene, result.nodes, translation, scale);
+        const bool shouldUseAsPlayer =
+            !Engine::isValid(runtime.playerActor) &&
+            !result.nodes.empty() &&
+            label == "kaykit_skinned_gltf";
+        if (shouldUseAsPlayer) {
+            runtime.playerActor = result.nodes.front().actor;
+        }
         runtime.animatedAssetCount += 1;
         runtime.warningCount += static_cast<uint32_t>(result.diagnostics.warnings.size());
         runtime.animatedAssets.push_back({std::move(result), resolvedPath, std::move(label)});
@@ -550,13 +560,35 @@
         return position;
     }
 
+    bool resetModernPlayerAboveTerrain(
+        ModernDefaultSceneRuntime& runtime,
+        float verticalOffset = 24.0f);
+
     std::string requestModernCharacterNavigationTest(
         ModernDefaultSceneRuntime& runtime,
-        glm::vec3 cameraPosition)
+        const Engine::CursorWorldRay& cursorRay)
     {
+        runtime.cursorTraceDebugVisible = true;
+        runtime.lastCursorTraceRay = cursorRay;
+        runtime.lastCursorTraceProjection = {};
+        runtime.lastCursorTraceProjection.ray = cursorRay;
+
         if (!Engine::isValid(runtime.playerCharacter)) {
             ++runtime.warningCount;
             return "Cannot request navigation test path: player character is invalid.";
+        }
+        const bool hasTerrainCollider = runtime.terrainPhysicsColliderCount > 0 ||
+            !runtime.streamingPhysicsColliders.empty();
+        if (!hasTerrainCollider) {
+            runtime.characters.setEnabled(runtime.playerCharacter, false);
+            ++runtime.warningCount;
+            return "Cannot request navigation test path: no live terrain physics collider is loaded for character movement yet.";
+        }
+        if (const std::optional<Engine::SceneCharacterDescriptor> character =
+                runtime.characters.descriptor(runtime.playerCharacter);
+            character && !character->enabled) {
+            runtime.characters.setEnabled(runtime.playerCharacter, true);
+            (void)resetModernPlayerAboveTerrain(runtime, 4.0f);
         }
         if (runtime.navigation.allTileDiagnostics().empty()) {
             ++runtime.warningCount;
@@ -572,16 +604,44 @@
         filter.allowPartialPath = false;
         filter.captureDebug = true;
 
-        const Engine::NavigationProjectionResult projected =
-            runtime.navigationService.projectPoint(cameraPosition, {}, filter);
-        if (projected.status != Engine::NavigationRuntimeStatus::Success) {
+        const Engine::CursorNavigationProjectionResult projected =
+            Engine::projectCursorRayToNavigation(
+                runtime.navigationService,
+                cursorRay,
+                {},
+                filter,
+                2048.0f,
+                1.0f);
+        runtime.lastCursorTraceProjection = projected;
+        SDL_Log(
+            "[ModernNavigationDebug] cursor ray status=%s origin=(%.3f,%.3f,%.3f) dir=(%.3f,%.3f,%.3f) projectedStatus=%s samples=%u sampled=(%.3f,%.3f,%.3f) projected=(%.3f,%.3f,%.3f)",
+            Engine::cursorTraceStatusName(cursorRay.status),
+            cursorRay.origin.x,
+            cursorRay.origin.y,
+            cursorRay.origin.z,
+            cursorRay.direction.x,
+            cursorRay.direction.y,
+            cursorRay.direction.z,
+            Engine::cursorTraceStatusName(projected.status),
+            projected.sampleCount,
+            projected.sampledPoint.x,
+            projected.sampledPoint.y,
+            projected.sampledPoint.z,
+            projected.projection.point.x,
+            projected.projection.point.y,
+            projected.projection.point.z);
+        if (projected.status != Engine::CursorTraceStatus::Success) {
             ++runtime.warningCount;
-            return "Cannot request navigation test path: camera position did not project onto loaded navmesh: " +
-                projected.message;
+            return "Cannot request navigation test path: cursor did not project onto loaded navmesh: " +
+                projected.message + " screen=(" +
+                std::to_string(static_cast<int>(cursorRay.screenPosition.x)) + "," +
+                std::to_string(static_cast<int>(cursorRay.screenPosition.y)) + ") ray=" +
+                Engine::cursorTraceStatusName(cursorRay.status) + " samples=" +
+                std::to_string(projected.sampleCount) + ".";
         }
 
         Engine::SceneCharacterPathRequest request;
-        request.goal = projected.point;
+        request.goal = projected.projection.point;
         request.filter = filter;
         request.waypointAcceptanceRadius = 0.75f;
         request.allowPartialPath = false;
@@ -596,7 +656,22 @@
 
         const std::optional<Engine::SceneCharacterState> state =
             runtime.characters.state(runtime.playerCharacter);
-        return "Navigation test path accepted to camera-projected goal; path points " +
+        if (const std::optional<glm::mat4> playerWorld = runtime.scene.worldMatrix(runtime.playerActor)) {
+            const glm::vec3 playerPosition{(*playerWorld)[3]};
+            SDL_Log(
+                "[ModernNavigationDebug] path accepted player=(%.3f,%.3f,%.3f) goal=(%.3f,%.3f,%.3f) points=%u activeWaypoint=%u status=%d message=%s",
+                playerPosition.x,
+                playerPosition.y,
+                playerPosition.z,
+                request.goal.x,
+                request.goal.y,
+                request.goal.z,
+                state ? static_cast<uint32_t>(state->activePath.points.size()) : 0u,
+                state ? state->activeWaypointIndex : 0u,
+                state ? static_cast<int>(state->lastStatus) : -1,
+                state ? state->lastMessage.c_str() : "No character state");
+        }
+        return "Navigation test path accepted to cursor-projected goal; path points " +
             std::to_string(state ? state->activePath.points.size() : 0u) + ".";
     }
 
@@ -614,7 +689,7 @@
 
     bool resetModernPlayerAboveTerrain(
         ModernDefaultSceneRuntime& runtime,
-        float verticalOffset = 24.0f)
+        float verticalOffset)
     {
         if (!Engine::isValid(runtime.playerActor)) {
             return false;
@@ -627,10 +702,13 @@
             .value_or(runtime.focus.y);
         transform->translation.y = terrainY + verticalOffset;
         runtime.scene.setLocalTransform(runtime.playerActor, *transform);
-        if (Engine::isValid(runtime.playerCharacter)) {
-            runtime.characters.destroyCharacter(runtime.playerCharacter);
+        if (const std::optional<Engine::ScenePhysicsBodyHandle> body =
+                runtime.physics.bodyForActor(runtime.playerActor)) {
+            runtime.physics.setKinematicTarget(*body, transform->translation, transform->rotation);
         }
-        runtime.playerCharacter = createModernPlayerCharacter(runtime);
+        if (!Engine::isValid(runtime.playerCharacter)) {
+            runtime.playerCharacter = createModernPlayerCharacter(runtime);
+        }
         return Engine::isValid(runtime.playerCharacter);
     }
 
@@ -651,74 +729,20 @@
     }
 
     Engine::OpenWorldStreamingRuntimeSettings modernStreamingRuntimeSettings(
-        std::string sceneGeometryHash = {})
+        std::string sceneGeometryHash = {},
+        const ManualEngine::App::EditorProjectSettings* editorSettings = nullptr)
     {
-        Engine::OpenWorldStreamingRuntimeSettings settings;
-        settings.savedBuildManifestPath = "generated/open_world_streaming/modern_default/manifest.yaml";
-        const std::filesystem::path heightmapPath = resolveAuthoredScenePath(DefaultHeightmapPath);
+        Engine::OpenWorldStreamingRuntimeSettings settings =
+            editorSettings
+                ? ManualEngine::App::streamingRuntimeSettingsFromEditorProject(*editorSettings)
+                : ManualEngine::App::defaultEditorProjectSettings().streaming;
+        const std::filesystem::path heightmapPath = resolveAuthoredScenePath(settings.bake.heightmap.sourcePath);
         settings.bake.heightmap.sourcePath = heightmapPath;
-        settings.bake.heightmap.sourceIdOverride = modernAssetIdForPath(heightmapPath, "modern_heightmap_streaming");
-        settings.bake.heightmap.sampleSpacing = 1.0f;
-        settings.bake.heightmap.heightScale = 80.0f;
-        settings.bake.heightmap.heightOffset = 0.0f;
-        settings.bake.heightmap.sourceOrigin = {-256.0f, 0.0f, 256.0f};
-        settings.bake.heightmap.chunkWorldSize = 64.0f;
-        settings.bake.heightmap.chunkResolution = 33;
-        settings.bake.terrainCache.rootPath = "generated/terrain_cache/modern_default";
-        settings.bake.terrainCache.policy = Engine::TerrainDerivedCachePolicy::ReadOnly;
-        settings.bake.navigationCache.rootPath = "generated/navigation_cache/modern_default";
-        settings.bake.navigationCache.worldId = "modern_default_streaming";
-        settings.bake.navigationResolution = 17;
-        settings.bake.physicsColliderResolution = 17;
-        settings.bake.renderLods = {
-            {0, 33, 2.0f},
-            {1, 17, 2.0f},
-        };
-        Engine::NavAgentSettings agent;
-        settings.bake.navAgent = agent;
-        settings.bake.terrainNavigationBorderPaddingWorld = std::max(
-            agent.radius * 2.0f,
-            settings.bake.navBuild.cellSize * 4.0f);
-        const float navigationStep = settings.bake.heightmap.chunkWorldSize /
-            static_cast<float>(std::max(settings.bake.navigationResolution, 2u) - 1u);
-        settings.bake.terrainNavigationBorderSampleCount = static_cast<uint32_t>(std::ceil(
-            settings.bake.terrainNavigationBorderPaddingWorld / std::max(navigationStep, 0.0001f)));
+        if (!settings.bake.heightmap.sourceIdOverride) {
+            settings.bake.heightmap.sourceIdOverride =
+                modernAssetIdForPath(heightmapPath, "modern_heightmap_streaming");
+        }
         settings.bake.sceneGeometryHash = std::move(sceneGeometryHash);
-        settings.bake.sceneGeometryMaxSlopeDegrees = agent.maxSlopeDegrees;
-        settings.bake.sceneGeometryTileBoundsPadding = agent.radius + settings.bake.terrainNavigationBorderPaddingWorld;
-        settings.bake.sceneGeometryAdapterVersion = "modern_scene_nav_geometry_slope_v1";
-
-        for (Engine::StreamingPayloadResidencyPolicy& policy : settings.planner.payloadPolicies) {
-            policy.activeRadius = 192.0f;
-            policy.cacheRadius = 320.0f;
-            policy.hysteresis = 32.0f;
-            policy.maxTransitionsPerFrame = 4;
-        }
-        for (auto& payloadProfiles : settings.planner.profilePolicies) {
-            for (Engine::StreamingPayloadResidencyPolicy& policy : payloadProfiles) {
-                policy.activeRadius = 192.0f;
-                policy.cacheRadius = 320.0f;
-                policy.hysteresis = 32.0f;
-                policy.maxTransitionsPerFrame = 4;
-            }
-        }
-        for (uint32_t payload = 0; payload < Engine::StreamingPayloadKindCount; ++payload) {
-            settings.planner.profilePolicies[payload][static_cast<uint32_t>(Engine::StreamingHaloProfile::HighDetailLive)]
-                .activeRadius = 96.0f;
-            settings.planner.profilePolicies[payload][static_cast<uint32_t>(Engine::StreamingHaloProfile::HighDetailLive)]
-                .cacheRadius = 192.0f;
-            settings.planner.profilePolicies[payload][static_cast<uint32_t>(Engine::StreamingHaloProfile::CacheOnly)]
-                .liveAllowed = false;
-            settings.planner.profilePolicies[payload][static_cast<uint32_t>(Engine::StreamingHaloProfile::FarMetadata)]
-                .liveAllowed = false;
-            settings.planner.profilePolicies[payload][static_cast<uint32_t>(Engine::StreamingHaloProfile::FarMetadata)]
-                .cacheRadius = 512.0f;
-        }
-        settings.cache.maxReadJobsQueuedPerUpdate = 8;
-        settings.cache.maxCompletedJobsMergedPerUpdate = 16;
-        settings.generation.policy = Engine::StreamingDerivedGenerationPolicy::ReadOnly;
-        settings.promotion.maxPromotesQueuedPerUpdate = 8;
-        settings.promotion.maxDemotesQueuedPerUpdate = 8;
         return settings;
     }
 
@@ -1192,7 +1216,8 @@
 
     bool initializeModernStreamingTerrain(
         ModernDefaultSceneRuntime& runtime,
-        Engine::AssetCache& assetCache)
+        Engine::AssetCache& assetCache,
+        const ManualEngine::App::EditorProjectSettings* editorSettings = nullptr)
     {
         runtime.terrainFallbackTexture = assetCache.acquireSolidTexture(82, 124, 72, 255);
         runtime.terrainFallbackMaterial =
@@ -1211,7 +1236,8 @@
             ++runtime.warningCount;
         }
 
-        Engine::OpenWorldStreamingRuntimeSettings settings = modernStreamingRuntimeSettings();
+        Engine::OpenWorldStreamingRuntimeSettings settings =
+            modernStreamingRuntimeSettings({}, editorSettings);
         SDL_Log("Modern streaming build validation started: %s",
             settings.savedBuildManifestPath.generic_string().c_str());
         runtime.streamingRuntime = Engine::OpenWorldStreamingRuntime{settings};
@@ -1372,7 +1398,9 @@
         SDL_Log("%s", runtime.navigationStatus.c_str());
     }
 
-    std::unique_ptr<ModernDefaultSceneRuntime> startModernDefaultSceneRuntime(Engine::AssetCache& assetCache)
+    std::unique_ptr<ModernDefaultSceneRuntime> startModernDefaultSceneRuntime(
+        Engine::AssetCache& assetCache,
+        const ManualEngine::App::EditorProjectSettings* editorSettings = nullptr)
     {
         auto runtime = std::make_unique<ModernDefaultSceneRuntime>();
         runtime->characters.setNavigationService(&runtime->navigationService);
@@ -1382,7 +1410,7 @@
         runtime->bounds = {{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()},
             {-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()}};
 
-        runtime->usingOpenWorldStreaming = initializeModernStreamingTerrain(*runtime, assetCache);
+        runtime->usingOpenWorldStreaming = initializeModernStreamingTerrain(*runtime, assetCache, editorSettings);
         if (!runtime->usingOpenWorldStreaming) {
             (void)loadModernHeightmapTerrain(*runtime, assetCache);
         }
@@ -1438,10 +1466,18 @@
             rebuildModernNavigationWithSceneGeometry(*runtime, *terrainSource);
         }
 
-        runtime->playerActor = runtime->scene.createActor({0x4d4f4445524e01ull});
-        Engine::SceneTransform playerTransform;
-        playerTransform.translation = modernTerrainRelativePosition(*runtime, focus, {0.0f, 24.0f, -30.0f});
-        runtime->scene.setLocalTransform(runtime->playerActor, playerTransform);
+        if (!Engine::isValid(runtime->playerActor)) {
+            runtime->playerActor = runtime->scene.createActor({0x4d4f4445524e01ull});
+            Engine::SceneTransform playerTransform;
+            playerTransform.translation = modernTerrainRelativePosition(*runtime, focus, {0.0f, 24.0f, -30.0f});
+            runtime->scene.setLocalTransform(runtime->playerActor, playerTransform);
+        } else {
+            if (std::optional<Engine::SceneTransform> playerTransform =
+                    runtime->scene.localTransform(runtime->playerActor)) {
+                playerTransform->translation = modernTerrainRelativePosition(*runtime, focus, {0.0f, 8.0f, -30.0f});
+                runtime->scene.setLocalTransform(runtime->playerActor, *playerTransform);
+            }
+        }
         runtime->playerCharacter = createModernPlayerCharacter(*runtime);
         if (!Engine::isValid(runtime->playerCharacter)) {
             ++runtime->warningCount;

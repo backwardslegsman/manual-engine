@@ -800,7 +800,7 @@ namespace Renderer::DebugUi {
                     ImGui::TextWrapped("%s", state.character.lastMessage.c_str());
                 }
                 if (navigationControls) {
-                    if (ImGui::Button("Path Character To Camera")) {
+                    if (ImGui::Button("Arm Cursor Path Test")) {
                         navigationControls->requestCharacterNavigationTest = true;
                     }
                     ImGui::SameLine();
@@ -820,6 +820,7 @@ namespace Renderer::DebugUi {
                 ImGui::Checkbox("Navigation tile bounds", &debugDraw.navigationTileBounds);
                 ImGui::Checkbox("Navigation mesh edges", &debugDraw.navigationMeshEdges);
                 ImGui::Checkbox("Physics probes", &debugDraw.collisionBounds);
+                ImGui::Checkbox("Physics collider shapes", &debugDraw.colliderShapes);
                 ImGui::Checkbox("Character path/probes", &debugDraw.navigationCurrentPath);
                 ImGui::Checkbox("Camera frustum", &debugDraw.cameraFrustum);
                 int maxDebugLines = static_cast<int>(debugDraw.maxDebugLines);
@@ -829,6 +830,10 @@ namespace Renderer::DebugUi {
                 int maxNavLines = static_cast<int>(debugDraw.maxNavMeshEdgeLines);
                 if (ImGui::SliderInt("Max navmesh lines", &maxNavLines, 0, 50000)) {
                     debugDraw.maxNavMeshEdgeLines = static_cast<uint32_t>(std::max(maxNavLines, 0));
+                }
+                int maxColliderLines = static_cast<int>(debugDraw.maxColliderShapeLines);
+                if (ImGui::SliderInt("Max collider shape lines", &maxColliderLines, 0, 100000)) {
+                    debugDraw.maxColliderShapeLines = static_cast<uint32_t>(std::max(maxColliderLines, 0));
                 }
                 ImGui::Separator();
                 ImGui::Text("Lines generated/submitted/clipped/capped: %u / %u / %u / %u",

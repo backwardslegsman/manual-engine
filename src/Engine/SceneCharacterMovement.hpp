@@ -165,6 +165,9 @@ namespace Engine {
             SceneCharacterState state;
             ScenePhysicsBodyHandle body;
             SceneColliderHandle collider;
+            ScenePhysicsBodyHandle groundBody;
+            SceneColliderHandle groundCollider;
+            uint32_t debugTick = 0;
         };
 
         struct GroundProbe {
@@ -173,6 +176,8 @@ namespace Engine {
             glm::vec3 position{0.0f};
             glm::vec3 normal{0.0f, 1.0f, 0.0f};
             float distance = 0.0f;
+            ScenePhysicsBodyHandle body;
+            SceneColliderHandle collider;
         };
 
         [[nodiscard]] CharacterRecord* record(SceneCharacterHandle character);

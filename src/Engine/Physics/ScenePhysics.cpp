@@ -657,10 +657,33 @@ namespace Engine {
             diagnostics.lastMessage = std::move(message);
         }
 
-        bool passesFilter(const BodyRecord& body, const ScenePhysicsFilter& filter) const
+        bool passesFilter(uint32_t bodyIndex, const BodyRecord& body, const ScenePhysicsFilter& filter) const
         {
             if (!filter.includeSensors && body.descriptor.sensor) {
                 return false;
+            }
+            if (isValid(filter.excludedBody) &&
+                filter.excludedBody.index == bodyIndex &&
+                filter.excludedBody.generation == body.generation) {
+                return false;
+            }
+            if (std::find_if(
+                    filter.excludedBodies.begin(),
+                    filter.excludedBodies.end(),
+                    [&](ScenePhysicsBodyHandle excluded) {
+                        return excluded.index == bodyIndex && excluded.generation == body.generation;
+                    }) != filter.excludedBodies.end()) {
+                return false;
+            }
+            if (isValid(filter.excludedCollider) &&
+                std::find(body.colliders.begin(), body.colliders.end(), filter.excludedCollider) != body.colliders.end()) {
+                return false;
+            }
+            for (SceneColliderHandle excludedCollider : filter.excludedColliders) {
+                if (isValid(excludedCollider) &&
+                    std::find(body.colliders.begin(), body.colliders.end(), excludedCollider) != body.colliders.end()) {
+                    return false;
+                }
             }
             const uint32_t layer = body.descriptor.layer.value;
             return (layer & filter.includeLayerMask) != 0u && (layer & filter.excludeLayerMask) == 0u;
@@ -1145,7 +1168,7 @@ namespace Engine {
         ScenePhysicsHit bestHit;
         for (uint32_t bodyIndex = 0; bodyIndex < impl_->bodies.size(); ++bodyIndex) {
             const Impl::BodyRecord& body = impl_->bodies[bodyIndex];
-            if (!body.occupied || !impl_->passesFilter(body, filter)) {
+            if (!body.occupied || !impl_->passesFilter(bodyIndex, body, filter)) {
                 continue;
             }
             std::optional<Aabb> bounds = impl_->bodyAabb(body);
@@ -1203,7 +1226,7 @@ namespace Engine {
         ScenePhysicsHit bestHit;
         for (uint32_t bodyIndex = 0; bodyIndex < impl_->bodies.size(); ++bodyIndex) {
             const Impl::BodyRecord& body = impl_->bodies[bodyIndex];
-            if (!body.occupied || !impl_->passesFilter(body, filter)) {
+            if (!body.occupied || !impl_->passesFilter(bodyIndex, body, filter)) {
                 continue;
             }
             std::optional<Aabb> bounds = impl_->bodyAabb(body);
@@ -1265,7 +1288,8 @@ namespace Engine {
         impl_->diagnostics.lastQueryMicroseconds = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - queryStart).count());
         impl_->setStatus(result.status, result.message);
-        impl_->appendDebug({ScenePhysicsDebugRequestType::Sweep, result.status, start, end, bestHit.position, bestHit.normal, inflation, bestHit.body, bestHit.collider});
+        const glm::vec3 debugPosition = result.hit.has_value() ? result.hit->position : end;
+        impl_->appendDebug({ScenePhysicsDebugRequestType::Sweep, result.status, start, end, debugPosition, bestHit.normal, inflation, bestHit.body, bestHit.collider});
         return result;
     }
 
@@ -1287,7 +1311,7 @@ namespace Engine {
 
         for (uint32_t bodyIndex = 0; bodyIndex < impl_->bodies.size(); ++bodyIndex) {
             const Impl::BodyRecord& body = impl_->bodies[bodyIndex];
-            if (!body.occupied || !impl_->passesFilter(body, filter)) {
+            if (!body.occupied || !impl_->passesFilter(bodyIndex, body, filter)) {
                 continue;
             }
             std::optional<Aabb> bounds = impl_->bodyAabb(body);
@@ -1329,7 +1353,7 @@ namespace Engine {
         ScenePhysicsHit bestHit;
         for (uint32_t bodyIndex = 0; bodyIndex < impl_->bodies.size(); ++bodyIndex) {
             const Impl::BodyRecord& body = impl_->bodies[bodyIndex];
-            if (!body.occupied || !impl_->passesFilter(body, filter)) {
+            if (!body.occupied || !impl_->passesFilter(bodyIndex, body, filter)) {
                 continue;
             }
             std::optional<Aabb> bounds = impl_->bodyAabb(body);
@@ -1369,6 +1393,37 @@ namespace Engine {
     std::vector<ScenePhysicsDebugRequest> ScenePhysicsWorld::debugRequests() const
     {
         return impl_->debugRequests;
+    }
+
+    std::vector<ScenePhysicsDebugColliderShape> ScenePhysicsWorld::debugColliderShapes() const
+    {
+        std::vector<ScenePhysicsDebugColliderShape> shapes;
+        for (uint32_t bodyIndex = 0; bodyIndex < impl_->bodies.size(); ++bodyIndex) {
+            const Impl::BodyRecord& body = impl_->bodies[bodyIndex];
+            if (!body.occupied || !body.descriptor.enabled || !body.hasJoltBody) {
+                continue;
+            }
+            const ScenePhysicsBodyHandle bodyHandle{bodyIndex, body.generation};
+            for (SceneColliderHandle colliderHandle : body.colliders) {
+                const Impl::ColliderRecord* collider = impl_->record(colliderHandle);
+                if (!collider || collider->body != bodyHandle) {
+                    continue;
+                }
+                ScenePhysicsDebugColliderShape shape;
+                shape.body = bodyHandle;
+                shape.collider = colliderHandle;
+                shape.actor = body.descriptor.actor;
+                shape.motionType = body.descriptor.motionType;
+                shape.enabled = body.descriptor.enabled;
+                shape.sensor = body.descriptor.sensor;
+                shape.layer = body.descriptor.layer;
+                shape.position = body.position;
+                shape.rotation = body.rotation;
+                shape.shape = collider->shape;
+                shapes.push_back(std::move(shape));
+            }
+        }
+        return shapes;
     }
 
     void ScenePhysicsWorld::clearDebugRequests()

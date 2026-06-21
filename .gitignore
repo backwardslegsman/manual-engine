@@ -43,6 +43,8 @@ Desktop.ini
 generated/navigation_cache/
 generated/authored_scene_cache/
 generated/authored_scene_reports/
+generated/editor_project_settings_tests/
+generated/terrain_cache/
 
 # Local large authored scene assets
 assets/main_sponza/

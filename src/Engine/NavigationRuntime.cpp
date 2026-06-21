@@ -273,6 +273,70 @@ namespace Engine {
         return result;
     }
 
+    NavigationProjectionResult SceneNavigationService::projectPointInLoadedTiles(
+        glm::vec3 point,
+        const NavigationAgentConfig& agent,
+        const NavigationQueryFilter& filter)
+    {
+        const auto start = std::chrono::steady_clock::now();
+        NavigationProjectionResult result;
+        result.requestedPoint = point;
+        if (!validPoint(point) || !validAgent(agent)) {
+            result.status = NavigationRuntimeStatus::InvalidInput;
+            result.point = point;
+            result.message = "Invalid loaded-tile navigation projection input.";
+        } else {
+            const NavAgentSettings navAgent = toNavAgentSettings(agent);
+            std::vector<NavigationTileDiagnostics> tiles = navigation_.allTileDiagnostics();
+            std::ranges::sort(tiles, [](const NavigationTileDiagnostics& lhs, const NavigationTileDiagnostics& rhs) {
+                return lhs.coord.x == rhs.coord.x ? lhs.coord.z < rhs.coord.z : lhs.coord.x < rhs.coord.x;
+            });
+
+            if (tiles.empty()) {
+                result.status = NavigationRuntimeStatus::NoTile;
+                result.point = point;
+                result.message = "No navigation tiles are loaded.";
+            } else {
+                float bestDistanceSquared = std::numeric_limits<float>::max();
+                std::string lastMessage = "No loaded navigation tile contains the projection point.";
+                bool sawContainingTile = false;
+                for (const NavigationTileDiagnostics& tile : tiles) {
+                    if (!containsXZ(tile.bounds, point)) {
+                        continue;
+                    }
+                    sawContainingTile = true;
+                    const NavQueryResult query =
+                        navigation_.nearestNavigablePointInTile(tile.coord, point, navAgent);
+                    lastMessage = query.message;
+                    if (query.status != NavQueryStatus::Success) {
+                        continue;
+                    }
+                    const glm::vec3 delta = query.point - point;
+                    const float distanceSquared = glm::dot(delta, delta);
+                    if (distanceSquared < bestDistanceSquared) {
+                        bestDistanceSquared = distanceSquared;
+                        result.status = NavigationRuntimeStatus::Success;
+                        result.point = query.point;
+                        result.message = query.message;
+                    }
+                }
+                if (result.status != NavigationRuntimeStatus::Success) {
+                    result.status = sawContainingTile ? NavigationRuntimeStatus::NoNearestPoly : NavigationRuntimeStatus::NoTile;
+                    result.point = point;
+                    result.message = lastMessage;
+                }
+            }
+        }
+        record(NavigationRuntimeQueryType::Projection, result.status, result.message, elapsedMicroseconds(start));
+        appendDebugRequest(filter, result.status == NavigationRuntimeStatus::Success
+                ? NavigationDebugRequestType::Projection
+                : NavigationDebugRequestType::FailedQuery,
+            result.status,
+            {point, result.point},
+            result.message);
+        return result;
+    }
+
     NavigationPathResult SceneNavigationService::findPath(
         glm::vec3 startPoint,
         glm::vec3 endPoint,
@@ -321,7 +385,16 @@ namespace Engine {
         const NavigationQueryFilter& filter)
     {
         const auto started = std::chrono::steady_clock::now();
-        NavigationPathResult direct = findPath(startPoint, endPoint, agent, filter);
+        const NavigationProjectionResult projectedStart = projectPointInLoadedTiles(startPoint, agent, filter);
+        const NavigationProjectionResult projectedEnd = projectPointInLoadedTiles(endPoint, agent, filter);
+        const glm::vec3 routeStart =
+            projectedStart.status == NavigationRuntimeStatus::Success ? projectedStart.point : startPoint;
+        const glm::vec3 routeEnd =
+            projectedEnd.status == NavigationRuntimeStatus::Success ? projectedEnd.point : endPoint;
+
+        NavigationPathResult direct = findPath(routeStart, routeEnd, agent, filter);
+        direct.requestedStart = startPoint;
+        direct.requestedEnd = endPoint;
         if (direct.status == NavigationRuntimeStatus::Success && direct.path.complete) {
             return direct;
         }
@@ -332,23 +405,28 @@ namespace Engine {
         if (!validPoint(startPoint) || !validPoint(endPoint) || !validAgent(agent)) {
             result.status = NavigationRuntimeStatus::InvalidInput;
             result.message = "Invalid cross-tile navigation path input.";
+        } else if (projectedStart.status != NavigationRuntimeStatus::Success ||
+            projectedEnd.status != NavigationRuntimeStatus::Success) {
+            result.status = NavigationRuntimeStatus::NoTile;
+            result.message = "Cross-tile route endpoint did not project onto loaded navigation.";
         } else if (!connectivity_) {
             result.status = direct.status;
             result.path = direct.path;
             result.message = "No navigation connectivity is available for cross-tile routing.";
         } else {
             const NavAgentSettings navAgent = toNavAgentSettings(agent);
-            const std::optional<ChunkCoord> startCoord = findPointTile(navigation_, startPoint, navAgent);
-            const std::optional<ChunkCoord> goalCoord = findPointTile(navigation_, endPoint, navAgent);
+            const std::optional<ChunkCoord> startCoord = findPointTile(navigation_, routeStart, navAgent);
+            const std::optional<ChunkCoord> goalCoord = findPointTile(navigation_, routeEnd, navAgent);
             if (!startCoord || !goalCoord) {
                 result.status = NavigationRuntimeStatus::NoTile;
                 result.message = "Cross-tile route endpoint is outside loaded navigation tiles.";
             } else if (*startCoord == *goalCoord) {
-                result.status = direct.status;
-                result.path = direct.path;
-                result.message = direct.message.empty()
-                    ? "Direct same-tile route failed and no cross-tile detour was attempted."
-                    : direct.message;
+                const NavQueryResult sameTile = navigation_.findPathInTile(*startCoord, routeStart, routeEnd, navAgent);
+                result.status = toNavigationRuntimeStatus(sameTile.status, sameTile.path.complete);
+                result.path = sameTile.path;
+                result.message = sameTile.message.empty()
+                    ? "Tile-local same-tile route failed."
+                    : sameTile.message;
             } else {
                 const std::vector<PortalRouteEdge> edges = sortedPortalEdges(*connectivity_);
                 struct QueueNode {
@@ -376,8 +454,8 @@ namespace Engine {
                         }
                         const float baseCost = costs[current];
                         const float extra = edge.cost +
-                            (current == *startCoord ? xzDistance(startPoint, edge.waypoint) : 0.0f) +
-                            (edge.to == *goalCoord ? xzDistance(edge.ingress, endPoint) : 0.0f);
+                            (current == *startCoord ? xzDistance(routeStart, edge.waypoint) : 0.0f) +
+                            (edge.to == *goalCoord ? xzDistance(edge.ingress, routeEnd) : 0.0f);
                         const float nextCost = baseCost + extra;
                         const auto existing = costs.find(edge.to);
                         if (existing != costs.end() && nextCost >= existing->second) {
@@ -404,15 +482,17 @@ namespace Engine {
                     }
                     std::ranges::reverse(edgeIndices);
 
-                    glm::vec3 segmentStart = startPoint;
+                    glm::vec3 segmentStart = routeStart;
                     bool failedSegment = false;
                     for (size_t edgeIndex : edgeIndices) {
                         const PortalRouteEdge& edge = edges[edgeIndex];
-                        const NavQueryResult segment = navigation_.findPath(segmentStart, edge.waypoint, navAgent);
+                        const NavQueryResult segment = navigation_.findPathInTile(edge.from, segmentStart, edge.waypoint, navAgent);
                         if (segment.status != NavQueryStatus::Success || segment.path.points.empty()) {
                             failedSegment = true;
                             result.status = toNavigationRuntimeStatus(segment.status, segment.path.complete);
-                            result.message = "Failed to stitch local path to a navigation portal.";
+                            result.message = "Failed to stitch local path to a navigation portal in tile (" +
+                                std::to_string(edge.from.x) + "," + std::to_string(edge.from.z) + "): " +
+                                segment.message;
                             break;
                         }
                         appendPathPoints(result.path.points, segment.path.points);
@@ -423,10 +503,12 @@ namespace Engine {
                     }
 
                     if (!failedSegment) {
-                        const NavQueryResult finalSegment = navigation_.findPath(segmentStart, endPoint, navAgent);
+                        const NavQueryResult finalSegment = navigation_.findPathInTile(*goalCoord, segmentStart, routeEnd, navAgent);
                         if (finalSegment.status != NavQueryStatus::Success || finalSegment.path.points.empty()) {
                             result.status = toNavigationRuntimeStatus(finalSegment.status, finalSegment.path.complete);
-                            result.message = "Failed to stitch final local path segment after portal route.";
+                            result.message = "Failed to stitch final local path segment after portal route in tile (" +
+                                std::to_string(goalCoord->x) + "," + std::to_string(goalCoord->z) + "): " +
+                                finalSegment.message;
                         } else {
                             appendPathPoints(result.path.points, finalSegment.path.points);
                             result.path.complete = finalSegment.path.complete;

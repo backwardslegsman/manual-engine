@@ -66,6 +66,10 @@ namespace Engine {
         uint32_t includeLayerMask = UINT32_MAX;
         uint32_t excludeLayerMask = 0;
         bool includeSensors = true;
+        ScenePhysicsBodyHandle excludedBody;
+        SceneColliderHandle excludedCollider;
+        std::vector<ScenePhysicsBodyHandle> excludedBodies;
+        std::vector<SceneColliderHandle> excludedColliders;
     };
 
     struct ScenePhysicsBoxShape {
@@ -156,6 +160,19 @@ namespace Engine {
         glm::vec3 extents{0.0f};
         ScenePhysicsBodyHandle body;
         SceneColliderHandle collider;
+    };
+
+    struct ScenePhysicsDebugColliderShape {
+        ScenePhysicsBodyHandle body;
+        SceneColliderHandle collider;
+        SceneActorHandle actor;
+        ScenePhysicsMotionType motionType = ScenePhysicsMotionType::Static;
+        bool enabled = false;
+        bool sensor = false;
+        ScenePhysicsLayer layer;
+        glm::vec3 position{0.0f};
+        glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+        ScenePhysicsShapeDescriptor shape;
     };
 
     struct ScenePhysicsDiagnostics {
@@ -260,6 +277,7 @@ namespace Engine {
 
         [[nodiscard]] ScenePhysicsDiagnostics diagnostics() const;
         [[nodiscard]] std::vector<ScenePhysicsDebugRequest> debugRequests() const;
+        [[nodiscard]] std::vector<ScenePhysicsDebugColliderShape> debugColliderShapes() const;
         void clearDebugRequests();
 
     private:

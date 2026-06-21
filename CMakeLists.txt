@@ -21,6 +21,9 @@ enable_testing()
 
 add_executable(manual_engine
     src/App/main.cpp
+    src/App/EditorProjectSettings.cpp
+    src/App/EditorSettingsReflection.cpp
+    src/App/ModernSceneLoop.cpp
     src/Assets/Assimp/Importer.cpp
     src/Assets/HeightmapImporter.cpp
    src/Engine/AnimatedModelPose.cpp
@@ -28,7 +31,8 @@ add_executable(manual_engine
     src/Engine/AssetCache.cpp
     src/Engine/AssetRegistry.cpp
     src/Engine/Biome.cpp
-   src/Engine/ChunkTypes.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/CursorTrace.cpp
     src/Engine/DebugVisualization.cpp
     src/Engine/EventQueue.cpp
     src/Engine/FixedStepLoop.cpp
@@ -108,12 +112,53 @@ target_link_libraries(manual_engine
         yaml-cpp::yaml-cpp
 )
 
+get_target_property(MANUAL_ENGINE_APP_SOURCES manual_engine SOURCES)
+list(REMOVE_ITEM MANUAL_ENGINE_APP_SOURCES src/App/main.cpp)
+
+add_executable(manual_engine_editor
+    src/App/editor_main.cpp
+    src/App/EditorRebuildCoordinator.cpp
+    src/App/EditorToolScripting.cpp
+    src/App/EditorUi.cpp
+    ${MANUAL_ENGINE_APP_SOURCES}
+)
+
+target_include_directories(manual_engine_editor
+    PRIVATE
+        src
+        ${Stb_INCLUDE_DIR}
+        ${LUA_INCLUDE_DIR}
+)
+
+target_compile_definitions(manual_engine_editor
+    PRIVATE
+        MANUAL_ENGINE_ENABLE_DEBUG_TOOLS=$<IF:$<CONFIG:Debug>,1,0>
+)
+
+target_link_libraries(manual_engine_editor
+    PRIVATE
+        SDL3::SDL3
+        assimp::assimp
+        bgfx::bgfx
+        glm::glm
+        $<$<CONFIG:Debug>:imgui::imgui>
+        Jolt::Jolt
+        ${LUA_LIBRARIES}
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        RecastNavigation::DetourTileCache
+        RecastNavigation::DetourCrowd
+        RecastNavigation::DebugUtils
+        yaml-cpp::yaml-cpp
+)
+
 
 add_executable(manual_engine_navigation_runtime_tests
     tests/navigation/NavigationRuntimeTestRunner.cpp
     tests/navigation/RendererStubs.cpp
     src/Engine/Biome.cpp
     src/Engine/ChunkTypes.cpp
+    src/Engine/CursorTrace.cpp
     src/Engine/Navigation.cpp
     src/Engine/NavigationConnectivity.cpp
     src/Engine/NavigationRuntime.cpp
@@ -228,6 +273,300 @@ target_link_libraries(manual_engine_debug_visualization_tests
 )
 
 add_test(NAME manual_engine_debug_visualization_tests COMMAND manual_engine_debug_visualization_tests)
+
+add_executable(manual_engine_editor_project_settings_tests
+    tests/app/EditorProjectSettingsTestRunner.cpp
+    tests/app/EditorProjectSettingsStreamingStub.cpp
+    src/App/EditorProjectSettings.cpp
+)
+
+target_include_directories(manual_engine_editor_project_settings_tests
+    PRIVATE
+        src
+        ${Stb_INCLUDE_DIR}
+        ${LUA_INCLUDE_DIR}
+)
+
+target_link_libraries(manual_engine_editor_project_settings_tests
+    PRIVATE
+        SDL3::SDL3
+        bgfx::bgfx
+        glm::glm
+        imgui::imgui
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_editor_project_settings_tests COMMAND manual_engine_editor_project_settings_tests)
+set_tests_properties(manual_engine_editor_project_settings_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+add_executable(manual_engine_editor_settings_reflection_tests
+    tests/app/EditorSettingsReflectionTestRunner.cpp
+    tests/app/EditorProjectSettingsStreamingStub.cpp
+    src/App/EditorProjectSettings.cpp
+    src/App/EditorSettingsReflection.cpp
+    src/Engine/Reflection.cpp
+)
+
+target_include_directories(manual_engine_editor_settings_reflection_tests
+    PRIVATE
+        src
+        ${Stb_INCLUDE_DIR}
+        ${LUA_INCLUDE_DIR}
+)
+
+target_link_libraries(manual_engine_editor_settings_reflection_tests
+    PRIVATE
+        SDL3::SDL3
+        bgfx::bgfx
+        glm::glm
+        imgui::imgui
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_editor_settings_reflection_tests COMMAND manual_engine_editor_settings_reflection_tests)
+set_tests_properties(manual_engine_editor_settings_reflection_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+add_executable(manual_engine_editor_ui_tests
+    tests/app/EditorUiTestRunner.cpp
+    src/App/EditorProjectSettings.cpp
+    src/App/EditorRebuildCoordinator.cpp
+    src/App/EditorSettingsReflection.cpp
+    src/App/EditorToolScripting.cpp
+    src/App/EditorUi.cpp
+    src/Assets/HeightmapImporter.cpp
+    src/Engine/AsyncWorkQueue.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/FrameBudget.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationCache.cpp
+    src/Engine/OpenWorldStreaming.cpp
+    src/Engine/OpenWorldStreamingBake.cpp
+    src/Engine/OpenWorldStreamingRuntime.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Reflection.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/SceneSerialization.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainDerivedCache.cpp
+    src/Engine/TerrainImport.cpp
+    src/Engine/TerrainNavigationAdapter.cpp
+    src/Engine/TerrainPhysicsColliderAdapter.cpp
+    src/Engine/TerrainRenderLodAdapter.cpp
+    src/Engine/TerrainSerializationPrep.cpp
+)
+
+target_include_directories(manual_engine_editor_ui_tests
+    PRIVATE
+        src
+        ${Stb_INCLUDE_DIR}
+        ${LUA_INCLUDE_DIR}
+)
+
+target_compile_definitions(manual_engine_editor_ui_tests
+    PRIVATE
+        MANUAL_ENGINE_ENABLE_DEBUG_TOOLS=0
+)
+
+target_link_libraries(manual_engine_editor_ui_tests
+    PRIVATE
+        SDL3::SDL3
+        bgfx::bgfx
+        glm::glm
+        Jolt::Jolt
+        ${LUA_LIBRARIES}
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        RecastNavigation::DetourTileCache
+        RecastNavigation::DetourCrowd
+        RecastNavigation::DebugUtils
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_editor_ui_tests COMMAND manual_engine_editor_ui_tests)
+set_tests_properties(manual_engine_editor_ui_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+add_executable(manual_engine_editor_rebuild_coordinator_tests
+    tests/app/EditorRebuildCoordinatorTestRunner.cpp
+    src/App/EditorProjectSettings.cpp
+    src/App/EditorRebuildCoordinator.cpp
+    src/App/EditorSettingsReflection.cpp
+    src/App/EditorToolScripting.cpp
+    src/App/EditorUi.cpp
+    src/Assets/HeightmapImporter.cpp
+    src/Engine/AsyncWorkQueue.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/FrameBudget.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationCache.cpp
+    src/Engine/OpenWorldStreaming.cpp
+    src/Engine/OpenWorldStreamingBake.cpp
+    src/Engine/OpenWorldStreamingRuntime.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Reflection.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/SceneSerialization.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainDerivedCache.cpp
+    src/Engine/TerrainImport.cpp
+    src/Engine/TerrainNavigationAdapter.cpp
+    src/Engine/TerrainPhysicsColliderAdapter.cpp
+    src/Engine/TerrainRenderLodAdapter.cpp
+    src/Engine/TerrainSerializationPrep.cpp
+)
+
+target_include_directories(manual_engine_editor_rebuild_coordinator_tests
+    PRIVATE
+        src
+        ${Stb_INCLUDE_DIR}
+        ${LUA_INCLUDE_DIR}
+)
+
+target_compile_definitions(manual_engine_editor_rebuild_coordinator_tests
+    PRIVATE
+        MANUAL_ENGINE_ENABLE_DEBUG_TOOLS=0
+)
+
+target_link_libraries(manual_engine_editor_rebuild_coordinator_tests
+    PRIVATE
+        SDL3::SDL3
+        bgfx::bgfx
+        glm::glm
+        Jolt::Jolt
+        ${LUA_LIBRARIES}
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        RecastNavigation::DetourTileCache
+        RecastNavigation::DetourCrowd
+        RecastNavigation::DebugUtils
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_editor_rebuild_coordinator_tests COMMAND manual_engine_editor_rebuild_coordinator_tests)
+set_tests_properties(manual_engine_editor_rebuild_coordinator_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+add_executable(manual_engine_editor_live_apply_tests
+    tests/app/EditorLiveApplyTestRunner.cpp
+    src/App/EditorProjectSettings.cpp
+    src/App/EditorRebuildCoordinator.cpp
+    src/App/EditorSettingsReflection.cpp
+    src/App/EditorToolScripting.cpp
+    src/App/EditorUi.cpp
+    src/Assets/HeightmapImporter.cpp
+    src/Engine/AsyncWorkQueue.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/FrameBudget.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationCache.cpp
+    src/Engine/OpenWorldStreaming.cpp
+    src/Engine/OpenWorldStreamingBake.cpp
+    src/Engine/OpenWorldStreamingRuntime.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Reflection.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/SceneSerialization.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainDerivedCache.cpp
+    src/Engine/TerrainImport.cpp
+    src/Engine/TerrainNavigationAdapter.cpp
+    src/Engine/TerrainPhysicsColliderAdapter.cpp
+    src/Engine/TerrainRenderLodAdapter.cpp
+    src/Engine/TerrainSerializationPrep.cpp
+)
+
+target_include_directories(manual_engine_editor_live_apply_tests
+    PRIVATE
+        src
+        ${Stb_INCLUDE_DIR}
+        ${LUA_INCLUDE_DIR}
+)
+
+target_compile_definitions(manual_engine_editor_live_apply_tests
+    PRIVATE
+        MANUAL_ENGINE_ENABLE_DEBUG_TOOLS=0
+        MANUAL_ENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+
+target_link_libraries(manual_engine_editor_live_apply_tests
+    PRIVATE
+        SDL3::SDL3
+        bgfx::bgfx
+        glm::glm
+        Jolt::Jolt
+        ${LUA_LIBRARIES}
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        RecastNavigation::DetourTileCache
+        RecastNavigation::DetourCrowd
+        RecastNavigation::DebugUtils
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_editor_live_apply_tests COMMAND manual_engine_editor_live_apply_tests)
+set_tests_properties(manual_engine_editor_live_apply_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+add_executable(manual_engine_editor_tool_scripting_tests
+    tests/app/EditorToolScriptingTestRunner.cpp
+    src/App/EditorProjectSettings.cpp
+    src/App/EditorRebuildCoordinator.cpp
+    src/App/EditorSettingsReflection.cpp
+    src/App/EditorToolScripting.cpp
+    src/App/EditorUi.cpp
+    src/Assets/HeightmapImporter.cpp
+    src/Engine/AsyncWorkQueue.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/FrameBudget.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationCache.cpp
+    src/Engine/OpenWorldStreaming.cpp
+    src/Engine/OpenWorldStreamingBake.cpp
+    src/Engine/OpenWorldStreamingRuntime.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Reflection.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/SceneSerialization.cpp
+    src/Engine/TerrainDataset.cpp
+    src/Engine/TerrainDerivedCache.cpp
+    src/Engine/TerrainImport.cpp
+    src/Engine/TerrainNavigationAdapter.cpp
+    src/Engine/TerrainPhysicsColliderAdapter.cpp
+    src/Engine/TerrainRenderLodAdapter.cpp
+    src/Engine/TerrainSerializationPrep.cpp
+)
+
+target_include_directories(manual_engine_editor_tool_scripting_tests
+    PRIVATE
+        src
+        ${Stb_INCLUDE_DIR}
+        ${LUA_INCLUDE_DIR}
+)
+
+target_compile_definitions(manual_engine_editor_tool_scripting_tests
+    PRIVATE
+        MANUAL_ENGINE_ENABLE_DEBUG_TOOLS=0
+        MANUAL_ENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+
+target_link_libraries(manual_engine_editor_tool_scripting_tests
+    PRIVATE
+        SDL3::SDL3
+        bgfx::bgfx
+        glm::glm
+        Jolt::Jolt
+        ${LUA_LIBRARIES}
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        RecastNavigation::DetourTileCache
+        RecastNavigation::DetourCrowd
+        RecastNavigation::DebugUtils
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_editor_tool_scripting_tests COMMAND manual_engine_editor_tool_scripting_tests)
+set_tests_properties(manual_engine_editor_tool_scripting_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
 add_executable(manual_engine_open_world_streaming_tests
     tests/engine/OpenWorldStreamingTestRunner.cpp

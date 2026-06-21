@@ -62,8 +62,10 @@ namespace Renderer {
         bool worldNavigationRoute = true;
         bool cameraFrustum = false;
         bool actorDestination = true;
+        bool colliderShapes = false;
         uint32_t maxDebugLines = 20000;
         uint32_t maxNavMeshEdgeLines = 6000;
+        uint32_t maxColliderShapeLines = 10000;
         uint32_t maxWorldGraphEdgeLines = 4000;
         uint32_t maxTerrainSlopeWarningLines = 2000;
         uint32_t maxCollisionAabbs = 2000;

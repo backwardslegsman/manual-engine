@@ -93,6 +93,8 @@ namespace Engine {
         bool initialized_ = false;
     };
 
+    [[nodiscard]] OpenWorldStreamingBuildResult rebuildOpenWorldStreamingSavedBuild(
+        const OpenWorldStreamingRuntimeSettings& settings);
     [[nodiscard]] std::string openWorldStreamingRuntimeFingerprint(
         const OpenWorldStreamingRuntimeSettings& settings);
 }

@@ -136,6 +136,10 @@ namespace Engine {
             glm::vec3 point,
             const NavigationAgentConfig& agent = {},
             const NavigationQueryFilter& filter = {});
+        [[nodiscard]] NavigationProjectionResult projectPointInLoadedTiles(
+            glm::vec3 point,
+            const NavigationAgentConfig& agent = {},
+            const NavigationQueryFilter& filter = {});
         [[nodiscard]] NavigationPathResult findPath(
             glm::vec3 start,
             glm::vec3 end,

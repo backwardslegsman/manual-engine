@@ -52,6 +52,19 @@ namespace {
         return shape;
     }
 
+    Engine::ScenePhysicsShapeDescriptor distantTriangleMeshBounds()
+    {
+        Engine::ScenePhysicsShapeDescriptor shape;
+        shape.type = Engine::ScenePhysicsShapeType::StaticTriangleMesh;
+        shape.triangleMesh.vertices = {
+            {-1.0f, 0.0f, -1.0f},
+            {-1.0f, 10.0f, -1.0f},
+            {5.0f, 10.0f, -1.0f},
+        };
+        shape.triangleMesh.indices = {0, 1, 2};
+        return shape;
+    }
+
     Engine::ScenePhysicsBodyHandle createStaticBox(
         Engine::Scene& scene,
         Engine::ScenePhysicsWorld& physics,
@@ -66,6 +79,24 @@ namespace {
         const Engine::ScenePhysicsBodyHandle body = physics.createBody(descriptor);
         if (Engine::isValid(body)) {
             [[maybe_unused]] const Engine::SceneColliderHandle collider = physics.attachCollider(body, box(halfExtents));
+        }
+        return body;
+    }
+
+    Engine::ScenePhysicsBodyHandle createStaticTriangleMesh(
+        Engine::Scene& scene,
+        Engine::ScenePhysicsWorld& physics,
+        const glm::vec3& position)
+    {
+        const Engine::SceneActorHandle actor = scene.createActor();
+        scene.setLocalTransform(actor, transformAt(position));
+        Engine::ScenePhysicsBodyDescriptor descriptor;
+        descriptor.actor = actor;
+        descriptor.motionType = Engine::ScenePhysicsMotionType::Static;
+        const Engine::ScenePhysicsBodyHandle body = physics.createBody(descriptor);
+        if (Engine::isValid(body)) {
+            [[maybe_unused]] const Engine::SceneColliderHandle collider =
+                physics.attachCollider(body, distantTriangleMeshBounds());
         }
         return body;
     }
@@ -130,6 +161,13 @@ namespace {
         return chunk;
     }
 
+    Engine::TerrainImportedChunk terrainChunkWithTallFarCorner()
+    {
+        Engine::TerrainImportedChunk chunk = flatTerrainChunk();
+        chunk.heights.back() = 8.0f;
+        return chunk;
+    }
+
     struct TerrainFixture {
         Engine::TerrainDataset dataset;
         Engine::TerrainSourceHandle source;
@@ -146,6 +184,16 @@ namespace {
         return fixture;
     }
 
+    TerrainFixture makeTerrain(TestContext& ctx, const Engine::TerrainImportedChunk& chunk)
+    {
+        TerrainFixture fixture;
+        fixture.source = fixture.dataset.registerSource(terrainSourceDescriptor());
+        fixture.chunk = fixture.dataset.loadImportedChunk(fixture.source, chunk);
+        ctx.expect(Engine::isValid(fixture.source), "terrain source was invalid");
+        ctx.expect(Engine::isValid(fixture.chunk), "terrain chunk was invalid");
+        return fixture;
+    }
+
     Engine::TerrainPhysicsSourceIdentity physicsIdentity()
     {
         Engine::TerrainPhysicsSourceIdentity identity;
@@ -154,6 +202,33 @@ namespace {
         identity.importSettings = {"heightmap_terrain", "character", "flat"};
         identity.sourceType = Engine::TerrainDatasetSourceType::HeightmapImported;
         return identity;
+    }
+
+    bool createTerrainCollider(
+        TestContext& ctx,
+        Engine::Scene& scene,
+        Engine::ScenePhysicsWorld& physics,
+        Engine::TerrainPhysicsColliderAdapter& adapter,
+        TerrainFixture& terrain)
+    {
+        const auto request = Engine::terrainPhysicsColliderRequestFromDatasetChunk(
+            terrain.dataset,
+            terrain.chunk,
+            TestResolution,
+            physicsIdentity());
+        ctx.expect(request.has_value(), "terrain physics request missing");
+        if (!request) {
+            return false;
+        }
+        const Engine::TerrainPhysicsColliderBuildResult build = Engine::buildTerrainPhysicsCollider(*request);
+        ctx.expect(build.success && build.payload.has_value(), "terrain physics payload failed");
+        if (!build.payload) {
+            return false;
+        }
+        const Engine::TerrainPhysicsColliderHandle terrainCollider =
+            adapter.createStaticCollider(scene, physics, *build.payload);
+        ctx.expect(Engine::isValid(terrainCollider), "terrain physics collider was invalid");
+        return Engine::isValid(terrainCollider);
     }
 
     Engine::TerrainNavigationSourceIdentity navigationIdentity()
@@ -264,23 +339,10 @@ namespace {
         Engine::ScenePhysicsWorld physics(scene);
         Engine::SceneCharacterMovementSystem movement(scene, physics);
         TerrainFixture terrain = makeTerrain(ctx);
-        const auto request = Engine::terrainPhysicsColliderRequestFromDatasetChunk(
-            terrain.dataset,
-            terrain.chunk,
-            TestResolution,
-            physicsIdentity());
-        ctx.expect(request.has_value(), "terrain physics request missing");
-        if (!request) {
-            return;
-        }
-        const Engine::TerrainPhysicsColliderBuildResult build = Engine::buildTerrainPhysicsCollider(*request);
         Engine::TerrainPhysicsColliderAdapter adapter;
-        ctx.expect(build.success && build.payload.has_value(), "terrain physics payload failed");
-        if (!build.payload) {
+        if (!createTerrainCollider(ctx, scene, physics, adapter, terrain)) {
             return;
         }
-        [[maybe_unused]] const Engine::TerrainPhysicsColliderHandle terrainCollider =
-            adapter.createStaticCollider(scene, physics, *build.payload);
 
         const Engine::SceneActorHandle actor = scene.createActor();
         scene.setLocalTransform(actor, transformAt({8.0f, 1.15f, 8.0f}));
@@ -288,6 +350,64 @@ namespace {
         fixedStep(scene, physics, movement, 1.0f / 60.0f);
         const std::optional<Engine::SceneCharacterState> state = movement.state(character);
         ctx.expect(state.has_value() && state->grounded, "character did not ground on explicit terrain collider");
+    }
+
+    void groundedHorizontalMovementIgnoresWalkableTerrainMesh(TestContext& ctx)
+    {
+        Engine::Scene scene;
+        Engine::ScenePhysicsWorld physics(scene);
+        Engine::SceneCharacterMovementSystem movement(scene, physics);
+        TerrainFixture terrain = makeTerrain(ctx, terrainChunkWithTallFarCorner());
+        Engine::TerrainPhysicsColliderAdapter adapter;
+        if (!createTerrainCollider(ctx, scene, physics, adapter, terrain)) {
+            return;
+        }
+
+        const Engine::SceneActorHandle actor = scene.createActor();
+        scene.setLocalTransform(actor, transformAt({0.2f, 1.15f, 8.0f}));
+        const Engine::SceneCharacterHandle character = movement.createCharacter(characterDescriptor(actor));
+        movement.setMoveInput(character, {{1.0f, 0.0f, 0.0f}, 1.0f});
+        for (int i = 0; i < 12; ++i) {
+            fixedStep(scene, physics, movement, 1.0f / 30.0f);
+        }
+        std::optional<Engine::SceneCharacterState> state = movement.state(character);
+        std::optional<Engine::SceneTransform> transform = scene.localTransform(actor);
+        ctx.expect(state.has_value() && state->grounded, "character did not stay grounded on terrain");
+        ctx.expect(transform.has_value() && transform->translation.x > 0.8f,
+            "walkable terrain mesh AABB blocked grounded horizontal movement");
+
+        createStaticBox(scene, physics, {1.8f, 0.9f, 8.0f}, {0.2f, 0.9f, 1.0f});
+        movement.setMoveInput(character, {{1.0f, 0.0f, 0.0f}, 1.0f});
+        for (int i = 0; i < 20; ++i) {
+            fixedStep(scene, physics, movement, 1.0f / 30.0f);
+        }
+        transform = scene.localTransform(actor);
+        ctx.expect(transform.has_value() && transform->translation.x < 1.7f,
+            "character passed through non-ground blocking geometry");
+    }
+
+    void groundedHorizontalMovementIgnoresZeroDistanceStaticMeshBounds(TestContext& ctx)
+    {
+        Engine::Scene scene;
+        Engine::ScenePhysicsWorld physics(scene);
+        Engine::SceneCharacterMovementSystem movement(scene, physics);
+        createStaticBox(scene, physics, {0.0f, -0.5f, 0.0f}, {8.0f, 0.5f, 8.0f});
+        [[maybe_unused]] const Engine::ScenePhysicsBodyHandle firstMesh =
+            createStaticTriangleMesh(scene, physics, {0.0f, 0.0f, 0.0f});
+        [[maybe_unused]] const Engine::ScenePhysicsBodyHandle secondMesh =
+            createStaticTriangleMesh(scene, physics, {0.0f, 0.0f, 0.0f});
+
+        const Engine::SceneActorHandle actor = scene.createActor();
+        scene.setLocalTransform(actor, transformAt({0.0f, 1.15f, 0.0f}));
+        const Engine::SceneCharacterHandle character = movement.createCharacter(characterDescriptor(actor));
+        movement.setMoveInput(character, {{1.0f, 0.0f, 0.0f}, 1.0f});
+        for (int i = 0; i < 8; ++i) {
+            fixedStep(scene, physics, movement, 1.0f / 30.0f);
+        }
+
+        const std::optional<Engine::SceneTransform> transform = scene.localTransform(actor);
+        ctx.expect(transform.has_value() && transform->translation.x > 0.4f,
+            "zero-distance static triangle mesh bounds blocked grounded horizontal movement");
     }
 
     void steepSurfaceRejectedAndFalling(TestContext& ctx)
@@ -465,6 +585,8 @@ int main()
         {"CreationOwnsKinematicCapsule", creationOwnsKinematicCapsule},
         {"FlatFloorGroundingAndDisabledNoOp", flatFloorGroundingAndDisabledNoOp},
         {"TerrainColliderGrounding", terrainColliderGrounding},
+        {"GroundedHorizontalMovementIgnoresWalkableTerrainMesh", groundedHorizontalMovementIgnoresWalkableTerrainMesh},
+        {"GroundedHorizontalMovementIgnoresZeroDistanceStaticMeshBounds", groundedHorizontalMovementIgnoresZeroDistanceStaticMeshBounds},
         {"SteepSurfaceRejectedAndFalling", steepSurfaceRejectedAndFalling},
         {"AccelerationBrakingAndGravity", accelerationBrakingAndGravity},
         {"WallSlideAndStepHandling", wallSlideAndStepHandling},

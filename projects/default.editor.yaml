@@ -1,0 +1,153 @@
+schema_version: 1
+project_name: ManualEngine Default
+terrain:
+  heightmap:
+    source_path: assets/heightmaps/47_648_-122_332_13_505_505_16bit.png
+    channel: red
+    sample_spacing: 1.0
+    height_scale: 80.0
+    height_offset: 0.0
+    source_origin: {x: -256.0, y: 0.0, z: 256.0}
+    flip_rows: false
+    flip_columns: false
+    chunk_world_size: 64.0
+    chunk_resolution: 33
+  cache:
+    root_path: generated/terrain_cache/modern_default
+    format_version: 1
+    terrain_import_version: heightmap_import_t1
+    chunk_payload_version: terrain_chunk_payload_t3
+    lod_mesh_payload_version: terrain_lod_mesh_payload_t3
+    physics_collider_payload_version: terrain_physics_collider_payload_s4
+    policy: read_only
+  render_lods:
+    - {lod_index: 0, render_resolution: 33, skirt_depth: 2.0}
+    - {lod_index: 1, render_resolution: 17, skirt_depth: 2.0}
+navigation:
+  profile_id: default
+  cache:
+    root_path: generated/navigation_cache/modern_default
+    world_id: modern_default_streaming
+    format_version: 1
+  agent:
+    radius: 0.45
+    height: 1.8
+    max_slope_degrees: 45.0
+    max_climb: 0.45
+  build:
+    cell_size: 0.3
+    cell_height: 0.2
+    tile_border_size: 0
+    max_tiles: 256
+    max_polys_per_tile: 4096
+    max_verts_per_poly: 6
+    region_min_size: 8
+    region_merge_size: 20
+    edge_max_len: 12.0
+    edge_max_error: 1.3
+    detail_sample_dist: 6.0
+    detail_sample_max_error: 1.0
+  terrain:
+    navigation_resolution: 17
+    border_padding_world: 1.2
+    border_sample_count: 1
+  scene_geometry:
+    max_walkable_slope_degrees: 45.0
+    tile_bounds_padding: 1.65
+    adapter_version: modern_scene_nav_geometry_slope_v1
+physics:
+  collider_resolution: 17
+streaming:
+  saved_build_manifest_path: generated/open_world_streaming/modern_default/manifest.yaml
+  validate_payload_files: true
+  rebuild_when_stale: true
+  residency:
+    default:
+      active_radius: 192.0
+      cache_radius: 320.0
+      hysteresis: 32.0
+      max_transitions_per_frame: 4
+      live_allowed: true
+      predictive_live_allowed: false
+    high_detail_live:
+      active_radius: 96.0
+      cache_radius: 192.0
+      hysteresis: 32.0
+      max_transitions_per_frame: 4
+      live_allowed: true
+      predictive_live_allowed: false
+    cache_only:
+      active_radius: 192.0
+      cache_radius: 320.0
+      hysteresis: 32.0
+      max_transitions_per_frame: 4
+      live_allowed: false
+      predictive_live_allowed: false
+    far_metadata:
+      active_radius: 192.0
+      cache_radius: 512.0
+      hysteresis: 32.0
+      max_transitions_per_frame: 4
+      live_allowed: false
+      predictive_live_allowed: false
+  cache:
+    max_read_jobs_queued_per_update: 8
+    max_completed_jobs_merged_per_update: 16
+  generation:
+    policy: read_only
+    max_generation_jobs_queued_per_update: 16
+    max_completed_jobs_merged_per_update: 32
+  promotion:
+    max_promotes_queued_per_update: 8
+    max_demotes_queued_per_update: 8
+renderer:
+  layer_mask: 15
+  enable_distance_culling: true
+  prop_max_draw_distance: 160.0
+  terrain_max_draw_distance: 280.0
+debug_draw:
+  enabled: true
+  selected_bounds: true
+  collision_bounds: true
+  chunk_borders: true
+  terrain_tile_bounds: true
+  terrain_slope_warnings: false
+  navigation_tile_bounds: true
+  navigation_mesh_edges: false
+  navigation_current_path: true
+  navigation_nearest_point: true
+  navigation_blocker_bounds: false
+  navigation_portals: true
+  navigation_connectivity_links: true
+  camera_frustum: false
+  actor_destination: true
+  collider_shapes: false
+  max_debug_lines: 20000
+  max_nav_mesh_edge_lines: 6000
+  max_collider_shape_lines: 10000
+  max_world_graph_edge_lines: 4000
+  max_terrain_slope_warning_lines: 2000
+  max_collision_aabbs: 2000
+  max_chunk_border_rects: 2000
+camera:
+  far_plane: 1200.0
+  max_distance: 420.0
+  keyboard_pan_speed: 55.0
+  edge_pan_speed: 70.0
+  mouse_pan_sensitivity: 0.12
+  rotation_sensitivity: 0.01
+  zoom_sensitivity: 28.0
+  edge_scroll_margin_pixels: 18
+  enable_keyboard_pan: true
+  enable_edge_pan: true
+  enable_mouse_pan: true
+  enable_mouse_rotate: true
+  enable_zoom: true
+  follow_smoothing: 8.0
+  max_follow_lag: 8.0
+  allow_manual_follow_offset: true
+  pivot_offset_from_focus: {x: 0.0, y: 12.0, z: 0.0}
+  yaw_radians: 0.61086524
+  pitch_radians: -0.80285144
+  distance: 170.0
+  mode: free

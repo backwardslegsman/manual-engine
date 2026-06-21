@@ -861,6 +861,162 @@ namespace Engine {
         return result;
     }
 
+    NavQueryResult NavigationSystem::findPathInTile(
+        ChunkCoord coord,
+        glm::vec3 start,
+        glm::vec3 end,
+        const NavAgentSettings& agent) const
+    {
+        if (!impl_ || !impl_->initialized()) {
+            NavQueryResult result = makeResult(NavQueryStatus::NotInitialized, "Navigation system is not initialized.", start);
+            if (impl_) {
+                impl_->lastQueryStatus = result.status;
+                impl_->lastQueryMessage = result.message;
+            }
+            return result;
+        }
+        if (!finiteVec3(start) || !finiteVec3(end) || !validAgent(agent)) {
+            NavQueryResult result = makeResult(NavQueryStatus::InvalidInput, "Invalid tile path query input.", start);
+            impl_->lastQueryStatus = result.status;
+            impl_->lastQueryMessage = result.message;
+            return result;
+        }
+        const auto tileIt = impl_->tiles.find(coord);
+        if (tileIt == impl_->tiles.end()) {
+            NavQueryResult result = makeResult(NavQueryStatus::NoTile, "Requested navigation tile is not loaded.", start);
+            impl_->lastQueryStatus = result.status;
+            impl_->lastQueryMessage = result.message;
+            return result;
+        }
+        if (!impl_->navMeshReady) {
+            NavQueryResult result = makeResult(NavQueryStatus::NotInitialized, "Detour navmesh is not initialized.", start);
+            impl_->lastQueryStatus = result.status;
+            impl_->lastQueryMessage = result.message;
+            return result;
+        }
+
+        const dtMeshTile* tile = impl_->navMesh->getTileByRef(tileIt->second.tileRef);
+        if (!tile || !tile->header || tile->header->polyCount <= 0) {
+            NavQueryResult result = makeResult(NavQueryStatus::NoNearestPoly, "Requested navigation tile has no polygons.", start);
+            impl_->lastQueryStatus = result.status;
+            impl_->lastQueryMessage = result.message;
+            return result;
+        }
+
+        struct TileProjection {
+            dtPolyRef ref = 0;
+            glm::vec3 point{};
+            float distanceSquared = std::numeric_limits<float>::max();
+        };
+        auto closestInTile = [&](glm::vec3 point) -> std::optional<TileProjection> {
+            const std::array<float, 3> center{point.x, point.y, point.z};
+            const dtPolyRef baseRef = impl_->navMesh->getPolyRefBase(tile);
+            TileProjection best;
+            for (int polyIndex = 0; polyIndex < tile->header->polyCount; ++polyIndex) {
+                const dtPoly& poly = tile->polys[polyIndex];
+                if ((poly.flags & 1u) == 0u) {
+                    continue;
+                }
+                const dtPolyRef ref = baseRef | static_cast<dtPolyRef>(polyIndex);
+                float closest[3]{};
+                bool overPoly = false;
+                if (dtStatusFailed(impl_->navQuery->closestPointOnPoly(ref, center.data(), closest, &overPoly))) {
+                    continue;
+                }
+                const glm::vec3 closestPoint{closest[0], closest[1], closest[2]};
+                const glm::vec3 delta = closestPoint - point;
+                const float distanceSquared = glm::dot(delta, delta);
+                if (distanceSquared < best.distanceSquared) {
+                    best = {ref, closestPoint, distanceSquared};
+                }
+            }
+            if (best.ref == 0) {
+                return std::nullopt;
+            }
+            return best;
+        };
+
+        const std::optional<TileProjection> startProjection = closestInTile(start);
+        const std::optional<TileProjection> endProjection = closestInTile(end);
+        if (!startProjection || !endProjection) {
+            NavQueryResult result = makeResult(NavQueryStatus::NoNearestPoly, "No nearest polygon found in requested navigation tile.", start);
+            impl_->lastQueryStatus = result.status;
+            impl_->lastQueryMessage = result.message;
+            return result;
+        }
+
+        constexpr int MaxPathPolys = 256;
+        constexpr int MaxStraightPath = 256;
+        dtQueryFilter filter;
+        filter.setIncludeFlags(1);
+        filter.setExcludeFlags(0);
+        const std::array<float, 3> startPoint{
+            startProjection->point.x,
+            startProjection->point.y,
+            startProjection->point.z,
+        };
+        const std::array<float, 3> endPoint{
+            endProjection->point.x,
+            endProjection->point.y,
+            endProjection->point.z,
+        };
+        dtPolyRef pathPolys[MaxPathPolys]{};
+        int pathPolyCount = 0;
+        const dtStatus pathStatus = impl_->navQuery->findPath(
+            startProjection->ref,
+            endProjection->ref,
+            startPoint.data(),
+            endPoint.data(),
+            &filter,
+            pathPolys,
+            &pathPolyCount,
+            MaxPathPolys);
+        if (dtStatusFailed(pathStatus) || pathPolyCount <= 0) {
+            NavQueryResult result = makeResult(NavQueryStatus::NoPath, "No tile-local navigation path found.", start);
+            impl_->lastQueryStatus = result.status;
+            impl_->lastQueryMessage = result.message;
+            return result;
+        }
+
+        float straightPath[MaxStraightPath * 3]{};
+        unsigned char straightPathFlags[MaxStraightPath]{};
+        dtPolyRef straightPathRefs[MaxStraightPath]{};
+        int straightPathCount = 0;
+        const dtStatus straightStatus = impl_->navQuery->findStraightPath(
+            startPoint.data(),
+            endPoint.data(),
+            pathPolys,
+            pathPolyCount,
+            straightPath,
+            straightPathFlags,
+            straightPathRefs,
+            &straightPathCount,
+            MaxStraightPath);
+        if (dtStatusFailed(straightStatus) || straightPathCount <= 0) {
+            NavQueryResult result = makeResult(NavQueryStatus::NoPath, "No tile-local straight navigation path found.", start);
+            impl_->lastQueryStatus = result.status;
+            impl_->lastQueryMessage = result.message;
+            return result;
+        }
+
+        NavQueryResult result = makeResult(NavQueryStatus::Success, "Found tile-local navigation path.", startProjection->point);
+        result.path.points.reserve(static_cast<size_t>(straightPathCount));
+        for (int index = 0; index < straightPathCount; ++index) {
+            result.path.points.push_back({
+                straightPath[index * 3 + 0],
+                straightPath[index * 3 + 1],
+                straightPath[index * 3 + 2],
+            });
+        }
+        result.path.complete = pathPolys[pathPolyCount - 1] == endProjection->ref;
+        if (!result.path.complete) {
+            result.message = "Tile-local path is partial.";
+        }
+        impl_->lastQueryStatus = result.status;
+        impl_->lastQueryMessage = result.message;
+        return result;
+    }
+
     NavQueryResult NavigationSystem::findPath(glm::vec3 start, glm::vec3 end, const NavAgentSettings& agent) const
     {
         if (!impl_ || !impl_->initialized()) {

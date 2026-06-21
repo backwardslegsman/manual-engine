@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <iostream>
 #include <limits>
+#include <sstream>
 #include <utility>
 
 #define GLM_ENABLE_EXPERIMENTAL
@@ -11,11 +13,16 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/norm.hpp>
 
+#ifndef MANUAL_ENGINE_ENABLE_DEBUG_TOOLS
+#define MANUAL_ENGINE_ENABLE_DEBUG_TOOLS 1
+#endif
+
 namespace Engine {
     namespace {
         constexpr float Epsilon = 0.0001f;
         constexpr float SweepLift = 0.02f;
         constexpr float MaxFallSpeed = 80.0f;
+        constexpr uint32_t DebugSummaryIntervalTicks = 30;
 
         [[nodiscard]] bool finite(float value)
         {
@@ -35,6 +42,70 @@ namespace Engine {
         [[nodiscard]] glm::vec3 xz(const glm::vec3& value)
         {
             return {value.x, 0.0f, value.z};
+        }
+
+        [[nodiscard]] const char* shapeTypeName(ScenePhysicsShapeType type)
+        {
+            switch (type) {
+                case ScenePhysicsShapeType::Box:
+                    return "Box";
+                case ScenePhysicsShapeType::Sphere:
+                    return "Sphere";
+                case ScenePhysicsShapeType::Capsule:
+                    return "Capsule";
+                case ScenePhysicsShapeType::StaticTriangleMesh:
+                    return "StaticTriangleMesh";
+            }
+            return "Unknown";
+        }
+
+        [[nodiscard]] const char* movementModeName(SceneCharacterMovementMode mode)
+        {
+            switch (mode) {
+                case SceneCharacterMovementMode::Disabled:
+                    return "Disabled";
+                case SceneCharacterMovementMode::Walking:
+                    return "Walking";
+                case SceneCharacterMovementMode::Falling:
+                    return "Falling";
+            }
+            return "Unknown";
+        }
+
+        [[nodiscard]] const char* movementStatusName(SceneCharacterMovementStatus status)
+        {
+            switch (status) {
+                case SceneCharacterMovementStatus::Success:
+                    return "Success";
+                case SceneCharacterMovementStatus::InvalidCharacter:
+                    return "InvalidCharacter";
+                case SceneCharacterMovementStatus::InvalidActor:
+                    return "InvalidActor";
+                case SceneCharacterMovementStatus::InvalidDescriptor:
+                    return "InvalidDescriptor";
+                case SceneCharacterMovementStatus::PhysicsBodyUnavailable:
+                    return "PhysicsBodyUnavailable";
+                case SceneCharacterMovementStatus::NavigationUnavailable:
+                    return "NavigationUnavailable";
+                case SceneCharacterMovementStatus::NoPath:
+                    return "NoPath";
+                case SceneCharacterMovementStatus::Blocked:
+                    return "Blocked";
+            }
+            return "Unknown";
+        }
+
+        void debugLog(SceneCharacterHandle handle, const std::string& message)
+        {
+            if constexpr (MANUAL_ENGINE_ENABLE_DEBUG_TOOLS != 0) {
+                std::clog << "[SceneCharacterMovement] character=(" << handle.index << "," << handle.generation
+                    << ") " << message << '\n';
+            }
+        }
+
+        void debugLogVec3(std::ostream& stream, const char* label, const glm::vec3& value)
+        {
+            stream << label << "=(" << value.x << "," << value.y << "," << value.z << ")";
         }
 
         [[nodiscard]] glm::vec3 normalizedOrZero(const glm::vec3& value)
@@ -247,14 +318,31 @@ namespace Engine {
             target->state.activeWaypointIndex = 0;
             target->hasPathRequest = false;
             setRecordStatus(*target, SceneCharacterMovementStatus::NoPath, "Navigation path request failed: " + path.message);
+            std::ostringstream stream;
+            stream << "path request rejected status=NoPath navMessage=\"" << path.message << "\" ";
+            debugLogVec3(stream, "start", start);
+            stream << " ";
+            debugLogVec3(stream, "goal", request.goal);
+            stream << " pointCount=" << path.path.points.size() << " complete=" << path.path.complete;
+            debugLog(character, stream.str());
             return false;
         }
 
         target->pathRequest = effective;
         target->hasPathRequest = true;
+        target->input = {};
         target->state.activePath = path.path;
         target->state.activeWaypointIndex = path.path.points.size() > 1 ? 1u : 0u;
         setRecordStatus(*target, SceneCharacterMovementStatus::Success, "Navigation path accepted.");
+        std::ostringstream stream;
+        stream << "path accepted ";
+        debugLogVec3(stream, "start", start);
+        stream << " ";
+        debugLogVec3(stream, "goal", request.goal);
+        stream << " pointCount=" << path.path.points.size()
+            << " activeWaypoint=" << target->state.activeWaypointIndex
+            << " length=" << path.length;
+        debugLog(character, stream.str());
         return true;
     }
 
@@ -286,16 +374,23 @@ namespace Engine {
                 continue;
             }
             const SceneCharacterHandle handle{index, character.generation};
+            ++character.debugTick;
             if (!character.descriptor.enabled) {
+                if (character.hasPathRequest && character.debugTick % DebugSummaryIntervalTicks == 1) {
+                    debugLog(handle, "not moving: character is disabled while a path is active");
+                }
                 character.state.mode = SceneCharacterMovementMode::Disabled;
                 character.state.grounded = false;
                 character.state.velocity = {};
+                character.groundBody = {};
+                character.groundCollider = {};
                 continue;
             }
 
             std::optional<SceneTransform> transform = scene_.localTransform(character.descriptor.actor);
             if (!transform.has_value()) {
                 setRecordStatus(character, SceneCharacterMovementStatus::InvalidActor, "Character actor transform is unavailable.");
+                debugLog(handle, "not moving: actor transform is unavailable");
                 continue;
             }
 
@@ -308,6 +403,8 @@ namespace Engine {
                 character.state.floorNormal = ground.normal;
                 character.state.floorDistance = ground.distance;
                 character.state.velocity.y = 0.0f;
+                character.groundBody = ground.body;
+                character.groundCollider = ground.collider;
             } else {
                 character.state.grounded = false;
                 character.state.mode = SceneCharacterMovementMode::Falling;
@@ -315,14 +412,56 @@ namespace Engine {
                 character.state.velocity.y = std::max(
                     character.state.velocity.y - character.descriptor.gravity * deltaSeconds,
                     -MaxFallSpeed);
+                character.groundBody = {};
+                character.groundCollider = {};
+                if (character.hasPathRequest && character.debugTick % DebugSummaryIntervalTicks == 1) {
+                    std::ostringstream stream;
+                    stream << "path active but character is not grounded groundHit=" << ground.hit
+                        << " groundWalkable=" << ground.walkable
+                        << " floorDistance=" << character.state.floorDistance
+                        << " velocityY=" << character.state.velocity.y;
+                    debugLog(handle, stream.str());
+                }
             }
 
-        const bool manualInput = glm::length2(xz(character.input.direction)) > Epsilon;
+        const bool manualInput = glm::length2(xz(character.input.direction)) > Epsilon &&
+            clamp01(character.input.speedScale) > Epsilon;
         const bool pathInput = !manualInput && character.hasPathRequest;
         const glm::vec3 desiredDirection = desiredInputDirection(character, position);
         const float speedScale = pathInput ? 1.0f : clamp01(character.input.speedScale);
         const glm::vec3 targetHorizontalVelocity =
                 desiredDirection * character.descriptor.maxSpeed * speedScale;
+            if ((pathInput || manualInput) && character.debugTick % DebugSummaryIntervalTicks == 1) {
+                std::ostringstream stream;
+                stream << "movement summary mode=" << movementModeName(character.state.mode)
+                    << " grounded=" << character.state.grounded
+                    << " manualInput=" << manualInput
+                    << " pathInput=" << pathInput
+                    << " activeWaypoint=" << character.state.activeWaypointIndex
+                    << "/" << character.state.activePath.points.size()
+                    << " speedScale=" << speedScale << " ";
+                debugLogVec3(stream, "pos", position);
+                stream << " ";
+                debugLogVec3(stream, "desiredDir", desiredDirection);
+                stream << " ";
+                debugLogVec3(stream, "velocity", character.state.velocity);
+                stream << " status=" << movementStatusName(character.state.lastStatus)
+                    << " message=\"" << character.state.lastMessage << "\"";
+                debugLog(handle, stream.str());
+            }
+            if (pathInput && glm::length2(desiredDirection) <= Epsilon * Epsilon &&
+                character.debugTick % DebugSummaryIntervalTicks == 1) {
+                std::ostringstream stream;
+                stream << "path active but desired direction is zero activeWaypoint="
+                    << character.state.activeWaypointIndex << "/" << character.state.activePath.points.size();
+                if (character.state.activeWaypointIndex < character.state.activePath.points.size()) {
+                    stream << " ";
+                    debugLogVec3(stream, "waypoint", character.state.activePath.points[character.state.activeWaypointIndex]);
+                }
+                stream << " ";
+                debugLogVec3(stream, "pos", position);
+                debugLog(handle, stream.str());
+            }
             const float response = glm::length2(targetHorizontalVelocity) > Epsilon
                 ? character.descriptor.acceleration
                 : character.descriptor.braking;
@@ -336,6 +475,19 @@ namespace Engine {
 
             const glm::vec3 desiredPosition = position + character.state.velocity * deltaSeconds;
             glm::vec3 finalPosition = moveWithCollision(handle, character, position, desiredPosition, deltaSeconds);
+            if ((pathInput || manualInput) &&
+                glm::length2(xz(targetHorizontalVelocity)) > Epsilon * Epsilon &&
+                glm::length2(xz(finalPosition - position)) <= Epsilon * Epsilon &&
+                character.debugTick % DebugSummaryIntervalTicks == 1) {
+                std::ostringstream stream;
+                stream << "wanted horizontal movement but final position did not change ";
+                debugLogVec3(stream, "targetVelocity", targetHorizontalVelocity);
+                stream << " ";
+                debugLogVec3(stream, "desiredPos", desiredPosition);
+                stream << " status=" << movementStatusName(character.state.lastStatus)
+                    << " message=\"" << character.state.lastMessage << "\"";
+                debugLog(handle, stream.str());
+            }
 
             GroundProbe finalGround = probeGround(handle, character, finalPosition);
             if (finalGround.walkable && character.state.velocity.y <= 0.0f) {
@@ -345,6 +497,11 @@ namespace Engine {
                 character.state.floorNormal = finalGround.normal;
                 character.state.floorDistance = finalGround.distance;
                 character.state.velocity.y = 0.0f;
+                character.groundBody = finalGround.body;
+                character.groundCollider = finalGround.collider;
+            } else {
+                character.groundBody = {};
+                character.groundCollider = {};
             }
 
             if (character.input.faceDirection.has_value() && glm::length2(xz(*character.input.faceDirection)) > Epsilon) {
@@ -497,6 +654,8 @@ namespace Engine {
         result.normal = sweep.hit->normal;
         result.distance = std::max(0.0f, position.y - result.position.y);
         result.walkable = walkableNormal(record.descriptor, result.normal);
+        result.body = sweep.hit->body;
+        result.collider = sweep.hit->collider;
         return result;
     }
 
@@ -556,21 +715,94 @@ namespace Engine {
             }
         }
 
-        const ScenePhysicsSweepResult sweep = physics_.sweepCapsule(
-            capsuleQuery(record.descriptor),
-            position + glm::vec3{0.0f, SweepLift, 0.0f},
-            desiredPosition + glm::vec3{0.0f, SweepLift, 0.0f},
-            record.descriptor.physicsFilter);
-        appendDebug({SceneCharacterDebugRequestType::MovementSweep, SceneCharacterMovementStatus::Success, handle, position, desiredPosition});
+        ScenePhysicsFilter sweepFilter = record.descriptor.physicsFilter;
+        ScenePhysicsSweepResult sweep;
+        constexpr uint32_t MaxTriangleMeshRetryCount = 8;
+        for (uint32_t attempt = 0; attempt <= MaxTriangleMeshRetryCount; ++attempt) {
+            sweep = physics_.sweepCapsule(
+                capsuleQuery(record.descriptor),
+                position + glm::vec3{0.0f, SweepLift, 0.0f},
+                desiredPosition + glm::vec3{0.0f, SweepLift, 0.0f},
+                sweepFilter);
+            appendDebug({SceneCharacterDebugRequestType::MovementSweep, SceneCharacterMovementStatus::Success, handle, position, desiredPosition});
+
+            const bool hitCurrentGround = sweep.hit.has_value() &&
+                isValid(record.groundBody) &&
+                isValid(record.groundCollider) &&
+                sweep.hit->body == record.groundBody &&
+                sweep.hit->collider == record.groundCollider;
+            const std::optional<ScenePhysicsColliderDescriptor> hitCollider =
+                sweep.hit.has_value() ? physics_.collider(sweep.hit->collider) : std::nullopt;
+            const bool hitTriangleMesh =
+                hitCollider.has_value() && hitCollider->shape.type == ScenePhysicsShapeType::StaticTriangleMesh;
+            const bool shouldRetryWithoutTriangleMesh = record.state.grounded &&
+                glm::length2(horizontalDelta) > Epsilon * Epsilon &&
+                sweep.status == ScenePhysicsQueryStatus::Success &&
+                sweep.hit.has_value() &&
+                hitTriangleMesh &&
+                (hitCurrentGround || sweep.hit->distance <= Epsilon);
+
+            if (sweep.status != ScenePhysicsQueryStatus::Success || !sweep.hit.has_value()) {
+                if (attempt == 0 && (record.hasPathRequest || glm::length2(xz(record.input.direction)) > Epsilon)) {
+                    std::ostringstream stream;
+                    stream << "movement sweep clear status=" << static_cast<int>(sweep.status) << " ";
+                    debugLogVec3(stream, "start", position);
+                    stream << " ";
+                    debugLogVec3(stream, "desired", desiredPosition);
+                    debugLog(handle, stream.str());
+                } else if (attempt > 0) {
+                    std::ostringstream stream;
+                    stream << "retry sweep clear status=" << static_cast<int>(sweep.status)
+                        << " excludedTriangleMeshCount=" << sweepFilter.excludedColliders.size();
+                    debugLog(handle, stream.str());
+                }
+                break;
+            }
+
+            std::ostringstream stream;
+            stream << (attempt == 0 ? "movement sweep hit body=(" : "retry sweep hit body=(")
+                << sweep.hit->body.index << "," << sweep.hit->body.generation
+                << ") collider=(" << sweep.hit->collider.index << "," << sweep.hit->collider.generation
+                << ") distance=" << sweep.hit->distance
+                << " hitCurrentGround=" << hitCurrentGround
+                << " hitTriangleMesh=" << hitTriangleMesh
+                << " retryWithoutTriangleMesh=" << shouldRetryWithoutTriangleMesh
+                << " excludedTriangleMeshCount=" << sweepFilter.excludedColliders.size() << " ";
+            if (hitCollider.has_value()) {
+                stream << "shape=" << shapeTypeName(hitCollider->shape.type) << " ";
+            }
+            debugLogVec3(stream, "normal", sweep.hit->normal);
+            stream << " ";
+            debugLogVec3(stream, "start", position);
+            stream << " ";
+            debugLogVec3(stream, "desired", desiredPosition);
+            debugLog(handle, stream.str());
+
+            if (!shouldRetryWithoutTriangleMesh) {
+                break;
+            }
+            if (attempt == MaxTriangleMeshRetryCount) {
+                debugLog(handle, "stopped retrying horizontal sweep after triangle-mesh exclusion cap");
+                break;
+            }
+
+            debugLog(handle, hitCurrentGround
+                ? "retrying horizontal sweep with current walkable triangle-mesh ground excluded"
+                : "retrying horizontal sweep with zero-distance static triangle-mesh bounds hit excluded");
+            sweepFilter.excludedBodies.push_back(sweep.hit->body);
+            sweepFilter.excludedColliders.push_back(sweep.hit->collider);
+        }
         if (sweep.status != ScenePhysicsQueryStatus::Success || !sweep.hit.has_value()) {
             return desiredPosition;
         }
         if (sweep.hit->distance <= Epsilon) {
             if (walkableNormal(record.descriptor, sweep.hit->normal)) {
+                debugLog(handle, "movement sweep started on walkable normal; allowing desired movement");
                 return desiredPosition;
             }
             ++diagnostics_.failedSweepCount;
             setRecordStatus(record, SceneCharacterMovementStatus::Blocked, "Character movement started against blocking geometry.");
+            debugLog(handle, "blocked: movement started against non-walkable blocking geometry");
             return position;
         }
 
@@ -580,6 +812,14 @@ namespace Engine {
         const glm::vec3 normal = glm::normalize(sweep.hit->normal);
         const glm::vec3 slide = remaining - normal * glm::dot(remaining, normal);
         setRecordStatus(record, SceneCharacterMovementStatus::Blocked, "Character movement hit blocking geometry.");
+        {
+            std::ostringstream stream;
+            stream << "blocked: movement hit geometry and slid ";
+            debugLogVec3(stream, "hitPosition", hitPosition);
+            stream << " ";
+            debugLogVec3(stream, "slide", slide);
+            debugLog(handle, stream.str());
+        }
         return hitPosition + slide;
     }
 
