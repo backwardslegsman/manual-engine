@@ -31,6 +31,8 @@ The first milestone prioritizes the runtime foundation before richer editor plac
 
 Goal: add durable authoring metadata on top of existing scene actors.
 
+Status: implemented. `Engine::ActorAuthoringStore` now owns durable actor metadata keyed by `SceneObjectId`, with display name, string tags, and one string layer. A1 also adds reflection descriptors/get-set helpers and optional scene binary serialization for actor metadata. No editor placement, inspector UI, typed component descriptors, behavior binding metadata, or FLECS integration is part of this phase.
+
 Implementation direction:
 
 - Define an Engine-side actor authoring record keyed by `SceneObjectId`.
@@ -48,6 +50,8 @@ Exit criteria:
 ## Phase A2: Typed Component Descriptor Registry
 
 Goal: define how authored component types are registered, validated, reflected, serialized, and rebound to runtime systems.
+
+Status: implemented. `Engine::ActorComponentDescriptorRegistry` registers typed component descriptors by `SceneComponentTypeId`, and `Engine::ActorComponentDescriptorStore` owns durable component instance metadata keyed by `ActorComponentId`. A2 adds generic metadata reflection, deterministic instance enumeration, fake-tested bind/unbind/apply callback contracts, and optional scene binary serialization for generic component metadata. Concrete `Stats`, `Movement`, and `Sensory` payload schemas remain A3 work.
 
 Implementation direction:
 

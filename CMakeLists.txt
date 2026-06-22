@@ -27,6 +27,8 @@ add_executable(manual_engine
     src/Assets/Assimp/Importer.cpp
     src/Assets/HeightmapImporter.cpp
    src/Engine/AnimatedModelPose.cpp
+    src/Engine/ActorAuthoring.cpp
+    src/Engine/ActorComponentAuthoring.cpp
    src/Engine/AsyncWorkQueue.cpp
     src/Engine/AssetCache.cpp
     src/Engine/AssetRegistry.cpp
@@ -328,6 +330,8 @@ set_tests_properties(manual_engine_editor_settings_reflection_tests PROPERTIES W
 
 add_executable(manual_engine_editor_ui_tests
     tests/app/EditorUiTestRunner.cpp
+    src/Engine/ActorAuthoring.cpp
+    src/Engine/ActorComponentAuthoring.cpp
     src/App/EditorProjectSettings.cpp
     src/App/EditorRebuildCoordinator.cpp
     src/App/EditorSettingsReflection.cpp
@@ -388,6 +392,8 @@ set_tests_properties(manual_engine_editor_ui_tests PROPERTIES WORKING_DIRECTORY 
 
 add_executable(manual_engine_editor_rebuild_coordinator_tests
     tests/app/EditorRebuildCoordinatorTestRunner.cpp
+    src/Engine/ActorAuthoring.cpp
+    src/Engine/ActorComponentAuthoring.cpp
     src/App/EditorProjectSettings.cpp
     src/App/EditorRebuildCoordinator.cpp
     src/App/EditorSettingsReflection.cpp
@@ -448,6 +454,8 @@ set_tests_properties(manual_engine_editor_rebuild_coordinator_tests PROPERTIES W
 
 add_executable(manual_engine_editor_live_apply_tests
     tests/app/EditorLiveApplyTestRunner.cpp
+    src/Engine/ActorAuthoring.cpp
+    src/Engine/ActorComponentAuthoring.cpp
     src/App/EditorProjectSettings.cpp
     src/App/EditorRebuildCoordinator.cpp
     src/App/EditorSettingsReflection.cpp
@@ -509,6 +517,8 @@ set_tests_properties(manual_engine_editor_live_apply_tests PROPERTIES WORKING_DI
 
 add_executable(manual_engine_editor_tool_scripting_tests
     tests/app/EditorToolScriptingTestRunner.cpp
+    src/Engine/ActorAuthoring.cpp
+    src/Engine/ActorComponentAuthoring.cpp
     src/App/EditorProjectSettings.cpp
     src/App/EditorRebuildCoordinator.cpp
     src/App/EditorSettingsReflection.cpp
@@ -573,6 +583,8 @@ add_executable(manual_engine_open_world_streaming_tests
     tests/authored_scene/RendererOwnershipStubs.cpp
     src/Assets/Assimp/Importer.cpp
     src/Assets/HeightmapImporter.cpp
+    src/Engine/ActorAuthoring.cpp
+    src/Engine/ActorComponentAuthoring.cpp
     src/Engine/AsyncWorkQueue.cpp
     src/Engine/AssetCache.cpp
     src/Engine/AssetRegistry.cpp
@@ -628,6 +640,8 @@ add_executable(manual_engine_open_world_streaming_runtime_tests
     tests/navigation/RendererStubs.cpp
     src/Assets/Assimp/Importer.cpp
     src/Assets/HeightmapImporter.cpp
+    src/Engine/ActorAuthoring.cpp
+    src/Engine/ActorComponentAuthoring.cpp
     src/Engine/AsyncWorkQueue.cpp
     src/Engine/AssetRegistry.cpp
     src/Engine/Biome.cpp
@@ -678,6 +692,8 @@ add_test(NAME manual_engine_open_world_streaming_runtime_tests COMMAND manual_en
 
 add_executable(manual_engine_open_world_scene_chunk_streaming_tests
     tests/engine/OpenWorldSceneChunkStreamingTestRunner.cpp
+    src/Engine/ActorAuthoring.cpp
+    src/Engine/ActorComponentAuthoring.cpp
     src/Engine/AsyncWorkQueue.cpp
     src/Engine/ChunkTypes.cpp
     src/Engine/FrameBudget.cpp
@@ -930,6 +946,45 @@ target_link_libraries(manual_engine_scene_tests
 
 add_test(NAME manual_engine_scene_tests COMMAND manual_engine_scene_tests)
 
+add_executable(manual_engine_actor_authoring_tests
+    tests/scene/ActorAuthoringTestRunner.cpp
+    src/Engine/ActorAuthoring.cpp
+    src/Engine/Reflection.cpp
+    src/Engine/Scene/Scene.cpp
+)
+
+target_include_directories(manual_engine_actor_authoring_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_actor_authoring_tests
+    PRIVATE
+        glm::glm
+)
+
+add_test(NAME manual_engine_actor_authoring_tests COMMAND manual_engine_actor_authoring_tests)
+
+add_executable(manual_engine_actor_component_authoring_tests
+    tests/scene/ActorComponentAuthoringTestRunner.cpp
+    src/Engine/ActorAuthoring.cpp
+    src/Engine/ActorComponentAuthoring.cpp
+    src/Engine/Reflection.cpp
+    src/Engine/Scene/Scene.cpp
+)
+
+target_include_directories(manual_engine_actor_component_authoring_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_actor_component_authoring_tests
+    PRIVATE
+        glm::glm
+)
+
+add_test(NAME manual_engine_actor_component_authoring_tests COMMAND manual_engine_actor_component_authoring_tests)
+
 add_executable(manual_engine_scene_render_bridge_tests
     tests/scene/SceneRenderBridgeTestRunner.cpp
     src/Engine/Scene/Scene.cpp
@@ -1086,6 +1141,8 @@ add_test(NAME manual_engine_scene_lua_scripting_tests COMMAND manual_engine_scen
 
 add_executable(manual_engine_scene_serialization_tests
     tests/scene/SceneSerializationTestRunner.cpp
+    src/Engine/ActorAuthoring.cpp
+    src/Engine/ActorComponentAuthoring.cpp
     src/Engine/Reflection.cpp
     src/Engine/Scene/Scene.cpp
     src/Engine/SceneSerialization.cpp

@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "Engine/ActorAuthoring.hpp"
+#include "Engine/ActorComponentAuthoring.hpp"
 #include "Engine/AssetRegistry.hpp"
 #include "Engine/Reflection.hpp"
 #include "Engine/Scene/Scene.hpp"
@@ -40,6 +42,8 @@ namespace Engine {
         TerrainReferenceTable = 6,
         StringTable = 7,
         UserExtension = 8,
+        ActorAuthoringMetadata = 9,
+        ActorComponentAuthoringMetadata = 10,
     };
 
     enum class SceneBinaryChunkFlags : uint32_t {
@@ -135,6 +139,14 @@ namespace Engine {
         TerrainSerializedChunkFileMetadata metadata;
     };
 
+    struct SceneSerializedActorAuthoringRecord {
+        ActorAuthoringRecord metadata;
+    };
+
+    struct SceneSerializedActorComponentRecord {
+        ActorComponentInstanceRecord metadata;
+    };
+
     struct SceneSerializedScene {
         std::string formatVersion = SceneBinaryFormatVersion;
         std::vector<SceneSerializedActorRecord> actors;
@@ -142,6 +154,8 @@ namespace Engine {
         std::vector<SceneSerializedPropertySchema> schema;
         std::vector<SceneSerializedAssetReference> assets;
         std::vector<SceneSerializedTerrainReference> terrain;
+        std::vector<SceneSerializedActorAuthoringRecord> actorAuthoring;
+        std::vector<SceneSerializedActorComponentRecord> actorComponents;
     };
 
     struct SceneSerializationDiagnostics {
@@ -150,6 +164,8 @@ namespace Engine {
         uint32_t schemaPropertyCount = 0;
         uint32_t assetReferenceCount = 0;
         uint32_t terrainReferenceCount = 0;
+        uint32_t actorAuthoringCount = 0;
+        uint32_t actorComponentAuthoringCount = 0;
         uint32_t skippedReflectionPropertyCount = 0;
         uint32_t unknownOptionalChunkCount = 0;
         std::vector<std::string> errors;
@@ -192,9 +208,25 @@ namespace Engine {
         Scene& scene,
         const ReflectionRegistry& registry,
         const SceneSerializationSettings& settings = {});
+    [[nodiscard]] SceneSerializedScene buildSerializedScene(
+        Scene& scene,
+        const ActorAuthoringStore& actorAuthoring,
+        const ReflectionRegistry& registry,
+        const SceneSerializationSettings& settings = {});
+    [[nodiscard]] SceneSerializedScene buildSerializedScene(
+        Scene& scene,
+        const ActorAuthoringStore& actorAuthoring,
+        const ActorComponentDescriptorStore& actorComponents,
+        const ReflectionRegistry& registry,
+        const SceneSerializationSettings& settings = {});
     [[nodiscard]] SceneSerializationDiagnostics validateSerializedScene(
         const SceneSerializedScene& scene,
         const ReflectionRegistry& registry,
+        const SceneSerializationSettings& settings = {});
+    [[nodiscard]] SceneSerializationDiagnostics validateSerializedScene(
+        const SceneSerializedScene& scene,
+        const ReflectionRegistry& registry,
+        const ActorComponentDescriptorRegistry& componentRegistry,
         const SceneSerializationSettings& settings = {});
     [[nodiscard]] SceneSerializationWriteResult writeSceneBinary(
         const std::filesystem::path& path,
@@ -208,6 +240,20 @@ namespace Engine {
         const SceneSerializationSettings& settings = {});
     [[nodiscard]] SceneSerializationStatus applySerializedScene(
         Scene& scene,
+        const SceneSerializedScene& serialized,
+        const SceneSerializationLoadContext& context = {},
+        const SceneSerializationSettings& settings = {});
+    [[nodiscard]] SceneSerializationStatus applySerializedScene(
+        Scene& scene,
+        ActorAuthoringStore& actorAuthoring,
+        const SceneSerializedScene& serialized,
+        const SceneSerializationLoadContext& context = {},
+        const SceneSerializationSettings& settings = {});
+    [[nodiscard]] SceneSerializationStatus applySerializedScene(
+        Scene& scene,
+        ActorAuthoringStore& actorAuthoring,
+        ActorComponentDescriptorStore& actorComponents,
+        const ActorComponentDescriptorRegistry& componentRegistry,
         const SceneSerializedScene& serialized,
         const SceneSerializationLoadContext& context = {},
         const SceneSerializationSettings& settings = {});

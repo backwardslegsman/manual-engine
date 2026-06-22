@@ -6,6 +6,8 @@
 #include <utility>
 #include <vector>
 
+#include "Engine/ActorAuthoring.hpp"
+#include "Engine/ActorComponentAuthoring.hpp"
 #include "Engine/Reflection.hpp"
 #include "Engine/Scene/Scene.hpp"
 #include "Engine/SceneSerialization.hpp"
@@ -102,6 +104,18 @@ namespace {
 
         (void)registry.registerObject(object);
         return registry;
+    }
+
+    Engine::ActorComponentTypeDescriptor componentDescriptor(Engine::SceneComponentTypeId type = Engine::SceneComponentTypeId{700})
+    {
+        Engine::ActorComponentTypeDescriptor descriptor;
+        descriptor.type = type;
+        descriptor.typeName = "test.serialized_component";
+        descriptor.displayName = "Serialized Component";
+        descriptor.category = "Tests";
+        descriptor.documentation = "Fake component type for scene serialization tests.";
+        descriptor.defaultInstance.displayName = "Serialized Component";
+        return descriptor;
     }
 
     Engine::SceneSerializedScene fixtureSnapshot(Engine::ReflectionRegistry& registry)
@@ -248,6 +262,178 @@ namespace {
         ctx.expect(read.scene.terrain.size() == 1 && read.scene.terrain[0].metadata.identity.chunkId == identity.chunkId, "terrain stable chunk ID did not round trip");
     }
 
+    void ActorAuthoringMetadataRoundTrip(TestContext& ctx)
+    {
+        Engine::ReflectionRegistry registry = serializableRegistry();
+        Engine::Scene scene;
+        Engine::ActorAuthoringStore authoring;
+
+        const Engine::SceneActorHandle parent = scene.createActor(Engine::SceneObjectId{1000});
+        const Engine::SceneActorHandle child = scene.createActor(Engine::SceneObjectId{2000});
+        (void)scene.attachChild(child, parent, false);
+
+        Engine::ActorAuthoringRecord parentMetadata = Engine::defaultActorAuthoringRecord(Engine::SceneObjectId{1000});
+        parentMetadata.displayName = "Village Elder";
+        parentMetadata.layer = "Characters";
+        parentMetadata.tags = {"npc", "quest_giver"};
+        (void)authoring.upsert(parentMetadata);
+
+        Engine::ActorAuthoringRecord childMetadata = Engine::defaultActorAuthoringRecord(Engine::SceneObjectId{2000});
+        childMetadata.displayName = "Torch";
+        childMetadata.layer = "Props";
+        childMetadata.tags = {"prop"};
+        (void)authoring.upsert(childMetadata);
+
+        const Engine::SceneSerializedScene snapshot = Engine::buildSerializedScene(scene, authoring, registry);
+        ctx.expect(snapshot.actorAuthoring.size() == 2, "actor authoring metadata was not serialized");
+
+        const std::filesystem::path path = testRoot() / "actor_authoring.mescene";
+        const Engine::SceneSerializationWriteResult write = Engine::writeSceneBinary(path, snapshot);
+        ctx.expect(write.status == Engine::SceneSerializationStatus::Success, "actor authoring scene write failed");
+        const Engine::SceneSerializationReadResult read = Engine::readSceneBinary(path);
+        ctx.expect(read.status == Engine::SceneSerializationStatus::Success, "actor authoring scene read failed");
+        ctx.expect(read.scene.actorAuthoring.size() == 2, "actor authoring metadata did not round trip");
+
+        Engine::Scene restored;
+        Engine::ActorAuthoringStore restoredAuthoring;
+        const Engine::SceneSerializationStatus status =
+            Engine::applySerializedScene(restored, restoredAuthoring, read.scene);
+        ctx.expect(status == Engine::SceneSerializationStatus::Success, "actor authoring apply failed");
+        const std::optional<Engine::ActorAuthoringRecord> restoredParent =
+            restoredAuthoring.record(Engine::SceneObjectId{1000});
+        ctx.expect(restoredParent.has_value(), "restored metadata missing");
+        ctx.expect(restoredParent && restoredParent->displayName == "Village Elder", "restored display name mismatch");
+        ctx.expect(restoredParent && restoredParent->tags.size() == 2, "restored tags mismatch");
+    }
+
+    void InvalidActorAuthoringMetadataRejected(TestContext& ctx)
+    {
+        Engine::ReflectionRegistry registry = serializableRegistry();
+        Engine::SceneSerializedScene snapshot;
+        snapshot.actors.push_back({Engine::SceneObjectId{1}, std::nullopt, {}, 0});
+        snapshot.actorAuthoring.push_back({Engine::ActorAuthoringRecord{
+            Engine::SceneObjectId{2},
+            "Orphan",
+            {},
+            "Default",
+        }});
+        ctx.expect(!Engine::validateSerializedScene(snapshot, registry).errors.empty(), "orphan actor metadata was accepted");
+
+        snapshot.actorAuthoring[0].metadata.actorId = Engine::SceneObjectId{1};
+        snapshot.actorAuthoring[0].metadata.tags = {"tag", "TAG"};
+        ctx.expect(!Engine::validateSerializedScene(snapshot, registry).errors.empty(), "invalid actor metadata was accepted");
+
+        snapshot.actorAuthoring[0].metadata.tags = {"tag"};
+        snapshot.actorAuthoring.push_back(snapshot.actorAuthoring[0]);
+        ctx.expect(!Engine::validateSerializedScene(snapshot, registry).errors.empty(), "duplicate actor metadata was accepted");
+    }
+
+    void ActorComponentAuthoringMetadataRoundTrip(TestContext& ctx)
+    {
+        Engine::ReflectionRegistry registry = serializableRegistry();
+        Engine::ActorComponentDescriptorRegistry componentRegistry;
+        (void)componentRegistry.registerType(componentDescriptor());
+
+        Engine::Scene scene;
+        Engine::ActorAuthoringStore actorAuthoring;
+        Engine::ActorComponentDescriptorStore componentAuthoring;
+        const Engine::ActorAuthoringCreateResult actor =
+            Engine::createAuthoredActor(scene, actorAuthoring, Engine::SceneObjectId{5000});
+        ctx.expect(actor.status == Engine::ActorAuthoringStatus::Success, "authored actor creation failed");
+
+        Engine::ActorComponentInstanceRecord metadata =
+            Engine::defaultActorComponentInstanceRecord(
+                Engine::ActorComponentId{9000},
+                Engine::SceneObjectId{5000},
+                *componentRegistry.descriptor(Engine::SceneComponentTypeId{700}));
+        metadata.displayName = "Serialized Metadata";
+        metadata.enabled = false;
+        metadata.order = 3;
+
+        const Engine::ActorComponentOperationResult component =
+            Engine::createAuthoredComponent(
+                scene,
+                actorAuthoring,
+                componentRegistry,
+                componentAuthoring,
+                Engine::ActorComponentId{9000},
+                Engine::SceneObjectId{5000},
+                Engine::SceneComponentTypeId{700},
+                metadata);
+        ctx.expect(component.status == Engine::ActorComponentStatus::Success, "authored component creation failed");
+
+        const Engine::SceneSerializedScene snapshot =
+            Engine::buildSerializedScene(scene, actorAuthoring, componentAuthoring, registry);
+        ctx.expect(snapshot.components.size() == 1, "scene component record was not serialized");
+        ctx.expect(snapshot.actorComponents.size() == 1, "authored component metadata was not serialized");
+
+        const std::filesystem::path path = testRoot() / "actor_component_authoring.mescene";
+        const Engine::SceneSerializationWriteResult write = Engine::writeSceneBinary(path, snapshot);
+        ctx.expect(write.status == Engine::SceneSerializationStatus::Success, "component authoring scene write failed");
+        const Engine::SceneSerializationReadResult read = Engine::readSceneBinary(path);
+        ctx.expect(read.status == Engine::SceneSerializationStatus::Success, "component authoring scene read failed");
+        ctx.expect(read.scene.actorComponents.size() == 1, "component authoring metadata did not round trip");
+
+        Engine::Scene restored;
+        Engine::ActorAuthoringStore restoredActors;
+        Engine::ActorComponentDescriptorStore restoredComponents;
+        const Engine::SceneSerializationStatus status =
+            Engine::applySerializedScene(
+                restored,
+                restoredActors,
+                restoredComponents,
+                componentRegistry,
+                read.scene);
+        ctx.expect(status == Engine::SceneSerializationStatus::Success, "component authoring apply failed");
+        const std::optional<Engine::ActorComponentInstanceRecord> restoredComponent =
+            restoredComponents.record(Engine::ActorComponentId{9000});
+        ctx.expect(restoredComponent.has_value(), "restored component metadata missing");
+        ctx.expect(restoredComponent && restoredComponent->displayName == "Serialized Metadata", "restored component name mismatch");
+        ctx.expect(restoredComponent && !restoredComponent->enabled, "restored component enabled flag mismatch");
+    }
+
+    void InvalidActorComponentAuthoringMetadataRejected(TestContext& ctx)
+    {
+        Engine::ReflectionRegistry registry = serializableRegistry();
+        Engine::ActorComponentDescriptorRegistry componentRegistry;
+        (void)componentRegistry.registerType(componentDescriptor());
+
+        Engine::SceneSerializedScene snapshot;
+        snapshot.actors.push_back({Engine::SceneObjectId{1}, std::nullopt, {}, 0});
+        snapshot.actorAuthoring.push_back({Engine::defaultActorAuthoringRecord(Engine::SceneObjectId{1})});
+        snapshot.actorComponents.push_back({Engine::ActorComponentInstanceRecord{
+            Engine::ActorComponentId{100},
+            Engine::SceneObjectId{2},
+            Engine::SceneComponentTypeId{700},
+            "Orphan Component",
+            true,
+            0,
+        }});
+        ctx.expect(
+            !Engine::validateSerializedScene(snapshot, registry, componentRegistry).errors.empty(),
+            "missing component owner was accepted");
+
+        snapshot.actorComponents[0].metadata.ownerActorId = Engine::SceneObjectId{1};
+        snapshot.actorComponents[0].metadata.componentType = Engine::SceneComponentTypeId{701};
+        ctx.expect(
+            !Engine::validateSerializedScene(snapshot, registry, componentRegistry).errors.empty(),
+            "unregistered component type was accepted");
+
+        snapshot.actorComponents[0].metadata.componentType = Engine::SceneComponentTypeId{700};
+        snapshot.actorComponents.push_back(snapshot.actorComponents[0]);
+        ctx.expect(
+            !Engine::validateSerializedScene(snapshot, registry, componentRegistry).errors.empty(),
+            "duplicate component ID was accepted");
+
+        Engine::Scene scene;
+        Engine::ActorAuthoringStore actors;
+        Engine::ActorComponentDescriptorStore components;
+        const Engine::SceneSerializationStatus status =
+            Engine::applySerializedScene(scene, actors, components, componentRegistry, snapshot);
+        ctx.expect(status == Engine::SceneSerializationStatus::InvalidReference, "invalid component metadata applied");
+        ctx.expect(components.records().empty(), "invalid component metadata mutated target store");
+    }
+
     void CorruptFilesFailCleanly(TestContext& ctx)
     {
         Engine::ReflectionRegistry registry = serializableRegistry();
@@ -307,6 +493,10 @@ int main()
         {"DeterministicOutput", DeterministicOutput},
         {"InvalidSnapshotsAreRejected", InvalidSnapshotsAreRejected},
         {"AssetAndTerrainReferencesUseDurableIdentity", AssetAndTerrainReferencesUseDurableIdentity},
+        {"ActorAuthoringMetadataRoundTrip", ActorAuthoringMetadataRoundTrip},
+        {"InvalidActorAuthoringMetadataRejected", InvalidActorAuthoringMetadataRejected},
+        {"ActorComponentAuthoringMetadataRoundTrip", ActorComponentAuthoringMetadataRoundTrip},
+        {"InvalidActorComponentAuthoringMetadataRejected", InvalidActorComponentAuthoringMetadataRejected},
         {"CorruptFilesFailCleanly", CorruptFilesFailCleanly},
     };
 

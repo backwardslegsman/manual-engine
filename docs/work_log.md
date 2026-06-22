@@ -1858,3 +1858,23 @@ Changed:
 
 Rationale:
 - Actor placement and component-driven gameplay need their own roadmap on top of the completed editor foundation, with `Engine::Scene` remaining the actor authority and FLECS deferred as a later game-state mirror.
+
+## 2026-06-21 - Actor Authoring Metadata
+
+Changed:
+- Added `Engine::ActorAuthoringStore` for durable actor display names, tags, and layer metadata keyed by `SceneObjectId`.
+- Added actor-authoring reflection descriptors and get/set helpers for metadata inspection and validated mutation.
+- Extended scene binary serialization with optional actor authoring metadata records and tests for round-trip, validation, determinism, and runtime-handle exclusion.
+
+Rationale:
+- Editor-authored actors need stable metadata before placement, component descriptors, behavior bindings, or future FLECS mirroring can safely build on top of `Engine::Scene`.
+
+## 2026-06-21 - Typed Component Descriptor Registry
+
+Changed:
+- Added `Engine::ActorComponentDescriptorRegistry` and `Engine::ActorComponentDescriptorStore` for typed authored component metadata keyed by stable `ActorComponentId`.
+- Added generic authored component reflection, deterministic store enumeration, and bind/unbind/apply callback contracts tested with fake component descriptors.
+- Extended scene binary serialization with optional generic authored component metadata records and registry-aware validation.
+
+Rationale:
+- Actor authoring needs stable component instance identity and descriptor registration before concrete `Stats`, `Movement`, and `Sensory` component schemas can be safely added.

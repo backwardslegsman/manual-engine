@@ -5,6 +5,8 @@ This document is the active contract reference for cross-system behavior. Histor
 ## Active Runtime Systems
 
 - **Scene kernel:** `Engine::Scene` owns renderer-independent actor records, metadata-only component records, local transform hierarchy, stable `SceneObjectId` metadata, and lifecycle/scheduler state. Scene runtime handles are transient generation-counted tokens.
+- **Actor authoring metadata:** `ActorAuthoringStore` owns durable editor/game-facing actor metadata keyed by `SceneObjectId`, including display name, string tags, and one string layer. It must not store `SceneActorHandle` or live subsystem handles; runtime handle lookup is always reconstructed through the active `Scene`.
+- **Authored component descriptors:** `ActorComponentDescriptorRegistry` owns typed component authoring metadata by stable `SceneComponentTypeId`. `ActorComponentDescriptorStore` owns durable per-actor component instances keyed by `ActorComponentId`; records contain owner `SceneObjectId`, component type, display name, enabled state, and order only. Runtime bind/unbind/apply callbacks may create transient subsystem records through supplied public context, but must not persist `SceneComponentHandle`, renderer, physics, navigation, Lua, behavior, or streaming handles.
 - **Scene render bridge:** `SceneRenderBridge` owns mesh, skinned mesh, light, and camera component records and maps them to live Renderer resources through a `SceneRenderBackend`. Renderer handles remain renderer-owned and transient.
 - **Scene authored adapter:** The authored adapter consumes already-imported CPU scene data and creates scene actors, hierarchy, adapter-owned renderer resources, and render bridge components. Callers release bridge-created live instances and adapter resources explicitly.
 - **Scene animated adapter:** The animated adapter consumes already-imported animated CPU scene data and creates scene actors, skeleton bindings, animator records, skinned mesh resources, and render bridge components. Shared pose/playback math lives in modern animation pose helpers, not in a legacy animated runtime owner.
@@ -55,8 +57,10 @@ This document is the active contract reference for cross-system behavior. Histor
 
 ## Serialization Contracts
 
-- Scene binary serialization uses stable IDs and fixed-width little-endian records. It validates before mutating a live scene.
+- Scene binary serialization uses stable IDs and fixed-width little-endian records. It validates before mutating a live scene, actor authoring metadata store, or authored component metadata store.
 - Runtime handles, renderer handles, physics handles, nav handles, terrain handles, asset handles, opaque handles, behavior handles, Lua handles, and streaming tokens are invalid serialization payloads.
+- Actor authoring metadata may serialize durable `SceneObjectId`, display name, tags, and layer only; scene transforms remain owned by the core actor table.
+- Authored component metadata may serialize durable `ActorComponentId`, owner `SceneObjectId`, `SceneComponentTypeId`, display name, enabled state, and order only. `SceneComponentHandle` and concrete subsystem binding handles are runtime-only; typed descriptor payloads require an owning component registry policy before they can be serialized.
 - Durable scene data uses `SceneObjectId`; durable assets use `AssetId`; durable terrain uses `TerrainSourceChunkId` or `TerrainChunkStableIdentity`.
 - Derived cache files and saved streaming build manifests are disposable generated data, not save-game files.
 

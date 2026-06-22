@@ -17,9 +17,13 @@ Phase 13 implements the foundation and core scene round trip:
 - header-only inspection for future streaming decisions;
 - whole-file read/write in the first implementation;
 - validation before mutation;
-- restore of core `Engine::Scene` actors, local transforms, hierarchy links, and metadata-only scene components.
+- restore of core `Engine::Scene` actors, local transforms, hierarchy links, metadata-only scene components, optional actor authoring metadata, and optional generic authored component metadata.
 
 The current loader does not reconstruct renderer bridge resources, physics bodies or colliders, character movement records, navigation tiles, terrain runtime chunks, authored or animated adapter resources, App state, asset-cache acquisitions, scripting state, or editor data.
+
+Actor authoring metadata is durable scene data, not editor UI state. It may store `SceneObjectId`, display name, string tags, and one string layer. It must not store `SceneActorHandle`, selection state, editor window state, or live subsystem handles.
+
+Authored component metadata is durable scene data owned by the actor-authoring component layer. It may store `ActorComponentId`, owner `SceneObjectId`, `SceneComponentTypeId`, display name, enabled state, and deterministic order. It must not store `SceneComponentHandle`, runtime binding handles, subsystem handles, or concrete component payloads unless a registered component type explicitly defines a durable descriptor payload policy in a later phase.
 
 ## Identity Rules
 
@@ -28,8 +32,9 @@ Runtime handles are transient and must not be serialized. This includes generati
 Durable serialized identity uses:
 
 - `SceneObjectId` for scene actors;
+- `SceneObjectId` for actor authoring metadata ownership;
 - `SceneComponentTypeId` for metadata-only scene component type identity;
-- future stable component IDs only after a component system explicitly introduces them;
+- `ActorComponentId` for authored component instance identity;
 - `AssetId` plus import settings for asset references;
 - `TerrainChunkStableIdentity` and `TerrainSerializedChunkFileMetadata` for terrain references;
 - procedural `ObjectId` only for the existing procedural `World` save path, not for scene actors.
@@ -87,6 +92,7 @@ Use deterministic ordering:
 - actors by `SceneObjectId`, then explicit order index as tie-breaker when allowed;
 - hierarchy links by child actor record order;
 - components by owner `SceneObjectId`, then component type ID, then explicit order index;
+- authored component metadata by owner `SceneObjectId`, then order, component type ID, then `ActorComponentId`;
 - terrain references by durable terrain chunk identity;
 - extension chunks last.
 
@@ -111,6 +117,8 @@ Validation should reject:
 - invalid parent IDs;
 - component records with missing owners;
 - invalid component type IDs;
+- duplicate authored component IDs;
+- authored component records with missing owners or invalid/unregistered component types when registry-aware validation is available;
 - serializable `OpaqueHandle` values;
 - terrain metadata whose payload boundary claims live runtime handles.
 
@@ -145,6 +153,10 @@ When adding a serialized record for a subsystem:
 7. Add byte-stability and validation-failure tests.
 
 Render bridge records should serialize durable mesh/material/light/camera descriptors and `AssetId` references, not renderer handles or live instances.
+
+Actor authoring metadata records should serialize durable actor metadata keyed by `SceneObjectId`, not transforms, component payloads, editor selection, runtime handles, or behavior/script runtime state.
+
+Authored component metadata records should serialize durable component instance metadata keyed by `ActorComponentId`, not `SceneComponentHandle`, concrete subsystem records, runtime bindings, or future typed descriptor payloads unless the owning component type registry policy defines them.
 
 Physics records should serialize shape descriptors, material/filter settings, motion type, and stable actor ownership, not Jolt IDs or current broadphase/contact state.
 

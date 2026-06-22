@@ -276,6 +276,8 @@ namespace Engine {
                 case SceneBinaryChunkType::TerrainReferenceTable:
                 case SceneBinaryChunkType::StringTable:
                 case SceneBinaryChunkType::UserExtension:
+                case SceneBinaryChunkType::ActorAuthoringMetadata:
+                case SceneBinaryChunkType::ActorComponentAuthoringMetadata:
                     return true;
             }
             return false;
@@ -398,6 +400,37 @@ namespace Engine {
                 writeU32(bytes, boundaryBits(metadata.boundary));
                 writeString(bytes, metadata.identityHash);
                 writeString(bytes, metadata.payloadFileName);
+            }
+            return bytes;
+        }
+
+        [[nodiscard]] Bytes encodeActorAuthoring(const std::vector<SceneSerializedActorAuthoringRecord>& metadata)
+        {
+            Bytes bytes;
+            writeU32(bytes, static_cast<uint32_t>(metadata.size()));
+            for (const SceneSerializedActorAuthoringRecord& record : metadata) {
+                writeU64(bytes, record.metadata.actorId.value);
+                writeString(bytes, record.metadata.displayName);
+                writeString(bytes, record.metadata.layer);
+                writeU32(bytes, static_cast<uint32_t>(record.metadata.tags.size()));
+                for (const std::string& tag : record.metadata.tags) {
+                    writeString(bytes, tag);
+                }
+            }
+            return bytes;
+        }
+
+        [[nodiscard]] Bytes encodeActorComponents(const std::vector<SceneSerializedActorComponentRecord>& metadata)
+        {
+            Bytes bytes;
+            writeU32(bytes, static_cast<uint32_t>(metadata.size()));
+            for (const SceneSerializedActorComponentRecord& record : metadata) {
+                writeU64(bytes, record.metadata.componentId.value);
+                writeU64(bytes, record.metadata.ownerActorId.value);
+                writeU32(bytes, record.metadata.componentType.value);
+                writeString(bytes, record.metadata.displayName);
+                writeU8(bytes, record.metadata.enabled ? 1u : 0u);
+                writeU32(bytes, record.metadata.order);
             }
             return bytes;
         }
@@ -536,6 +569,45 @@ namespace Engine {
                     return {};
                 }
             }
+            if (const auto it = payloads.find(SceneBinaryChunkType::ActorAuthoringMetadata); it != payloads.end()) {
+                Reader reader{it->second, 0, SceneSerializationStatus::Success, {}, settings};
+                const uint32_t count = reader.u32();
+                for (uint32_t index = 0; index < count; ++index) {
+                    SceneSerializedActorAuthoringRecord record;
+                    record.metadata.actorId = {reader.u64()};
+                    record.metadata.displayName = reader.string();
+                    record.metadata.layer = reader.string();
+                    const uint32_t tagCount = reader.u32();
+                    for (uint32_t tagIndex = 0; tagIndex < tagCount; ++tagIndex) {
+                        record.metadata.tags.push_back(reader.string());
+                    }
+                    scene.actorAuthoring.push_back(std::move(record));
+                }
+                if (reader.status != SceneSerializationStatus::Success) {
+                    status = reader.status;
+                    message = reader.message;
+                    return {};
+                }
+            }
+            if (const auto it = payloads.find(SceneBinaryChunkType::ActorComponentAuthoringMetadata); it != payloads.end()) {
+                Reader reader{it->second, 0, SceneSerializationStatus::Success, {}, settings};
+                const uint32_t count = reader.u32();
+                for (uint32_t index = 0; index < count; ++index) {
+                    SceneSerializedActorComponentRecord record;
+                    record.metadata.componentId = {reader.u64()};
+                    record.metadata.ownerActorId = {reader.u64()};
+                    record.metadata.componentType = {reader.u32()};
+                    record.metadata.displayName = reader.string();
+                    record.metadata.enabled = reader.u8() != 0;
+                    record.metadata.order = reader.u32();
+                    scene.actorComponents.push_back(std::move(record));
+                }
+                if (reader.status != SceneSerializationStatus::Success) {
+                    status = reader.status;
+                    message = reader.message;
+                    return {};
+                }
+            }
             return scene;
         }
 
@@ -555,6 +627,8 @@ namespace Engine {
             diagnostics.schemaPropertyCount = static_cast<uint32_t>(scene.schema.size());
             diagnostics.assetReferenceCount = static_cast<uint32_t>(scene.assets.size());
             diagnostics.terrainReferenceCount = static_cast<uint32_t>(scene.terrain.size());
+            diagnostics.actorAuthoringCount = static_cast<uint32_t>(scene.actorAuthoring.size());
+            diagnostics.actorComponentAuthoringCount = static_cast<uint32_t>(scene.actorComponents.size());
             return diagnostics;
         }
 
@@ -839,6 +913,64 @@ namespace Engine {
         return serialized;
     }
 
+    SceneSerializedScene buildSerializedScene(
+        Scene& scene,
+        const ActorAuthoringStore& actorAuthoring,
+        const ReflectionRegistry& registry,
+        const SceneSerializationSettings& settings)
+    {
+        SceneSerializedScene serialized = buildSerializedScene(scene, registry, settings);
+        std::set<uint64_t> actorIds;
+        for (const SceneSerializedActorRecord& actor : serialized.actors) {
+            if (isValid(actor.id)) {
+                actorIds.insert(actor.id.value);
+            }
+        }
+        for (const ActorAuthoringRecord& record : actorAuthoring.records()) {
+            if (actorIds.contains(record.actorId.value)) {
+                serialized.actorAuthoring.push_back({record});
+            }
+        }
+        std::ranges::sort(serialized.actorAuthoring, [](const auto& lhs, const auto& rhs) {
+            return lhs.metadata.actorId.value < rhs.metadata.actorId.value;
+        });
+        return serialized;
+    }
+
+    SceneSerializedScene buildSerializedScene(
+        Scene& scene,
+        const ActorAuthoringStore& actorAuthoring,
+        const ActorComponentDescriptorStore& actorComponents,
+        const ReflectionRegistry& registry,
+        const SceneSerializationSettings& settings)
+    {
+        SceneSerializedScene serialized = buildSerializedScene(scene, actorAuthoring, registry, settings);
+        std::set<uint64_t> actorIds;
+        for (const SceneSerializedActorRecord& actor : serialized.actors) {
+            if (isValid(actor.id)) {
+                actorIds.insert(actor.id.value);
+            }
+        }
+        for (const ActorComponentInstanceRecord& record : actorComponents.records()) {
+            if (actorIds.contains(record.ownerActorId.value)) {
+                serialized.actorComponents.push_back({record});
+            }
+        }
+        std::ranges::sort(serialized.actorComponents, [](const auto& lhs, const auto& rhs) {
+            if (lhs.metadata.ownerActorId.value != rhs.metadata.ownerActorId.value) {
+                return lhs.metadata.ownerActorId.value < rhs.metadata.ownerActorId.value;
+            }
+            if (lhs.metadata.order != rhs.metadata.order) {
+                return lhs.metadata.order < rhs.metadata.order;
+            }
+            if (lhs.metadata.componentType.value != rhs.metadata.componentType.value) {
+                return lhs.metadata.componentType.value < rhs.metadata.componentType.value;
+            }
+            return lhs.metadata.componentId.value < rhs.metadata.componentId.value;
+        });
+        return serialized;
+    }
+
     SceneSerializationDiagnostics validateSerializedScene(
         const SceneSerializedScene& scene,
         const ReflectionRegistry&,
@@ -889,6 +1021,58 @@ namespace Engine {
                 diagnostics.errors.push_back("Reflection schema contains serializable OpaqueHandle property.");
             }
         }
+        std::set<uint64_t> metadataActorIds;
+        for (const SceneSerializedActorAuthoringRecord& record : scene.actorAuthoring) {
+            if (!isValid(record.metadata.actorId) || !actorIds.contains(record.metadata.actorId.value)) {
+                diagnostics.errors.push_back("Actor authoring metadata references a missing SceneObjectId.");
+            }
+            if (isValid(record.metadata.actorId) && !metadataActorIds.insert(record.metadata.actorId.value).second) {
+                diagnostics.errors.push_back("Actor authoring metadata contains duplicate SceneObjectId records.");
+            }
+            const ActorAuthoringValidationResult validation = validateActorAuthoringRecord(record.metadata);
+            diagnostics.errors.insert(diagnostics.errors.end(), validation.errors.begin(), validation.errors.end());
+            diagnostics.warnings.insert(diagnostics.warnings.end(), validation.warnings.begin(), validation.warnings.end());
+        }
+        std::set<uint64_t> authoredComponentIds;
+        for (const SceneSerializedActorComponentRecord& record : scene.actorComponents) {
+            if (!isValid(record.metadata.ownerActorId) || !actorIds.contains(record.metadata.ownerActorId.value)) {
+                diagnostics.errors.push_back("Authored component metadata references a missing SceneObjectId.");
+            }
+            if (isValid(record.metadata.componentId) &&
+                !authoredComponentIds.insert(record.metadata.componentId.value).second) {
+                diagnostics.errors.push_back("Authored component metadata contains duplicate ActorComponentId records.");
+            }
+            const ActorComponentValidationResult validation =
+                validateActorComponentInstanceRecord(record.metadata);
+            diagnostics.errors.insert(diagnostics.errors.end(), validation.errors.begin(), validation.errors.end());
+            diagnostics.warnings.insert(diagnostics.warnings.end(), validation.warnings.begin(), validation.warnings.end());
+        }
+        return diagnostics;
+    }
+
+    SceneSerializationDiagnostics validateSerializedScene(
+        const SceneSerializedScene& scene,
+        const ReflectionRegistry& registry,
+        const ActorComponentDescriptorRegistry& componentRegistry,
+        const SceneSerializationSettings& settings)
+    {
+        SceneSerializationDiagnostics diagnostics = validateSerializedScene(scene, registry, settings);
+        for (const SceneSerializedActorComponentRecord& record : scene.actorComponents) {
+            const std::optional<ActorComponentTypeDescriptor> descriptor =
+                componentRegistry.descriptor(record.metadata.componentType);
+            if (!descriptor) {
+                diagnostics.errors.push_back("Authored component metadata references an unregistered component type.");
+                continue;
+            }
+            if (descriptor->validateInstance) {
+                const ActorComponentValidationResult validation = descriptor->validateInstance(record.metadata);
+                diagnostics.errors.insert(diagnostics.errors.end(), validation.errors.begin(), validation.errors.end());
+                diagnostics.warnings.insert(
+                    diagnostics.warnings.end(),
+                    validation.warnings.begin(),
+                    validation.warnings.end());
+            }
+        }
         return diagnostics;
     }
 
@@ -920,6 +1104,22 @@ namespace Engine {
             {SceneBinaryChunkType::AssetReferenceTable, SceneBinaryChunkFlags::Optional, static_cast<uint32_t>(scene.assets.size()), encodeAssets(scene.assets)},
             {SceneBinaryChunkType::TerrainReferenceTable, SceneBinaryChunkFlags::Optional, static_cast<uint32_t>(scene.terrain.size()), encodeTerrain(scene.terrain)},
         };
+        if (!scene.actorAuthoring.empty()) {
+            payloads.push_back({
+                SceneBinaryChunkType::ActorAuthoringMetadata,
+                SceneBinaryChunkFlags::Optional,
+                static_cast<uint32_t>(scene.actorAuthoring.size()),
+                encodeActorAuthoring(scene.actorAuthoring),
+            });
+        }
+        if (!scene.actorComponents.empty()) {
+            payloads.push_back({
+                SceneBinaryChunkType::ActorComponentAuthoringMetadata,
+                SceneBinaryChunkFlags::Optional,
+                static_cast<uint32_t>(scene.actorComponents.size()),
+                encodeActorComponents(scene.actorComponents),
+            });
+        }
 
         SceneBinaryHeader header;
         header.headerSize = HeaderSize;
@@ -1181,6 +1381,64 @@ namespace Engine {
                 return SceneSerializationStatus::InvalidReference;
             }
         }
+        return SceneSerializationStatus::Success;
+    }
+
+    SceneSerializationStatus applySerializedScene(
+        Scene& scene,
+        ActorAuthoringStore& actorAuthoring,
+        const SceneSerializedScene& serialized,
+        const SceneSerializationLoadContext& context,
+        const SceneSerializationSettings& settings)
+    {
+        const SceneSerializationDiagnostics diagnostics = validateSerializedScene(serialized, ReflectionRegistry{}, settings);
+        if (!diagnostics.errors.empty()) {
+            return SceneSerializationStatus::InvalidReference;
+        }
+
+        const SceneSerializationStatus sceneStatus = applySerializedScene(scene, serialized, context, settings);
+        if (sceneStatus != SceneSerializationStatus::Success) {
+            return sceneStatus;
+        }
+
+        actorAuthoring.clear();
+        for (const SceneSerializedActorAuthoringRecord& record : serialized.actorAuthoring) {
+            if (actorAuthoring.upsert(record.metadata) != ActorAuthoringStatus::Success) {
+                return SceneSerializationStatus::InvalidReference;
+            }
+        }
+        return SceneSerializationStatus::Success;
+    }
+
+    SceneSerializationStatus applySerializedScene(
+        Scene& scene,
+        ActorAuthoringStore& actorAuthoring,
+        ActorComponentDescriptorStore& actorComponents,
+        const ActorComponentDescriptorRegistry& componentRegistry,
+        const SceneSerializedScene& serialized,
+        const SceneSerializationLoadContext& context,
+        const SceneSerializationSettings& settings)
+    {
+        const SceneSerializationDiagnostics diagnostics =
+            validateSerializedScene(serialized, ReflectionRegistry{}, componentRegistry, settings);
+        if (!diagnostics.errors.empty()) {
+            return SceneSerializationStatus::InvalidReference;
+        }
+
+        ActorComponentDescriptorStore stagedComponents;
+        for (const SceneSerializedActorComponentRecord& record : serialized.actorComponents) {
+            std::string message;
+            if (stagedComponents.upsert(record.metadata, &message) != ActorComponentStatus::Success) {
+                return SceneSerializationStatus::InvalidReference;
+            }
+        }
+
+        const SceneSerializationStatus sceneStatus = applySerializedScene(scene, actorAuthoring, serialized, context, settings);
+        if (sceneStatus != SceneSerializationStatus::Success) {
+            return sceneStatus;
+        }
+
+        actorComponents = stagedComponents;
         return SceneSerializationStatus::Success;
     }
 }
