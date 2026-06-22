@@ -8,6 +8,7 @@
 
 #include "Engine/ActorAuthoring.hpp"
 #include "Engine/ActorComponentAuthoring.hpp"
+#include "Engine/ActorGameplayComponents.hpp"
 #include "Engine/Reflection.hpp"
 #include "Engine/Scene/Scene.hpp"
 #include "Engine/SceneSerialization.hpp"
@@ -434,6 +435,132 @@ namespace {
         ctx.expect(components.records().empty(), "invalid component metadata mutated target store");
     }
 
+    void GameplayComponentPayloadsRoundTrip(TestContext& ctx)
+    {
+        Engine::ReflectionRegistry registry = serializableRegistry();
+        Engine::ActorComponentDescriptorRegistry componentRegistry;
+        Engine::registerBuiltInActorComponentTypes(componentRegistry);
+
+        Engine::Scene scene;
+        Engine::ActorAuthoringStore actorAuthoring;
+        Engine::ActorComponentDescriptorStore componentAuthoring;
+        Engine::ActorStatsComponentStore stats;
+        Engine::ActorMovementComponentStore movement;
+        Engine::ActorSensoryComponentStore sensory;
+
+        const Engine::ActorAuthoringCreateResult actor =
+            Engine::createAuthoredActor(scene, actorAuthoring, Engine::SceneObjectId{6000});
+        ctx.expect(actor.status == Engine::ActorAuthoringStatus::Success, "authored actor creation failed");
+
+        (void)componentAuthoring.upsert(Engine::ActorComponentInstanceRecord{{6100}, {6000}, Engine::ActorStatsComponentType, "Stats", true, 0});
+        (void)componentAuthoring.upsert(Engine::ActorComponentInstanceRecord{{6200}, {6000}, Engine::ActorMovementComponentType, "Movement", true, 1});
+        (void)componentAuthoring.upsert(Engine::ActorComponentInstanceRecord{{6300}, {6000}, Engine::ActorSensoryComponentType, "Sensory", true, 2});
+        (void)scene.attachComponent(actor.actor, Engine::ActorStatsComponentType);
+        (void)scene.attachComponent(actor.actor, Engine::ActorMovementComponentType);
+        (void)scene.attachComponent(actor.actor, Engine::ActorSensoryComponentType);
+
+        Engine::StatsComponentDescriptor statsDescriptor = Engine::defaultStatsComponentDescriptor({6100});
+        statsDescriptor.level = 3;
+        statsDescriptor.currentHealth = 75.0f;
+        (void)stats.upsert(statsDescriptor);
+
+        Engine::MovementComponentDescriptor movementDescriptor = Engine::defaultMovementComponentDescriptor({6200});
+        movementDescriptor.maxSpeed = 5.5f;
+        movementDescriptor.debugName = "SerializedMovement";
+        (void)movement.upsert(movementDescriptor);
+
+        Engine::SensoryComponentDescriptor sensoryDescriptor = Engine::defaultSensoryComponentDescriptor({6300});
+        sensoryDescriptor.radius = 18.0f;
+        sensoryDescriptor.requireLineOfSight = false;
+        (void)sensory.upsert(sensoryDescriptor);
+
+        const Engine::SceneSerializedScene snapshot =
+            Engine::buildSerializedScene(scene, actorAuthoring, componentAuthoring, stats, movement, sensory, registry);
+        ctx.expect(snapshot.statsComponents.size() == 1, "Stats payload was not serialized");
+        ctx.expect(snapshot.movementComponents.size() == 1, "Movement payload was not serialized");
+        ctx.expect(snapshot.sensoryComponents.size() == 1, "Sensory payload was not serialized");
+
+        const std::filesystem::path first = testRoot() / "gameplay_components_a.mescene";
+        const std::filesystem::path second = testRoot() / "gameplay_components_b.mescene";
+        const Engine::SceneSerializationWriteResult writeFirst = Engine::writeSceneBinary(first, snapshot);
+        const Engine::SceneSerializationWriteResult writeSecond = Engine::writeSceneBinary(second, snapshot);
+        ctx.expect(writeFirst.status == Engine::SceneSerializationStatus::Success, "gameplay component write failed");
+        ctx.expect(writeSecond.status == Engine::SceneSerializationStatus::Success, "second gameplay component write failed");
+        ctx.expect(readBytes(first) == readBytes(second), "typed component payload output was not deterministic");
+
+        const Engine::SceneSerializationReadResult read = Engine::readSceneBinary(first);
+        ctx.expect(read.status == Engine::SceneSerializationStatus::Success, "gameplay component read failed");
+        ctx.expect(read.scene.statsComponents.size() == 1, "Stats payload did not round trip");
+        ctx.expect(read.scene.movementComponents.size() == 1, "Movement payload did not round trip");
+        ctx.expect(read.scene.sensoryComponents.size() == 1, "Sensory payload did not round trip");
+
+        Engine::Scene restored;
+        Engine::ActorAuthoringStore restoredActors;
+        Engine::ActorComponentDescriptorStore restoredComponents;
+        Engine::ActorStatsComponentStore restoredStats;
+        Engine::ActorMovementComponentStore restoredMovement;
+        Engine::ActorSensoryComponentStore restoredSensory;
+        const Engine::SceneSerializationStatus status =
+            Engine::applySerializedScene(
+                restored,
+                restoredActors,
+                restoredComponents,
+                restoredStats,
+                restoredMovement,
+                restoredSensory,
+                componentRegistry,
+                read.scene);
+        ctx.expect(status == Engine::SceneSerializationStatus::Success, "typed gameplay component apply failed");
+        ctx.expect(restoredStats.descriptor({6100})->level == 3, "restored Stats payload mismatch");
+        ctx.expect(restoredMovement.descriptor({6200})->debugName == "SerializedMovement", "restored Movement payload mismatch");
+        ctx.expect(!restoredSensory.descriptor({6300})->requireLineOfSight, "restored Sensory payload mismatch");
+    }
+
+    void InvalidGameplayComponentPayloadsRejected(TestContext& ctx)
+    {
+        Engine::ReflectionRegistry registry = serializableRegistry();
+        Engine::ActorComponentDescriptorRegistry componentRegistry;
+        Engine::registerBuiltInActorComponentTypes(componentRegistry);
+        Engine::SceneSerializedScene snapshot;
+        snapshot.actors.push_back({Engine::SceneObjectId{1}, std::nullopt, {}, 0});
+        snapshot.actorAuthoring.push_back({Engine::defaultActorAuthoringRecord(Engine::SceneObjectId{1})});
+        snapshot.statsComponents.push_back({Engine::defaultStatsComponentDescriptor({100})});
+        ctx.expect(
+            !Engine::validateSerializedScene(snapshot, registry, componentRegistry, nullptr, nullptr, nullptr).errors.empty(),
+            "Stats payload without generic metadata was accepted");
+
+        snapshot.actorComponents.push_back({Engine::ActorComponentInstanceRecord{
+            Engine::ActorComponentId{100},
+            Engine::SceneObjectId{1},
+            Engine::ActorMovementComponentType,
+            "Wrong",
+            true,
+            0,
+        }});
+        ctx.expect(
+            !Engine::validateSerializedScene(snapshot, registry, componentRegistry, nullptr, nullptr, nullptr).errors.empty(),
+            "Stats payload with wrong generic component type was accepted");
+
+        Engine::Scene scene;
+        Engine::ActorAuthoringStore actors;
+        Engine::ActorComponentDescriptorStore components;
+        Engine::ActorStatsComponentStore stats;
+        Engine::ActorMovementComponentStore movement;
+        Engine::ActorSensoryComponentStore sensory;
+        const Engine::SceneSerializationStatus status =
+            Engine::applySerializedScene(
+                scene,
+                actors,
+                components,
+                stats,
+                movement,
+                sensory,
+                componentRegistry,
+                snapshot);
+        ctx.expect(status == Engine::SceneSerializationStatus::InvalidReference, "invalid typed payload applied");
+        ctx.expect(stats.descriptors().empty(), "invalid typed payload mutated target store");
+    }
+
     void CorruptFilesFailCleanly(TestContext& ctx)
     {
         Engine::ReflectionRegistry registry = serializableRegistry();
@@ -497,6 +624,8 @@ int main()
         {"InvalidActorAuthoringMetadataRejected", InvalidActorAuthoringMetadataRejected},
         {"ActorComponentAuthoringMetadataRoundTrip", ActorComponentAuthoringMetadataRoundTrip},
         {"InvalidActorComponentAuthoringMetadataRejected", InvalidActorComponentAuthoringMetadataRejected},
+        {"GameplayComponentPayloadsRoundTrip", GameplayComponentPayloadsRoundTrip},
+        {"InvalidGameplayComponentPayloadsRejected", InvalidGameplayComponentPayloadsRejected},
         {"CorruptFilesFailCleanly", CorruptFilesFailCleanly},
     };
 

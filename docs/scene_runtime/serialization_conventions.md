@@ -17,13 +17,15 @@ Phase 13 implements the foundation and core scene round trip:
 - header-only inspection for future streaming decisions;
 - whole-file read/write in the first implementation;
 - validation before mutation;
-- restore of core `Engine::Scene` actors, local transforms, hierarchy links, metadata-only scene components, optional actor authoring metadata, and optional generic authored component metadata.
+- restore of core `Engine::Scene` actors, local transforms, hierarchy links, metadata-only scene components, optional actor authoring metadata, optional generic authored component metadata, and optional registered typed authored component descriptor payloads.
 
 The current loader does not reconstruct renderer bridge resources, physics bodies or colliders, character movement records, navigation tiles, terrain runtime chunks, authored or animated adapter resources, App state, asset-cache acquisitions, scripting state, or editor data.
 
 Actor authoring metadata is durable scene data, not editor UI state. It may store `SceneObjectId`, display name, string tags, and one string layer. It must not store `SceneActorHandle`, selection state, editor window state, or live subsystem handles.
 
-Authored component metadata is durable scene data owned by the actor-authoring component layer. It may store `ActorComponentId`, owner `SceneObjectId`, `SceneComponentTypeId`, display name, enabled state, and deterministic order. It must not store `SceneComponentHandle`, runtime binding handles, subsystem handles, or concrete component payloads unless a registered component type explicitly defines a durable descriptor payload policy in a later phase.
+Authored component metadata is durable scene data owned by the actor-authoring component layer. It may store `ActorComponentId`, owner `SceneObjectId`, `SceneComponentTypeId`, display name, enabled state, and deterministic order. It must not store `SceneComponentHandle`, runtime binding handles, or subsystem handles.
+
+Registered typed authored component payloads may serialize only stable IDs and plain descriptor values defined by their owning component type. The current built-in payload chunks cover Stats, Movement, and Sensory descriptors. A typed payload must have a matching generic authored component record with the expected `SceneComponentTypeId`; otherwise validation fails before mutation. Movement payloads serialize durable character settings only, not `SceneCharacterHandle`, physics body/collider handles, path state, sweep caches, or movement runtime binding records.
 
 ## Identity Rules
 
@@ -93,6 +95,7 @@ Use deterministic ordering:
 - hierarchy links by child actor record order;
 - components by owner `SceneObjectId`, then component type ID, then explicit order index;
 - authored component metadata by owner `SceneObjectId`, then order, component type ID, then `ActorComponentId`;
+- typed authored component payloads by `ActorComponentId` within each payload chunk;
 - terrain references by durable terrain chunk identity;
 - extension chunks last.
 
@@ -119,6 +122,9 @@ Validation should reject:
 - invalid component type IDs;
 - duplicate authored component IDs;
 - authored component records with missing owners or invalid/unregistered component types when registry-aware validation is available;
+- typed authored component payloads without matching generic authored component records;
+- typed authored component payloads whose matching generic record has a different component type ID;
+- invalid typed authored component descriptor values;
 - serializable `OpaqueHandle` values;
 - terrain metadata whose payload boundary claims live runtime handles.
 
@@ -156,7 +162,7 @@ Render bridge records should serialize durable mesh/material/light/camera descri
 
 Actor authoring metadata records should serialize durable actor metadata keyed by `SceneObjectId`, not transforms, component payloads, editor selection, runtime handles, or behavior/script runtime state.
 
-Authored component metadata records should serialize durable component instance metadata keyed by `ActorComponentId`, not `SceneComponentHandle`, concrete subsystem records, runtime bindings, or future typed descriptor payloads unless the owning component type registry policy defines them.
+Authored component metadata records should serialize durable component instance metadata keyed by `ActorComponentId`, not `SceneComponentHandle`, concrete subsystem records, or runtime bindings. Typed authored component payload records should be separate chunks owned by the registered component type policy and should store only plain descriptor values. The built-in Stats, Movement, and Sensory payload chunks follow this rule; Movement live characters are recreated through explicit runtime binding after load.
 
 Physics records should serialize shape descriptors, material/filter settings, motion type, and stable actor ownership, not Jolt IDs or current broadphase/contact state.
 

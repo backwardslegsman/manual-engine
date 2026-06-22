@@ -29,6 +29,7 @@ add_executable(manual_engine
    src/Engine/AnimatedModelPose.cpp
     src/Engine/ActorAuthoring.cpp
     src/Engine/ActorComponentAuthoring.cpp
+    src/Engine/ActorGameplayComponents.cpp
    src/Engine/AsyncWorkQueue.cpp
     src/Engine/AssetCache.cpp
     src/Engine/AssetRegistry.cpp
@@ -332,6 +333,7 @@ add_executable(manual_engine_editor_ui_tests
     tests/app/EditorUiTestRunner.cpp
     src/Engine/ActorAuthoring.cpp
     src/Engine/ActorComponentAuthoring.cpp
+    src/Engine/ActorGameplayComponents.cpp
     src/App/EditorProjectSettings.cpp
     src/App/EditorRebuildCoordinator.cpp
     src/App/EditorSettingsReflection.cpp
@@ -394,6 +396,7 @@ add_executable(manual_engine_editor_rebuild_coordinator_tests
     tests/app/EditorRebuildCoordinatorTestRunner.cpp
     src/Engine/ActorAuthoring.cpp
     src/Engine/ActorComponentAuthoring.cpp
+    src/Engine/ActorGameplayComponents.cpp
     src/App/EditorProjectSettings.cpp
     src/App/EditorRebuildCoordinator.cpp
     src/App/EditorSettingsReflection.cpp
@@ -456,6 +459,7 @@ add_executable(manual_engine_editor_live_apply_tests
     tests/app/EditorLiveApplyTestRunner.cpp
     src/Engine/ActorAuthoring.cpp
     src/Engine/ActorComponentAuthoring.cpp
+    src/Engine/ActorGameplayComponents.cpp
     src/App/EditorProjectSettings.cpp
     src/App/EditorRebuildCoordinator.cpp
     src/App/EditorSettingsReflection.cpp
@@ -519,6 +523,7 @@ add_executable(manual_engine_editor_tool_scripting_tests
     tests/app/EditorToolScriptingTestRunner.cpp
     src/Engine/ActorAuthoring.cpp
     src/Engine/ActorComponentAuthoring.cpp
+    src/Engine/ActorGameplayComponents.cpp
     src/App/EditorProjectSettings.cpp
     src/App/EditorRebuildCoordinator.cpp
     src/App/EditorSettingsReflection.cpp
@@ -585,6 +590,7 @@ add_executable(manual_engine_open_world_streaming_tests
     src/Assets/HeightmapImporter.cpp
     src/Engine/ActorAuthoring.cpp
     src/Engine/ActorComponentAuthoring.cpp
+    src/Engine/ActorGameplayComponents.cpp
     src/Engine/AsyncWorkQueue.cpp
     src/Engine/AssetCache.cpp
     src/Engine/AssetRegistry.cpp
@@ -642,6 +648,7 @@ add_executable(manual_engine_open_world_streaming_runtime_tests
     src/Assets/HeightmapImporter.cpp
     src/Engine/ActorAuthoring.cpp
     src/Engine/ActorComponentAuthoring.cpp
+    src/Engine/ActorGameplayComponents.cpp
     src/Engine/AsyncWorkQueue.cpp
     src/Engine/AssetRegistry.cpp
     src/Engine/Biome.cpp
@@ -694,6 +701,7 @@ add_executable(manual_engine_open_world_scene_chunk_streaming_tests
     tests/engine/OpenWorldSceneChunkStreamingTestRunner.cpp
     src/Engine/ActorAuthoring.cpp
     src/Engine/ActorComponentAuthoring.cpp
+    src/Engine/ActorGameplayComponents.cpp
     src/Engine/AsyncWorkQueue.cpp
     src/Engine/ChunkTypes.cpp
     src/Engine/FrameBudget.cpp
@@ -985,6 +993,39 @@ target_link_libraries(manual_engine_actor_component_authoring_tests
 
 add_test(NAME manual_engine_actor_component_authoring_tests COMMAND manual_engine_actor_component_authoring_tests)
 
+add_executable(manual_engine_actor_gameplay_components_tests
+    tests/scene/ActorGameplayComponentsTestRunner.cpp
+    src/Engine/ActorAuthoring.cpp
+    src/Engine/ActorComponentAuthoring.cpp
+    src/Engine/ActorGameplayComponents.cpp
+    src/Engine/Biome.cpp
+    src/Engine/ChunkTypes.cpp
+    src/Engine/Navigation.cpp
+    src/Engine/NavigationConnectivity.cpp
+    src/Engine/NavigationRuntime.cpp
+    src/Engine/Physics/ScenePhysics.cpp
+    src/Engine/Reflection.cpp
+    src/Engine/Scene/Scene.cpp
+    src/Engine/SceneCharacterMovement.cpp
+    src/Engine/TerrainDataset.cpp
+)
+
+target_include_directories(manual_engine_actor_gameplay_components_tests
+    PRIVATE
+        src
+)
+
+target_link_libraries(manual_engine_actor_gameplay_components_tests
+    PRIVATE
+        glm::glm
+        Jolt::Jolt
+        RecastNavigation::Recast
+        RecastNavigation::Detour
+        yaml-cpp::yaml-cpp
+)
+
+add_test(NAME manual_engine_actor_gameplay_components_tests COMMAND manual_engine_actor_gameplay_components_tests)
+
 add_executable(manual_engine_scene_render_bridge_tests
     tests/scene/SceneRenderBridgeTestRunner.cpp
     src/Engine/Scene/Scene.cpp
@@ -1143,6 +1184,7 @@ add_executable(manual_engine_scene_serialization_tests
     tests/scene/SceneSerializationTestRunner.cpp
     src/Engine/ActorAuthoring.cpp
     src/Engine/ActorComponentAuthoring.cpp
+    src/Engine/ActorGameplayComponents.cpp
     src/Engine/Reflection.cpp
     src/Engine/Scene/Scene.cpp
     src/Engine/SceneSerialization.cpp

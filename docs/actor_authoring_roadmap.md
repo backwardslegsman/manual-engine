@@ -2,7 +2,7 @@
 
 This roadmap covers the next editor/runtime milestone after the completed first editor vertical slice in `docs/editor_roadmap.md`: authoring scene actors, attaching typed components, binding native or Lua behavior, placing actors through the editor, and preparing a later FLECS game-state bridge.
 
-Status: planned. This roadmap is the durable planning record for actor authoring work; it does not introduce runtime changes by itself.
+Status: in progress. Phases A1-A3 are implemented as Engine-side runtime/model foundations; later editor placement, behavior binding metadata, streaming spawn/despawn semantics, and FLECS bridge work remain planned.
 
 ## Goal
 
@@ -71,6 +71,8 @@ Exit criteria:
 ## Phase A3: First Component Set
 
 Goal: validate the component model with a small set of game-facing components.
+
+Status: implemented. `Engine::ActorGameplayComponents` reserves built-in authored component type IDs for `Stats`, `Movement`, and `Sensory`, registers them through `ActorComponentDescriptorRegistry`, and stores their typed descriptor payloads in dedicated stores keyed by `ActorComponentId`. Stats and Sensory are durable reflected data only. Movement binds through the A2 runtime callback contract to `SceneCharacterMovementSystem`, recreating transient `SceneCharacterHandle` records from validated descriptors without serializing movement runtime handles.
 
 Initial components:
 

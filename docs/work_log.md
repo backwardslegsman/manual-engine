@@ -1878,3 +1878,13 @@ Changed:
 
 Rationale:
 - Actor authoring needs stable component instance identity and descriptor registration before concrete `Stats`, `Movement`, and `Sensory` component schemas can be safely added.
+
+## 2026-06-21 - First Actor Component Set
+
+Changed:
+- Added built-in authored component types for Stats, Movement, and Sensory with typed descriptor stores keyed by `ActorComponentId`.
+- Added typed component descriptor reflection, validation, and optional scene binary payload chunks for the first component set.
+- Added Movement runtime binding callbacks that recreate transient `SceneCharacterMovementSystem` character records from durable movement descriptors without serializing character handles.
+
+Rationale:
+- Actor authoring needs concrete data-only and system-backed component examples before editor inspector, behavior binding, and placement work can build on the descriptor registry.

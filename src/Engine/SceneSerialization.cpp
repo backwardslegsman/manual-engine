@@ -278,6 +278,9 @@ namespace Engine {
                 case SceneBinaryChunkType::UserExtension:
                 case SceneBinaryChunkType::ActorAuthoringMetadata:
                 case SceneBinaryChunkType::ActorComponentAuthoringMetadata:
+                case SceneBinaryChunkType::ActorStatsComponentPayload:
+                case SceneBinaryChunkType::ActorMovementComponentPayload:
+                case SceneBinaryChunkType::ActorSensoryComponentPayload:
                     return true;
             }
             return false;
@@ -431,6 +434,69 @@ namespace Engine {
                 writeString(bytes, record.metadata.displayName);
                 writeU8(bytes, record.metadata.enabled ? 1u : 0u);
                 writeU32(bytes, record.metadata.order);
+            }
+            return bytes;
+        }
+
+        [[nodiscard]] Bytes encodeStatsComponents(const std::vector<SceneSerializedStatsComponentRecord>& records)
+        {
+            Bytes bytes;
+            writeU32(bytes, static_cast<uint32_t>(records.size()));
+            for (const SceneSerializedStatsComponentRecord& record : records) {
+                const StatsComponentDescriptor& descriptor = record.descriptor;
+                writeU64(bytes, descriptor.componentId.value);
+                writeU32(bytes, descriptor.level);
+                writeF32(bytes, descriptor.currentHealth);
+                writeF32(bytes, descriptor.maxHealth);
+                writeF32(bytes, descriptor.currentMana);
+                writeF32(bytes, descriptor.maxMana);
+                writeF32(bytes, descriptor.currentStamina);
+                writeF32(bytes, descriptor.maxStamina);
+                writeI32(bytes, descriptor.strength);
+                writeI32(bytes, descriptor.agility);
+                writeI32(bytes, descriptor.intellect);
+                writeI32(bytes, descriptor.vitality);
+            }
+            return bytes;
+        }
+
+        [[nodiscard]] Bytes encodeMovementComponents(const std::vector<SceneSerializedMovementComponentRecord>& records)
+        {
+            Bytes bytes;
+            writeU32(bytes, static_cast<uint32_t>(records.size()));
+            for (const SceneSerializedMovementComponentRecord& record : records) {
+                const MovementComponentDescriptor& descriptor = record.descriptor;
+                writeU64(bytes, descriptor.componentId.value);
+                writeF32(bytes, descriptor.radius);
+                writeF32(bytes, descriptor.height);
+                writeF32(bytes, descriptor.maxSpeed);
+                writeF32(bytes, descriptor.acceleration);
+                writeF32(bytes, descriptor.braking);
+                writeF32(bytes, descriptor.gravity);
+                writeF32(bytes, descriptor.slopeLimitDegrees);
+                writeF32(bytes, descriptor.stepHeight);
+                writeF32(bytes, descriptor.snapDistance);
+                writeU32(bytes, descriptor.physicsLayer);
+                writeU32(bytes, descriptor.physicsFilterMask);
+                writeU32(bytes, descriptor.physicsFilterLayer);
+                writeU8(bytes, descriptor.physicsFilterCollideWithTriggers ? 1u : 0u);
+                writeString(bytes, descriptor.debugName);
+            }
+            return bytes;
+        }
+
+        [[nodiscard]] Bytes encodeSensoryComponents(const std::vector<SceneSerializedSensoryComponentRecord>& records)
+        {
+            Bytes bytes;
+            writeU32(bytes, static_cast<uint32_t>(records.size()));
+            for (const SceneSerializedSensoryComponentRecord& record : records) {
+                const SensoryComponentDescriptor& descriptor = record.descriptor;
+                writeU64(bytes, descriptor.componentId.value);
+                writeF32(bytes, descriptor.radius);
+                writeF32(bytes, descriptor.fieldOfViewDegrees);
+                writeF32(bytes, descriptor.queryIntervalSeconds);
+                writeU32(bytes, descriptor.factionMask);
+                writeU8(bytes, descriptor.requireLineOfSight ? 1u : 0u);
             }
             return bytes;
         }
@@ -608,6 +674,78 @@ namespace Engine {
                     return {};
                 }
             }
+            if (const auto it = payloads.find(SceneBinaryChunkType::ActorStatsComponentPayload); it != payloads.end()) {
+                Reader reader{it->second, 0, SceneSerializationStatus::Success, {}, settings};
+                const uint32_t count = reader.u32();
+                for (uint32_t index = 0; index < count; ++index) {
+                    SceneSerializedStatsComponentRecord record;
+                    record.descriptor.componentId = {reader.u64()};
+                    record.descriptor.level = reader.u32();
+                    record.descriptor.currentHealth = reader.f32();
+                    record.descriptor.maxHealth = reader.f32();
+                    record.descriptor.currentMana = reader.f32();
+                    record.descriptor.maxMana = reader.f32();
+                    record.descriptor.currentStamina = reader.f32();
+                    record.descriptor.maxStamina = reader.f32();
+                    record.descriptor.strength = reader.i32();
+                    record.descriptor.agility = reader.i32();
+                    record.descriptor.intellect = reader.i32();
+                    record.descriptor.vitality = reader.i32();
+                    scene.statsComponents.push_back(record);
+                }
+                if (reader.status != SceneSerializationStatus::Success) {
+                    status = reader.status;
+                    message = reader.message;
+                    return {};
+                }
+            }
+            if (const auto it = payloads.find(SceneBinaryChunkType::ActorMovementComponentPayload); it != payloads.end()) {
+                Reader reader{it->second, 0, SceneSerializationStatus::Success, {}, settings};
+                const uint32_t count = reader.u32();
+                for (uint32_t index = 0; index < count; ++index) {
+                    SceneSerializedMovementComponentRecord record;
+                    record.descriptor.componentId = {reader.u64()};
+                    record.descriptor.radius = reader.f32();
+                    record.descriptor.height = reader.f32();
+                    record.descriptor.maxSpeed = reader.f32();
+                    record.descriptor.acceleration = reader.f32();
+                    record.descriptor.braking = reader.f32();
+                    record.descriptor.gravity = reader.f32();
+                    record.descriptor.slopeLimitDegrees = reader.f32();
+                    record.descriptor.stepHeight = reader.f32();
+                    record.descriptor.snapDistance = reader.f32();
+                    record.descriptor.physicsLayer = reader.u32();
+                    record.descriptor.physicsFilterMask = reader.u32();
+                    record.descriptor.physicsFilterLayer = reader.u32();
+                    record.descriptor.physicsFilterCollideWithTriggers = reader.u8() != 0;
+                    record.descriptor.debugName = reader.string();
+                    scene.movementComponents.push_back(std::move(record));
+                }
+                if (reader.status != SceneSerializationStatus::Success) {
+                    status = reader.status;
+                    message = reader.message;
+                    return {};
+                }
+            }
+            if (const auto it = payloads.find(SceneBinaryChunkType::ActorSensoryComponentPayload); it != payloads.end()) {
+                Reader reader{it->second, 0, SceneSerializationStatus::Success, {}, settings};
+                const uint32_t count = reader.u32();
+                for (uint32_t index = 0; index < count; ++index) {
+                    SceneSerializedSensoryComponentRecord record;
+                    record.descriptor.componentId = {reader.u64()};
+                    record.descriptor.radius = reader.f32();
+                    record.descriptor.fieldOfViewDegrees = reader.f32();
+                    record.descriptor.queryIntervalSeconds = reader.f32();
+                    record.descriptor.factionMask = reader.u32();
+                    record.descriptor.requireLineOfSight = reader.u8() != 0;
+                    scene.sensoryComponents.push_back(record);
+                }
+                if (reader.status != SceneSerializationStatus::Success) {
+                    status = reader.status;
+                    message = reader.message;
+                    return {};
+                }
+            }
             return scene;
         }
 
@@ -629,6 +767,9 @@ namespace Engine {
             diagnostics.terrainReferenceCount = static_cast<uint32_t>(scene.terrain.size());
             diagnostics.actorAuthoringCount = static_cast<uint32_t>(scene.actorAuthoring.size());
             diagnostics.actorComponentAuthoringCount = static_cast<uint32_t>(scene.actorComponents.size());
+            diagnostics.statsComponentCount = static_cast<uint32_t>(scene.statsComponents.size());
+            diagnostics.movementComponentCount = static_cast<uint32_t>(scene.movementComponents.size());
+            diagnostics.sensoryComponentCount = static_cast<uint32_t>(scene.sensoryComponents.size());
             return diagnostics;
         }
 
@@ -971,6 +1112,39 @@ namespace Engine {
         return serialized;
     }
 
+    SceneSerializedScene buildSerializedScene(
+        Scene& scene,
+        const ActorAuthoringStore& actorAuthoring,
+        const ActorComponentDescriptorStore& actorComponents,
+        const ActorStatsComponentStore& statsComponents,
+        const ActorMovementComponentStore& movementComponents,
+        const ActorSensoryComponentStore& sensoryComponents,
+        const ReflectionRegistry& registry,
+        const SceneSerializationSettings& settings)
+    {
+        SceneSerializedScene serialized = buildSerializedScene(scene, actorAuthoring, actorComponents, registry, settings);
+        std::set<uint64_t> componentIds;
+        for (const SceneSerializedActorComponentRecord& record : serialized.actorComponents) {
+            componentIds.insert(record.metadata.componentId.value);
+        }
+        for (const StatsComponentDescriptor& descriptor : statsComponents.descriptors()) {
+            if (componentIds.contains(descriptor.componentId.value)) {
+                serialized.statsComponents.push_back({descriptor});
+            }
+        }
+        for (const MovementComponentDescriptor& descriptor : movementComponents.descriptors()) {
+            if (componentIds.contains(descriptor.componentId.value)) {
+                serialized.movementComponents.push_back({descriptor});
+            }
+        }
+        for (const SensoryComponentDescriptor& descriptor : sensoryComponents.descriptors()) {
+            if (componentIds.contains(descriptor.componentId.value)) {
+                serialized.sensoryComponents.push_back({descriptor});
+            }
+        }
+        return serialized;
+    }
+
     SceneSerializationDiagnostics validateSerializedScene(
         const SceneSerializedScene& scene,
         const ReflectionRegistry&,
@@ -1076,6 +1250,67 @@ namespace Engine {
         return diagnostics;
     }
 
+    SceneSerializationDiagnostics validateSerializedScene(
+        const SceneSerializedScene& scene,
+        const ReflectionRegistry& registry,
+        const ActorComponentDescriptorRegistry& componentRegistry,
+        const ActorStatsComponentStore*,
+        const ActorMovementComponentStore*,
+        const ActorSensoryComponentStore*,
+        const SceneSerializationSettings& settings)
+    {
+        SceneSerializationDiagnostics diagnostics = validateSerializedScene(scene, registry, componentRegistry, settings);
+
+        std::map<uint64_t, SceneComponentTypeId> genericTypes;
+        for (const SceneSerializedActorComponentRecord& record : scene.actorComponents) {
+            genericTypes[record.metadata.componentId.value] = record.metadata.componentType;
+        }
+
+        auto requireGeneric = [&](ActorComponentId componentId, SceneComponentTypeId expectedType, const char* label) {
+            const auto it = genericTypes.find(componentId.value);
+            if (it == genericTypes.end()) {
+                diagnostics.errors.push_back(std::string(label) + " payload is missing generic authored component metadata.");
+            } else if (it->second != expectedType) {
+                diagnostics.errors.push_back(std::string(label) + " payload has generic metadata with the wrong component type.");
+            }
+        };
+
+        std::set<uint64_t> statsIds;
+        for (const SceneSerializedStatsComponentRecord& record : scene.statsComponents) {
+            if (isValid(record.descriptor.componentId) && !statsIds.insert(record.descriptor.componentId.value).second) {
+                diagnostics.errors.push_back("Serialized Stats payload contains duplicate ActorComponentId records.");
+            }
+            const ActorGameplayComponentValidationResult validation = validateStatsComponentDescriptor(record.descriptor);
+            diagnostics.errors.insert(diagnostics.errors.end(), validation.errors.begin(), validation.errors.end());
+            diagnostics.warnings.insert(diagnostics.warnings.end(), validation.warnings.begin(), validation.warnings.end());
+            requireGeneric(record.descriptor.componentId, ActorStatsComponentType, "Stats");
+        }
+
+        std::set<uint64_t> movementIds;
+        for (const SceneSerializedMovementComponentRecord& record : scene.movementComponents) {
+            if (isValid(record.descriptor.componentId) && !movementIds.insert(record.descriptor.componentId.value).second) {
+                diagnostics.errors.push_back("Serialized Movement payload contains duplicate ActorComponentId records.");
+            }
+            const ActorGameplayComponentValidationResult validation = validateMovementComponentDescriptor(record.descriptor);
+            diagnostics.errors.insert(diagnostics.errors.end(), validation.errors.begin(), validation.errors.end());
+            diagnostics.warnings.insert(diagnostics.warnings.end(), validation.warnings.begin(), validation.warnings.end());
+            requireGeneric(record.descriptor.componentId, ActorMovementComponentType, "Movement");
+        }
+
+        std::set<uint64_t> sensoryIds;
+        for (const SceneSerializedSensoryComponentRecord& record : scene.sensoryComponents) {
+            if (isValid(record.descriptor.componentId) && !sensoryIds.insert(record.descriptor.componentId.value).second) {
+                diagnostics.errors.push_back("Serialized Sensory payload contains duplicate ActorComponentId records.");
+            }
+            const ActorGameplayComponentValidationResult validation = validateSensoryComponentDescriptor(record.descriptor);
+            diagnostics.errors.insert(diagnostics.errors.end(), validation.errors.begin(), validation.errors.end());
+            diagnostics.warnings.insert(diagnostics.warnings.end(), validation.warnings.begin(), validation.warnings.end());
+            requireGeneric(record.descriptor.componentId, ActorSensoryComponentType, "Sensory");
+        }
+
+        return diagnostics;
+    }
+
     SceneSerializationWriteResult writeSceneBinary(
         const std::filesystem::path& path,
         const SceneSerializedScene& scene,
@@ -1118,6 +1353,30 @@ namespace Engine {
                 SceneBinaryChunkFlags::Optional,
                 static_cast<uint32_t>(scene.actorComponents.size()),
                 encodeActorComponents(scene.actorComponents),
+            });
+        }
+        if (!scene.statsComponents.empty()) {
+            payloads.push_back({
+                SceneBinaryChunkType::ActorStatsComponentPayload,
+                SceneBinaryChunkFlags::Optional,
+                static_cast<uint32_t>(scene.statsComponents.size()),
+                encodeStatsComponents(scene.statsComponents),
+            });
+        }
+        if (!scene.movementComponents.empty()) {
+            payloads.push_back({
+                SceneBinaryChunkType::ActorMovementComponentPayload,
+                SceneBinaryChunkFlags::Optional,
+                static_cast<uint32_t>(scene.movementComponents.size()),
+                encodeMovementComponents(scene.movementComponents),
+            });
+        }
+        if (!scene.sensoryComponents.empty()) {
+            payloads.push_back({
+                SceneBinaryChunkType::ActorSensoryComponentPayload,
+                SceneBinaryChunkFlags::Optional,
+                static_cast<uint32_t>(scene.sensoryComponents.size()),
+                encodeSensoryComponents(scene.sensoryComponents),
             });
         }
 
@@ -1439,6 +1698,62 @@ namespace Engine {
         }
 
         actorComponents = stagedComponents;
+        return SceneSerializationStatus::Success;
+    }
+
+    SceneSerializationStatus applySerializedScene(
+        Scene& scene,
+        ActorAuthoringStore& actorAuthoring,
+        ActorComponentDescriptorStore& actorComponents,
+        ActorStatsComponentStore& statsComponents,
+        ActorMovementComponentStore& movementComponents,
+        ActorSensoryComponentStore& sensoryComponents,
+        const ActorComponentDescriptorRegistry& componentRegistry,
+        const SceneSerializedScene& serialized,
+        const SceneSerializationLoadContext& context,
+        const SceneSerializationSettings& settings)
+    {
+        const SceneSerializationDiagnostics diagnostics =
+            validateSerializedScene(
+                serialized,
+                ReflectionRegistry{},
+                componentRegistry,
+                &statsComponents,
+                &movementComponents,
+                &sensoryComponents,
+                settings);
+        if (!diagnostics.errors.empty()) {
+            return SceneSerializationStatus::InvalidReference;
+        }
+
+        ActorStatsComponentStore stagedStats;
+        ActorMovementComponentStore stagedMovement;
+        ActorSensoryComponentStore stagedSensory;
+        for (const SceneSerializedStatsComponentRecord& record : serialized.statsComponents) {
+            if (stagedStats.upsert(record.descriptor) != ActorComponentStatus::Success) {
+                return SceneSerializationStatus::InvalidReference;
+            }
+        }
+        for (const SceneSerializedMovementComponentRecord& record : serialized.movementComponents) {
+            if (stagedMovement.upsert(record.descriptor) != ActorComponentStatus::Success) {
+                return SceneSerializationStatus::InvalidReference;
+            }
+        }
+        for (const SceneSerializedSensoryComponentRecord& record : serialized.sensoryComponents) {
+            if (stagedSensory.upsert(record.descriptor) != ActorComponentStatus::Success) {
+                return SceneSerializationStatus::InvalidReference;
+            }
+        }
+
+        const SceneSerializationStatus status =
+            applySerializedScene(scene, actorAuthoring, actorComponents, componentRegistry, serialized, context, settings);
+        if (status != SceneSerializationStatus::Success) {
+            return status;
+        }
+
+        statsComponents = stagedStats;
+        movementComponents = stagedMovement;
+        sensoryComponents = stagedSensory;
         return SceneSerializationStatus::Success;
     }
 }

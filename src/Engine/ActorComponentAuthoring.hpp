@@ -8,9 +8,16 @@
 
 #include "Engine/ActorAuthoring.hpp"
 #include "Engine/Reflection.hpp"
+#include "Engine/SceneCharacterMovement.hpp"
 #include "Engine/Scene/Scene.hpp"
 
 namespace Engine {
+    class ActorStatsComponentStore;
+    class ActorMovementComponentStore;
+    class ActorSensoryComponentStore;
+    class ActorMovementRuntimeBindingStore;
+    class SceneCharacterMovementSystem;
+
     inline constexpr uint32_t ActorComponentAuthoringMaxDisplayNameBytes = 128;
 
     struct ActorComponentId {
@@ -107,6 +114,14 @@ namespace Engine {
         Scene* scene = nullptr;
         ActorAuthoringStore* actorAuthoring = nullptr;
         class ActorComponentDescriptorStore* componentAuthoring = nullptr;
+        ActorStatsComponentStore* statsComponents = nullptr;
+        ActorMovementComponentStore* movementComponents = nullptr;
+        ActorSensoryComponentStore* sensoryComponents = nullptr;
+        ActorMovementRuntimeBindingStore* movementRuntimeBindings = nullptr;
+        SceneCharacterMovementSystem* characterMovement = nullptr;
+        std::function<SceneCharacterHandle(SceneCharacterDescriptor)> createCharacter;
+        std::function<bool(SceneCharacterHandle)> destroyCharacter;
+        std::function<bool(SceneCharacterHandle)> containsCharacter;
     };
 
     struct ActorComponentRuntimeBindingResult {
